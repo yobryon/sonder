@@ -24,7 +24,9 @@ parking_lot = { workspace = true }
 reqwest = { workspace = true }
 hound = { workspace = true }
 rand = { workspace = true }
+midir = { workspace = true, optional = true }
 
 [features]
-default = ["native-audio"]
+default = ["native-audio", "midi"]
 native-audio = ["sonder-audio/native-audio"]
+midi = ["midir"]

@@ -5,6 +5,7 @@
 
 use sonder_core::{Effects, Instrument, LayerId, LayerParam, Meter, NoteId, SynthCommand, SynthFeedback};
 
+use crate::chorus::Chorus;
 use crate::delay::StereoDelay;
 use crate::drums::{DrumHit, DrumVoice};
 use crate::master::MasterChain;
@@ -68,12 +69,15 @@ struct Layer {
     meter: Meter,
     lfo_phase: f32,
     last_midi: Option<f32>,
+    /// Layer-bus chorus insert (bypassed unless the instrument asks for it).
+    chorus: Chorus,
 }
 
 impl Layer {
-    fn new() -> Self {
+    fn new(sr: f32) -> Self {
         let patch = Patch::default();
         Self {
+            chorus: Chorus::new(sr),
             instrument: None,
             gain: Smoothed::new(1.0),
             pan: Smoothed::new(0.5),
@@ -213,7 +217,9 @@ impl Synth {
         let mut drums = Vec::with_capacity(DRUM_VOICES);
         drums.resize_with(DRUM_VOICES, DrumVoice::default);
         let mut layers = Vec::with_capacity(max_layers);
-        layers.resize_with(max_layers, Layer::new);
+        layers.resize_with(max_layers, || Layer::new(sr));
+        // Force the shared wavetables to exist before the audio thread runs.
+        let _ = crate::wavetable::tables();
         let block_rate = sr / BLOCK as f32;
         Self {
             sr,
@@ -377,6 +383,7 @@ impl Synth {
                 match self.layers.get_mut(layer.0 as usize) {
                     Some(l) => {
                         l.patch = Patch::from_instrument(&instrument);
+                        l.chorus.configure(&instrument.chorus);
                         if let Some(old) = l.instrument.replace(instrument) {
                             self.recycle.push(old);
                         }
@@ -568,6 +575,13 @@ impl Synth {
             d.render(bus);
         }
 
+        // Per-layer chorus inserts (no-ops when bypassed).
+        for (li, l) in self.layers.iter_mut().enumerate() {
+            if !l.chorus.is_bypassed() {
+                l.chorus.process(&mut self.layer_bus[li * frames2..(li + 1) * frames2]);
+            }
+        }
+
         // Mixer: layer bus → dry + sends, with ramped gain/pan/mute and metering.
         let inv = 1.0 / BLOCK as f32;
         let mute_step_block = self.mute_step * BLOCK as f32;
@@ -646,6 +660,9 @@ impl Synth {
             if self.panic_remaining == 0 {
                 self.reverb.clear();
                 self.delay.clear();
+                for l in self.layers.iter_mut() {
+                    l.chorus.clear();
+                }
                 for v in self.voices.iter_mut() {
                     if v.active {
                         v.active = false;

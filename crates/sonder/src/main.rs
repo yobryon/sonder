@@ -64,6 +64,8 @@ enum Cmd {
     Validate { scene: String },
     /// Print a built-in scene's TOML (to copy and tweak).
     Show { scene: String },
+    /// List MIDI output ports (for --midi).
+    MidiPorts,
 }
 
 #[derive(Args, Clone)]
@@ -92,6 +94,9 @@ struct PlayArgs {
     /// RNG seed (default: scene's, else random).
     #[arg(long)]
     seed: Option<u64>,
+    /// Also send MIDI to this output port (substring match), or `virtual` to create one.
+    #[arg(long, value_name = "PORT")]
+    midi: Option<String>,
     #[command(flatten)]
     source: SourceOverride,
 }
@@ -219,6 +224,19 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        #[cfg(not(feature = "midi"))]
+        Cmd::MidiPorts => anyhow::bail!("this build has no MIDI support (feature `midi`)"),
+        #[cfg(feature = "midi")]
+        Cmd::MidiPorts => {
+            let ports = sonder_engine::midi::MidiOut::ports()?;
+            if ports.is_empty() {
+                println!("no MIDI output ports (use `--midi virtual` to create one)");
+            }
+            for p in ports {
+                println!("{p}");
+            }
+            Ok(())
+        }
         Cmd::Show { scene } => {
             let (_, src) = sonder_engine::scenes::BUILTIN_SCENE_SOURCES
                 .iter()
@@ -253,8 +271,12 @@ async fn play(args: PlayArgs, tui: bool) -> anyhow::Result<()> {
         seed: args.seed,
         web_tap: args.web != 0,
         source_overrides: args.source.into_overrides()?,
+        midi_port: args.midi.clone(),
     };
     let handle = sonder_engine::start(scene, opts).await?;
+    if let Some(p) = &handle.midi_port {
+        tracing::info!("midi out → {p}");
+    }
     let web_url = if args.web != 0 {
         let addr: SocketAddr = format!("{}:{}", args.bind, args.web).parse().context("bad --bind/--web")?;
         let web_handle = sonder_web::WebHandle {

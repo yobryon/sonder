@@ -5,7 +5,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use sonder_core::{Drum, Effects, Instrument, LayerId, LayerParam, NoteId, SynthCommand};
+use sonder_core::{Chorus, Drum, Effects, Instrument, LayerId, LayerParam, NoteId, Osc, SynthCommand, Table, Wave};
 use sonder_dsp::{presets, Synth};
 
 struct Counting;
@@ -49,6 +49,9 @@ fn render_does_not_allocate_or_free() {
         let inst = presets::get(names[l % names.len()]).unwrap();
         synth.handle(SynthCommand::SetInstrument { layer: LayerId(l as u16), instrument: Box::new(inst) });
     }
+    // Make sure the chorus insert and every wavetable are live on some layer.
+    synth.handle(SynthCommand::SetInstrument { layer: LayerId(0), instrument: Box::new(presets::get("pad.chorus").unwrap()) });
+    synth.handle(SynthCommand::SetInstrument { layer: LayerId(1), instrument: Box::new(presets::get("keys.organ").unwrap()) });
     synth.handle(SynthCommand::SetEffects(Box::<Effects>::default()));
     let mut out = vec![0.0f32; 512 * 2];
     synth.render(&mut out);
@@ -91,6 +94,19 @@ fn render_does_not_allocate_or_free() {
         if b % 97 == 0 {
             v.push(SynthCommand::SetInstrument { layer, instrument: Box::new(presets::get(names[b % names.len()]).unwrap()) });
             v.push(SynthCommand::SetEffects(Box::<Effects>::default()));
+        }
+        if b % 61 == 0 {
+            // Toggle chorus on/off and cycle through every wavetable (covers the
+            // bypass transition and every mip level as pitches wander).
+            let k = b / 61;
+            let table = Table::ALL[k % Table::ALL.len()];
+            let chorus = if k % 2 == 0 { Chorus { depth: 0.5, rate_hz: 2.0, mix: 0.5, voices: 2 + (k % 2) as u8 } } else { Chorus::default() };
+            let inst = Instrument {
+                osc: vec![Osc { wave: Wave::Wavetable, table, ..Osc::default() }, Osc { wave: Wave::Wavetable, table, octave: 2, level: 0.3, ..Osc::default() }],
+                chorus,
+                ..Instrument::default()
+            };
+            v.push(SynthCommand::SetInstrument { layer: LayerId(((b + 1) % layers) as u16), instrument: Box::new(inst) });
         }
         if b % 400 == 399 {
             v.push(SynthCommand::AllNotesOff { layer });

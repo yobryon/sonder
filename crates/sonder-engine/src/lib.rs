@@ -14,7 +14,10 @@
 pub mod control;
 pub mod instruments;
 pub mod live;
+#[cfg(feature = "midi")]
+pub mod midi;
 pub mod render;
+pub mod sink;
 pub mod scenes;
 pub mod validate;
 

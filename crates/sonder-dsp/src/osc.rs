@@ -3,9 +3,10 @@
 //! partials across the field. Phase accumulators are `f64` and wrapped every
 //! sample, so they never lose precision.
 
-use sonder_core::{Osc, Wave};
+use sonder_core::{Osc, Table, Wave};
 
 use crate::math::{sin_turns, Pink, Rng};
+use crate::wavetable::{mip_for, Tables};
 
 /// Detune curve for the seven supersaw partials, in units of `spread` cents.
 const SUPERSAW_OFFSETS: [f32; 7] = [-1.0, -0.64, -0.3, 0.0, 0.3, 0.64, 1.0];
@@ -83,6 +84,10 @@ pub struct OscParams {
     /// Effective FM index (after envelope scaling).
     pub fm_index: f32,
     pub fm_ratio: f32,
+    /// Table for [`Wave::Wavetable`].
+    pub table: Table,
+    /// Shared wavetable store (never allocates after startup).
+    pub tables: &'static Tables,
 }
 
 impl OscState {
@@ -180,6 +185,13 @@ impl OscState {
                 let n = n.clamp(-1.0, 1.0);
                 (n, n)
             }
+            Wave::Wavetable => {
+                let mip = mip_for(p.freq_hz, p.sample_rate);
+                let s = p.tables.sample(p.table, mip, self.phase[0]);
+                self.phase[0] += dt;
+                wrap(&mut self.phase[0]);
+                (s, s)
+            }
         }
     }
 }
@@ -205,8 +217,10 @@ mod tests {
             width: 0.0,
             fm_index: 0.0,
             fm_ratio: 2.0,
+            table: Table::Organ,
+            tables: crate::wavetable::tables(),
         };
-        for w in [Wave::Sine, Wave::Triangle, Wave::Saw, Wave::Square, Wave::Pulse, Wave::Supersaw, Wave::Fm, Wave::Noise, Wave::Pink] {
+        for w in [Wave::Sine, Wave::Triangle, Wave::Saw, Wave::Square, Wave::Pulse, Wave::Supersaw, Wave::Fm, Wave::Noise, Wave::Pink, Wave::Wavetable] {
             let mut peak = 0f32;
             for _ in 0..48_000 {
                 let (l, r) = st.render(w, &p);

@@ -1,7 +1,7 @@
 //! Built-in instrument library. Every preset is a plain [`Instrument`] value
 //! with musical defaults; scenes can override any field inline.
 
-use sonder_core::{Adsr, Filter, FilterKind, Instrument, Lfo, LfoShape, Osc, Role, Wave};
+use sonder_core::{Adsr, Chorus, Filter, FilterKind, Instrument, Lfo, LfoShape, Osc, Role, Table, Wave};
 
 /// `(name, description, constructor)` for every preset, in display order.
 type Builder = fn() -> Instrument;
@@ -11,6 +11,9 @@ const PRESETS: &[(&str, &str, Builder)] = &[
     ("pad.warm", "Soft analogue pad: wide supersaw under a low-pass, long release", pad_warm),
     ("pad.strings", "Ensemble strings: slow attack supersaw with vibrato and air", pad_strings),
     ("pad.choir", "Vowel-ish choir: pulse with slow PWM through a band-pass", pad_choir),
+    ("pad.wavetable", "Wavetable pad: glass + metal tables, slow sweep, three-voice chorus", pad_wavetable),
+    ("pad.chorus", "Chorused analogue pad: saw + triangle through a wide, slow chorus", pad_chorus),
+    ("keys.organ", "Drawbar organ: organ table + sine sub, instant envelope, rotary-ish chorus", keys_organ),
     ("drone.sub", "Deep sub drone: sine + octave, slow filter breathing", drone_sub),
     ("drone.saw", "Thick saw drone: detuned saws, dark filter, texture-reactive", drone_saw),
     ("bass.sub", "Round sub bass: sine with a touch of triangle, fast envelope", bass_sub),
@@ -19,6 +22,7 @@ const PRESETS: &[(&str, &str, Builder)] = &[
     ("lead.soft", "Soft lead: triangle + sine, slight glide, singing release", lead_soft),
     ("lead.sine", "Pure sine lead with slow vibrato", lead_sine),
     ("lead.saw", "Classic saw lead with resonant low-pass and delay", lead_saw),
+    ("lead.vox", "Vowel lead: vox wavetable with glide, vibrato and light chorus", lead_vox),
     ("arp.pulse", "Arpeggio pulse: short PWM blips with ping-pong delay", arp_pulse),
     ("arp.glass", "Arpeggio glass: FM sparkle with quick decay", arp_glass),
     ("pluck.nylon", "Nylon-string pluck: filtered triangle with fast decay", pluck_nylon),
@@ -114,6 +118,7 @@ fn pad_warm() -> Instrument {
         polyphony: 10,
         velocity_to_amp: 0.3,
         drive: 0.1,
+        chorus: Chorus { depth: 0.3, rate_hz: 0.4, mix: 0.4, voices: 2 },
         ..base("Warm analogue pad")
     }
 }
@@ -133,6 +138,7 @@ fn pad_strings() -> Instrument {
         reverb_send: 0.5,
         polyphony: 10,
         velocity_to_amp: 0.4,
+        chorus: Chorus { depth: 0.25, rate_hz: 0.5, mix: 0.35, voices: 3 },
         ..base("Ensemble strings")
     }
 }
@@ -153,6 +159,86 @@ fn pad_choir() -> Instrument {
         polyphony: 8,
         velocity_to_amp: 0.3,
         ..base("Choir-ish pad")
+    }
+}
+
+fn wt(table: Table) -> Osc {
+    Osc { wave: Wave::Wavetable, table, ..Osc::default() }
+}
+
+fn pad_wavetable() -> Instrument {
+    Instrument {
+        osc: vec![
+            Osc { level: 0.7, detune_cents: -5.0, ..wt(Table::Glass) },
+            Osc { level: 0.3, octave: -1, detune_cents: 4.0, ..wt(Table::Metal) },
+        ],
+        filter: Filter { key_track: 0.3, lfo_amount: 0.3, ..lp(1400.0, 0.2, 1.0) },
+        amp_env: adsr(1.4, 1.0, 0.85, 2.8),
+        filter_env: adsr(2.5, 3.0, 0.4, 2.5),
+        lfo: Lfo { rate_hz: 0.07, to_pan: 0.15, ..Lfo::default() },
+        gain: 0.3,
+        width: 0.4,
+        reverb_send: 0.55,
+        delay_send: 0.1,
+        polyphony: 10,
+        velocity_to_amp: 0.4,
+        chorus: Chorus { depth: 0.4, rate_hz: 0.5, mix: 0.5, voices: 3 },
+        ..base("Wavetable pad")
+    }
+}
+
+fn pad_chorus() -> Instrument {
+    Instrument {
+        osc: vec![
+            Osc { level: 0.6, ..osc(Wave::Saw) },
+            Osc { level: 0.5, octave: -1, detune_cents: 6.0, ..osc(Wave::Triangle) },
+        ],
+        filter: Filter { key_track: 0.3, lfo_amount: 0.3, ..lp(1100.0, 0.15, 0.9) },
+        amp_env: adsr(1.0, 1.0, 0.85, 2.5),
+        filter_env: adsr(2.0, 2.5, 0.4, 2.0),
+        lfo: Lfo { rate_hz: 0.06, ..Lfo::default() },
+        gain: 0.35,
+        width: 0.5,
+        reverb_send: 0.4,
+        polyphony: 10,
+        velocity_to_amp: 0.3,
+        drive: 0.08,
+        chorus: Chorus { depth: 0.6, rate_hz: 0.35, mix: 0.5, voices: 3 },
+        ..base("Chorused analogue pad")
+    }
+}
+
+fn keys_organ() -> Instrument {
+    Instrument {
+        osc: vec![Osc { level: 0.85, ..wt(Table::Organ) }, Osc { level: 0.3, octave: -1, ..osc(Wave::Sine) }],
+        filter: Filter { key_track: 0.5, ..lp(5000.0, 0.05, 0.0) },
+        amp_env: adsr(0.004, 0.05, 1.0, 0.12),
+        filter_env: adsr(0.004, 0.1, 1.0, 0.1),
+        gain: 0.4,
+        reverb_send: 0.25,
+        polyphony: 8,
+        velocity_to_amp: 0.25,
+        drive: 0.12,
+        chorus: Chorus { depth: 0.35, rate_hz: 1.2, mix: 0.45, voices: 2 },
+        ..base("Drawbar organ")
+    }
+}
+
+fn lead_vox() -> Instrument {
+    Instrument {
+        osc: vec![Osc { level: 0.8, ..wt(Table::Vox) }, Osc { level: 0.25, octave: -1, ..wt(Table::Sine8) }],
+        filter: Filter { key_track: 0.5, velocity_amount: 0.6, ..lp(2200.0, 0.2, 0.8) },
+        amp_env: adsr(0.05, 0.4, 0.7, 0.8),
+        filter_env: adsr(0.03, 0.5, 0.4, 0.6),
+        lfo: Lfo { rate_hz: 4.8, to_pitch: 5.0, ..Lfo::default() },
+        glide: 0.07,
+        gain: 0.45,
+        reverb_send: 0.4,
+        delay_send: 0.25,
+        polyphony: 3,
+        velocity_to_amp: 0.6,
+        chorus: Chorus { depth: 0.25, rate_hz: 0.7, mix: 0.4, voices: 2 },
+        ..base("Vowel lead")
     }
 }
 
@@ -465,5 +551,23 @@ mod tests {
             assert!(get(default_for_role(role)).is_some(), "{role:?}");
         }
         assert!(get("nope").is_none());
+    }
+
+    #[test]
+    fn new_presets_use_the_new_features() {
+        let wavetable_users: Vec<_> = names().into_iter().filter(|n| get(n).unwrap().osc.iter().any(|o| o.wave == Wave::Wavetable)).collect();
+        assert!(wavetable_users.contains(&"pad.wavetable"));
+        assert!(wavetable_users.contains(&"keys.organ"));
+        assert!(wavetable_users.contains(&"lead.vox"));
+        let chorus_users: Vec<_> = names().into_iter().filter(|n| get(n).unwrap().chorus.depth > 0.0).collect();
+        assert!(chorus_users.contains(&"pad.chorus"));
+        assert!(chorus_users.contains(&"pad.warm"));
+        for n in chorus_users {
+            let c = get(n).unwrap().chorus;
+            assert!((0.1..=5.0).contains(&c.rate_hz) && (2..=3).contains(&c.voices), "{n}");
+        }
+        for n in ["pad.wavetable", "pad.chorus", "keys.organ", "lead.vox"] {
+            assert!(describe(n).is_some());
+        }
     }
 }

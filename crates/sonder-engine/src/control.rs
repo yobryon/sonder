@@ -56,6 +56,7 @@ pub struct ControlLoop {
     snapshot_tx: tokio::sync::watch::Sender<Arc<EngineSnapshot>>,
     quit_requested: bool,
     save_requests: Vec<String>,
+    sinks: Vec<Box<dyn crate::sink::CommandSink>>,
 }
 
 impl ControlLoop {
@@ -131,6 +132,7 @@ impl ControlLoop {
             snapshot_tx,
             quit_requested: false,
             save_requests: Vec::new(),
+            sinks: Vec::new(),
         })
     }
 
@@ -145,6 +147,12 @@ impl ControlLoop {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Attach an observer of the command stream (e.g. MIDI out). Sinks see every
+    /// command the composer emits from now on (setup commands already went to the synth).
+    pub fn add_sink(&mut self, sink: Box<dyn crate::sink::CommandSink>) {
+        self.sinks.push(sink);
     }
 
     pub fn quit_requested(&self) -> bool {
@@ -281,7 +289,13 @@ impl ControlLoop {
         let events = std::mem::take(&mut self.pending_events);
         let out = self.composer.tick(now, dt, &ComposerInput { layers: &self.layer_inputs, events: &events });
         for cmd in out.commands {
+            for sink in &mut self.sinks {
+                sink.on_command(&cmd);
+            }
             self.synth.send(cmd);
+        }
+        for sink in &mut self.sinks {
+            sink.flush();
         }
         for n in out.notes {
             push_bounded(&mut self.notes, n, MAX_NOTES);
@@ -310,7 +324,7 @@ impl ControlLoop {
             }
         }
 
-        if self.tick_count % SNAPSHOT_EVERY_TICKS == 0 {
+        if self.tick_count.is_multiple_of(SNAPSHOT_EVERY_TICKS) {
             self.publish_snapshot(now);
         }
     }

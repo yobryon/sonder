@@ -2,8 +2,9 @@
 
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
-use sonder_core::{Adsr, DelaySettings, Effects, Filter, FilterKind, Instrument, LayerId, MasterSettings, NoteId, Osc, ReverbSettings, SynthCommand, Wave};
+use sonder_core::{Adsr, Chorus, DelaySettings, Effects, Filter, FilterKind, Instrument, LayerId, MasterSettings, NoteId, Osc, ReverbSettings, SynthCommand, Table, Wave};
 use sonder_dsp::master::MasterChain;
+use sonder_dsp::wavetable::{self, MIPS};
 use sonder_dsp::reverb::Plate;
 use sonder_dsp::{presets, Synth};
 
@@ -218,6 +219,106 @@ fn reverb_tail_decays_and_is_finite() {
     for r in &ratios {
         assert!((r / mean).log2().abs() < 1.0, "irregular decay {ratios:?}");
     }
+}
+
+/// Energy away from the harmonics of `f0`, relative to the energy on them.
+fn alias_ratio(sig: &[f32], f0: f32) -> f32 {
+    let n = sig.len();
+    let mut planner = FftPlanner::new();
+    let fft = planner.plan_fft_forward(n);
+    let mut buf: Vec<Complex<f32>> = sig
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let w = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n as f32).cos();
+            Complex::new(s * w, 0.0)
+        })
+        .collect();
+    fft.process(&mut buf);
+    let bin_hz = SR / n as f32;
+    let (mut harm, mut alias) = (0.0f32, 0.0f32);
+    for (k, c) in buf.iter().enumerate().take(n / 2).skip(1) {
+        let f = k as f32 * bin_hz;
+        let nearest = (f / f0).round() * f0;
+        let e = c.norm_sqr();
+        if (f - nearest).abs() < 3.0 * bin_hz {
+            harm += e;
+        } else {
+            alias += e;
+        }
+    }
+    alias / harm.max(1e-12)
+}
+
+#[test]
+fn wavetable_mip_selection_reduces_aliasing_at_high_pitch() {
+    let f0 = 2_793.83f32; // F7
+    let n = 1 << 15;
+    let t = wavetable::tables();
+    let mip = wavetable::mip_for(f0, SR);
+    assert!(mip > 0 && mip < MIPS);
+    for table in Table::ALL {
+        let render = |level: usize| -> Vec<f32> {
+            let mut phase = 0.0f64;
+            (0..n)
+                .map(|_| {
+                    let s = t.sample(table, level, phase);
+                    phase += (f0 / SR) as f64;
+                    s
+                })
+                .collect()
+        };
+        let base = render(0);
+        let picked = render(mip);
+        assert!(picked.iter().all(|s| s.is_finite()));
+        let r_base = alias_ratio(&base, f0);
+        let r_mip = alias_ratio(&picked, f0);
+        // Tables whose spectrum is already below the mip limit are identical at every level.
+        let identical = base.iter().zip(&picked).all(|(a, b)| (a - b).abs() < 1e-6);
+        if !identical {
+            assert!(r_mip < r_base * 0.5, "{table:?}: mip {mip} alias ratio {r_mip} vs base {r_base}");
+        }
+        assert!(r_mip < 0.05, "{table:?}: residual alias ratio {r_mip}");
+    }
+}
+
+#[test]
+fn every_wavetable_renders_through_a_voice() {
+    for table in Table::ALL {
+        let mut synth = Synth::new(SR, 1);
+        synth.handle(SynthCommand::SetEffects(Box::new(no_effects())));
+        set_instrument(&mut synth, 0, Instrument { osc: vec![Osc { wave: Wave::Wavetable, table, ..Osc::default() }], ..dry_sine() });
+        for (i, hz) in [55.0f32, 440.0, 3520.0, 12_000.0].iter().enumerate() {
+            note_on(&mut synth, 0, i as u64, *hz, 0.9);
+        }
+        let out = render_seconds(&mut synth, 0.5);
+        assert!(out.iter().all(|s| s.is_finite()), "{table:?} NaN");
+        assert!(rms(&out) > 0.01, "{table:?} silent");
+    }
+}
+
+#[test]
+fn chorus_on_a_layer_widens_without_changing_level_much() {
+    let run = |chorus: Chorus| -> Vec<f32> {
+        let mut synth = Synth::new(SR, 1);
+        synth.handle(SynthCommand::SetEffects(Box::new(no_effects())));
+        set_instrument(&mut synth, 0, Instrument { osc: vec![Osc { wave: Wave::Saw, ..Osc::default() }], chorus, gain: 0.3, ..dry_sine() });
+        note_on(&mut synth, 0, 1, 220.0, 1.0);
+        render_seconds(&mut synth, 2.0)
+    };
+    let dry = run(Chorus::default());
+    let wet = run(Chorus { depth: 0.6, rate_hz: 0.8, mix: 0.5, voices: 3 });
+    assert!(wet.iter().all(|s| s.is_finite()));
+    let half = dry.len() / 2;
+    let (rd, rw) = (rms(&dry[half..]), rms(&wet[half..]));
+    assert!(rw > rd * 0.5 && rw < rd * 1.6, "chorus level drifted: dry {rd} wet {rw}");
+    // Dry render is mono (identical channels); the chorused one is not.
+    let side = |b: &[f32]| rms(&b.chunks(2).map(|f| f[0] - f[1]).collect::<Vec<_>>());
+    assert!(side(&dry[half..]) < 1e-6);
+    assert!(side(&wet[half..]) > 0.01, "chorus should decorrelate channels");
+    // Bypassed chorus in the synth equals no chorus at all, bit for bit.
+    let bypass = run(Chorus { depth: 0.0, rate_hz: 3.0, mix: 1.0, voices: 3 });
+    assert_eq!(bypass, dry);
 }
 
 #[test]

@@ -34,6 +34,8 @@ pub struct EngineOptions {
     pub web_tap: bool,
     /// Replace the source of the named layer (and everything sharing it).
     pub source_overrides: Vec<(String, SourceSpec)>,
+    /// MIDI output port substring, or "virtual". None = no MIDI.
+    pub midi_port: Option<String>,
 }
 
 /// Rendered audio for the web server: a broadcast of interleaved stereo f32 chunks.
@@ -46,6 +48,8 @@ pub struct EngineHandle {
     pub audio: Option<tokio::sync::broadcast::Sender<Arc<Vec<f32>>>>,
     pub sample_rate: u32,
     pub audio_backend: String,
+    /// Name of the connected MIDI port, if any.
+    pub midi_port: Option<String>,
     /// Resolves when the engine stops (quit command or fatal error).
     pub done: tokio::sync::oneshot::Receiver<anyhow::Result<()>>,
     shutdown: tokio::sync::watch::Sender<bool>,
@@ -90,7 +94,7 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
     if let Err(errs) = crate::validate(&scene) {
         anyhow::bail!("scene `{}` is invalid:\n  {}", scene.name, errs.join("\n  "));
     }
-    let seed = opts.seed.or(scene.conductor.seed).unwrap_or_else(|| rand::random::<u64>());
+    let seed = opts.seed.or(scene.conductor.seed).unwrap_or_else(rand::random::<u64>);
     let requested_sr = if opts.sample_rate == 0 { 48_000 } else { opts.sample_rate };
     let max_layers = scene.layers.len().max(1);
 
@@ -112,8 +116,24 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
     let registry = registry();
     let source_tasks = spawn_sources(&registry, &specs, sample_tx, clock.clone(), shutdown_rx.clone(), seed)?;
 
+    let perc_layers: Vec<bool> = scene.layers.iter().map(|l| l.role == Role::Perc).collect();
     let mut control = ControlLoop::new(scene, seed, controller, tap, web_audio_tx.clone(), backend_name.clone(), snapshot_tx)
         .context("building control loop")?;
+    #[cfg_attr(not(feature = "midi"), allow(unused_mut))]
+    let mut midi_name = None;
+    if let Some(port) = &opts.midi_port {
+        #[cfg(feature = "midi")]
+        {
+            let midi = crate::midi::MidiOut::open(port, perc_layers).context("opening MIDI output")?;
+            midi_name = Some(midi.port_name().to_string());
+            control.add_sink(Box::new(midi));
+        }
+        #[cfg(not(feature = "midi"))]
+        {
+            let _ = perc_layers;
+            anyhow::bail!("this build has no MIDI support (feature `midi`); requested port `{port}`");
+        }
+    }
 
     // Control thread.
     let mut shutdown_watch = shutdown_rx.clone();
@@ -179,6 +199,7 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
         audio: web_audio_tx,
         sample_rate,
         audio_backend: backend_name,
+        midi_port: midi_name,
         done: done_rx,
         shutdown: shutdown_tx,
     })
@@ -209,7 +230,7 @@ fn open_audio(
         AudioBackendChoice::Native => try_backend(Backend::Native, tap),
         AudioBackendChoice::Null => try_backend(Backend::Null, tap),
         AudioBackendChoice::PcmStdout => try_backend(Backend::PcmStdout, tap),
-        AudioBackendChoice::Auto => match try_backend(Backend::Native, tap.clone()) {
+        AudioBackendChoice::Auto => match try_backend(Backend::Native, tap) {
             Ok(o) => Ok(o),
             Err(e) => {
                 tracing::warn!("native audio unavailable ({e}); running silent — listen via the web UI");

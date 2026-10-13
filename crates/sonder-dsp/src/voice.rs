@@ -2,7 +2,7 @@
 //! envelopes, an LFO and glide. Voices snapshot the instrument into a plain
 //! [`Patch`] at note-on so instrument changes never touch sounding notes.
 
-use sonder_core::{Adsr, Filter, FilterKind, Instrument, LayerId, Lfo as LfoCfg, NoteId, Osc, Wave};
+use sonder_core::{Adsr, Filter, FilterKind, Instrument, LayerId, Lfo as LfoCfg, NoteId, Osc, Table, Wave};
 
 use crate::env::Envelope;
 use crate::filter::{Svf, SvfCoefs};
@@ -105,6 +105,7 @@ pub struct Voice {
     gain_l: f32,
     gain_r: f32,
     sample_rate: f32,
+    tables: &'static crate::wavetable::Tables,
 }
 
 impl Default for Voice {
@@ -131,6 +132,7 @@ impl Default for Voice {
             gain_l: 0.0,
             gain_r: 0.0,
             sample_rate: 48_000.0,
+            tables: crate::wavetable::tables(),
         }
     }
 }
@@ -284,6 +286,8 @@ impl Voice {
             width: self.patch.width,
             fm_index: 0.0,
             fm_ratio: 2.0,
+            table: Table::Organ,
+            tables: self.tables,
         }; 2];
         let mut levels = [0.0f32; 2];
         let mut waves = [Wave::Sine; 2];
@@ -294,6 +298,7 @@ impl Voice {
             p.pulse_width = (o.pulse_width + lfo_pw).clamp(0.05, 0.95);
             p.spread_cents = o.spread * spread_mul;
             p.fm_ratio = o.fm_ratio;
+            p.table = o.table;
             levels[k] = o.level.clamp(0.0, 1.0);
             waves[k] = o.wave;
         }

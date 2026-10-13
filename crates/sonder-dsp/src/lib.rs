@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod analyzer;
+pub mod chorus;
 pub mod delay;
 pub mod drums;
 pub mod env;
@@ -24,6 +25,7 @@ pub mod presets;
 pub mod reverb;
 pub mod synth;
 pub mod voice;
+pub mod wavetable;
 
 pub use analyzer::Analyzer;
 pub use synth::{Synth, BLOCK, DRUM_VOICES, MAX_VOICES};
