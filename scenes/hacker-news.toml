@@ -1,0 +1,52 @@
+# Hacker News — the firehose of new stories and comments.
+
+name = "Hacker News"
+description = "New stories ring, comments patter. Rate is the energy."
+tags = ["live"]
+viz = "generic"
+
+[conductor]
+key = "Bb"
+mode = "major_pentatonic"
+tempo = 84
+drift = "medium"
+progression = "functional"
+
+[[layer]]
+name = "items"
+role = "pluck"
+instrument = "pluck.marimba"
+source = { kind = "hackernews.firehose" }
+signals.rate   = "norm(smooth(rate(event('item'), 30), 5))"
+map.energy     = "rate"
+map.density    = "rate"
+on_event.item.chance   = "if(attr_text('type') == 'comment', 0.6, 1)"
+on_event.item.pitch    = "hash(attr('by'))"
+on_event.item.velocity = "0.3 + 0.6 * intensity"
+on_event.item.pan      = "hash(attr('title'))"
+on_event.item.quantize = "1/8"
+
+[[layer]]
+name = "stories"
+role = "bells"
+instrument = "bells.fm"
+source = "items"
+on_event.item.chance   = "if(attr_text('type') == 'story', 1, 0)"
+on_event.item.pitch    = "0.3 + 0.5 * hash(attr('title'))"
+on_event.item.velocity = "0.8"
+on_event.item.length   = "6"
+
+[[layer]]
+name = "bed"
+role = "pad"
+instrument = "pad.glass"
+source = "items"
+map.register = "0.5"
+
+[[layer]]
+name = "floor"
+role = "bass"
+instrument = "bass.pluck"
+source = "items"
+signals.rate = "norm(smooth(rate(event('item'), 30), 5))"
+map.density  = "0.3 + 0.5 * rate"

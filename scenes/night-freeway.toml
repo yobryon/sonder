@@ -1,0 +1,110 @@
+# Night Freeway — the founding image.
+#
+# A camera above an overpass at 3am. Headlights slide down the frame; each one that
+# leaves the frame plucks a note. Traffic density breathes the pad; mean speed opens
+# the filter. Trucks (big, bright) land low and slow; small fast cars ring high.
+#
+# Offline by default (simulated traffic). Point it at a real camera:
+#   sonder play night-freeway --source camera.mjpeg --param url=http://host/mjpg/video.mjpg
+# (`blob` events from the camera carry the same attrs as `car` events, so `on_event."*"` catches both.)
+
+name = "Night Freeway"
+description = "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera."
+tags = ["ambient", "offline", "camera", "founding"]
+viz = "freeway"
+
+[conductor]
+key = "D"
+mode = "lydian"
+tempo = 62
+tempo_range = [56, 76]
+drift = "slow"
+progression = "modal"
+bars_per_chord = 2
+mood_smoothing = 30
+mood_baseline = [0.35, 0.25, 0.55]
+humanize = 0.2
+
+[effects.reverb]
+size = 0.9
+damping = 0.35
+level = 0.9
+
+[effects.delay]
+beats = 0.75
+feedback = 0.4
+
+# ── the road ──────────────────────────────────────────────────────────────────
+
+[[layer]]
+name = "traffic"
+role = "pad"
+instrument = "pad.glass"
+source = { kind = "synthetic.freeway", lanes = 4, flow = 0.4, speed = 0.55, rush = 300 }
+signals.flow     = "norm(smooth(rate(event('*'), 20), 4))"
+signals.speed    = "norm(smooth(field('mean_speed'), 6))"
+signals.crowd    = "norm(smooth(field('count'), 3))"
+map.energy       = "0.6 * flow + 0.4 * crowd"
+map.brightness   = "speed"
+map.density      = "crowd"
+map.register     = "0.35 + 0.3 * speed"
+map.cutoff       = "0.3 + 0.6 * speed"
+map.reverb       = "0.5 + 0.4 * (1 - crowd)"
+
+[[layer]]
+name = "headlights"
+role = "pluck"
+instrument = "pluck.glass"
+source = "traffic"
+signals.flow = "norm(smooth(rate(event('*'), 20), 4))"
+map.register = "0.4 + 0.3 * (1 - flow)"           # busier → tighter, lower cluster
+on_event."*".pitch    = "1 - clamp(attr('size'), 0, 1) * 0.7 + 0.3 * attr('speed')"
+on_event."*".velocity = "0.35 + 0.65 * clamp(attr('brightness'), 0, 1)"
+on_event."*".pan      = "attr('x')"
+on_event."*".length   = "0.5 + 2 * clamp(attr('size'), 0, 1)"
+on_event."*".quantize = "1/16"
+on_event."*".snap     = "chord"
+
+[[layer]]
+name = "trucks"
+role = "bells"
+instrument = "bells.glass"
+source = "traffic"
+on_event."*".chance   = "step(0.65, attr('size'))"   # only the big ones ring the bell
+on_event."*".pitch    = "0.2 + 0.3 * attr('x')"
+on_event."*".velocity = "0.5 + 0.5 * attr('brightness')"
+on_event."*".pan      = "attr('x')"
+on_event."*".length   = "6"
+on_event."*".quantize = "1/8"
+
+[[layer]]
+name = "undertow"
+role = "bass"
+instrument = "bass.sub"
+source = "traffic"
+signals.flow = "norm(smooth(rate(event('*'), 30), 8))"
+map.density  = "0.15 + 0.5 * flow"
+map.volume   = "0.8"
+
+[[layer]]
+name = "asphalt"
+role = "texture"
+instrument = "texture.wind"
+source = "traffic"
+signals.speed = "norm(smooth(field('mean_speed'), 10))"
+signals.crowd = "norm(smooth(field('count'), 10))"
+map.texture   = "0.2 + 0.6 * crowd"
+map.cutoff    = "0.2 + 0.5 * speed"
+map.volume    = "0.35"
+map.pan       = "0.5 + 0.2 * walk(0.3, 20)"
+
+[[layer]]
+name = "distance"
+role = "arp"
+instrument = "arp.glass"
+source = "traffic"
+signals.flow = "norm(smooth(rate(event('*'), 20), 4))"
+map.density  = "flow * 0.8"
+map.register = "0.7"
+map.volume   = "0.35 + 0.3 * flow"
+map.delay    = "0.6"

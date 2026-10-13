@@ -1,0 +1,77 @@
+# Markets Open — Bitcoin trades on Coinbase, live.
+#
+# Each trade is a pluck: buys rise, sells fall; size is velocity. The price contour
+# over the last minute steers the lead's register; trade rate is the energy.
+
+name = "Markets Open"
+description = "Live BTC-USD trades: buys rise, sells fall, volume decides how loud."
+tags = ["live", "rhythmic"]
+viz = "generic"
+
+[conductor]
+key = "E"
+mode = "minor_pentatonic"
+tempo = 92
+tempo_range = [80, 110]
+drift = "medium"
+progression = "functional"
+bars_per_chord = 2
+mood_smoothing = 15
+swing = 0.12
+
+[[layer]]
+name = "tape"
+role = "pluck"
+instrument = "pluck.marimba"
+source = { kind = "coinbase.trades", products = ["BTC-USD"] }
+signals.rate     = "norm(smooth(rate(event('trade'), 5), 1.5))"
+signals.buys     = "smooth(field('buy_ratio'), 5)"
+signals.move     = "norm(smooth(abs(field('price_change')), 10))"
+map.energy       = "rate"
+map.tension      = "move"
+map.brightness   = "buys"
+map.density      = "rate"
+on_event.trade.chance   = "clamp(0.3 + 0.7 * intensity, 0, 1)"
+on_event.trade.pitch    = "if(attr_text('side') == 'buy', 0.55 + 0.45 * intensity, 0.45 - 0.45 * intensity)"
+on_event.trade.velocity = "0.3 + 0.7 * intensity"
+on_event.trade.pan      = "if(attr_text('side') == 'buy', 0.7, 0.3)"
+on_event.trade.quantize = "1/16"
+on_event.trade.length   = "0.25"
+
+[[layer]]
+name = "whales"
+role = "bells"
+instrument = "bells.fm"
+source = "tape"
+on_event.trade.chance   = "step(0.75, intensity)"
+on_event.trade.pitch    = "if(attr_text('side') == 'buy', 0.8, 0.2)"
+on_event.trade.velocity = "0.9"
+on_event.trade.length   = "4"
+
+[[layer]]
+name = "ticker"
+role = "perc"
+instrument = "perc.kit"
+source = "tape"
+signals.rate = "norm(smooth(rate(event('trade'), 5), 1.5))"
+map.density  = "0.3 + 0.7 * rate"
+map.volume   = "0.6"
+
+[[layer]]
+name = "price"
+role = "lead"
+instrument = "lead.soft"
+source = "tape"
+signals.trend  = "norm(smooth(field('price_change'), 20))"
+signals.rate   = "norm(smooth(rate(event('trade'), 10), 3))"
+map.register   = "trend"
+map.density    = "0.3 + 0.5 * rate"
+map.step       = "0.3 + 0.5 * rate"
+
+[[layer]]
+name = "floor"
+role = "bass"
+instrument = "bass.fm"
+source = "tape"
+signals.rate = "norm(smooth(rate(event('trade'), 10), 3))"
+map.density  = "0.4 + 0.5 * rate"

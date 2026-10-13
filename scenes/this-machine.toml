@@ -1,0 +1,74 @@
+# This Machine — the computer you're sitting at.
+#
+# Always works offline. CPU is the energy; memory pressure is the tension; network
+# traffic patters as plucks; a process spawning rings a bell. Compile something and listen.
+
+name = "This Machine"
+description = "Your own CPU, memory, network and processes. Works anywhere."
+tags = ["offline", "ambient"]
+viz = "generic"
+
+[conductor]
+key = "C"
+mode = "mixolydian"
+tempo = 80
+tempo_range = [70, 100]
+drift = "slow"
+progression = "functional"
+bars_per_chord = 2
+mood_smoothing = 10
+
+[[layer]]
+name = "cpu"
+role = "pad"
+instrument = "pad.warm"
+source = { kind = "system.metrics" }
+signals.cpu     = "smooth(field('cpu'), 2)"
+signals.mem     = "smooth(field('mem'), 5)"
+signals.net     = "norm(smooth(field('net_rx') + field('net_tx'), 1))"
+signals.spike   = "onset(cpu, 0.75)"
+map.energy      = "cpu"
+map.tension     = "mem"
+map.brightness  = "0.3 + 0.6 * cpu"
+map.cutoff      = "0.2 + 0.7 * cpu"
+on_event.spike.pitch    = "0.8"
+on_event.spike.velocity = "0.9"
+
+[[layer]]
+name = "network"
+role = "pluck"
+instrument = "pluck.nylon"
+source = "cpu"
+signals.net  = "norm(smooth(field('net_rx') + field('net_tx'), 0.5))"
+signals.tick = "every(0.25)"
+on_event.tick.chance   = "net"
+on_event.tick.pitch    = "random()"
+on_event.tick.velocity = "0.3 + 0.6 * net"
+on_event.tick.pan      = "random()"
+
+[[layer]]
+name = "processes"
+role = "bells"
+instrument = "bells.glass"
+source = "cpu"
+on_event.proc_spawn.pitch    = "random()"
+on_event.proc_spawn.velocity = "0.7"
+on_event.proc_spawn.length   = "3"
+
+[[layer]]
+name = "load"
+role = "bass"
+instrument = "bass.sub"
+source = "cpu"
+signals.cpu = "smooth(field('cpu'), 4)"
+map.density = "0.2 + 0.7 * cpu"
+
+[[layer]]
+name = "fans"
+role = "texture"
+instrument = "texture.noise"
+source = "cpu"
+signals.cpu = "smooth(field('cpu'), 6)"
+map.texture = "cpu"
+map.cutoff  = "0.1 + 0.6 * cpu"
+map.volume  = "0.15 + 0.3 * cpu"

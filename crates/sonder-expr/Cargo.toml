@@ -9,3 +9,5 @@ license.workspace = true
 sonder-core = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }

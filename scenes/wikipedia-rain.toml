@@ -1,0 +1,80 @@
+# Wikipedia Rain — the edit firehose as weather.
+#
+# Every human edit is a droplet (pluck). Big edits ring bells. New pages are chords.
+# The edit *rate* is the energy of the piece; English vs the rest of the world sets the pan.
+
+name = "Wikipedia Rain"
+description = "Live Wikipedia edits as rainfall on a glass roof."
+tags = ["live", "ambient"]
+viz = "generic"
+
+[conductor]
+key = "A"
+mode = "dorian"
+tempo = 74
+tempo_range = [64, 88]
+drift = "medium"
+progression = "modal"
+bars_per_chord = 1
+mood_smoothing = 20
+
+[effects.delay]
+beats = 0.5
+feedback = 0.45
+ping_pong = true
+
+[[layer]]
+name = "edits"
+role = "pluck"
+instrument = "pluck.glass"
+source = { kind = "wikipedia.recent-changes", include_bots = false, types = ["edit"] }
+signals.rate     = "norm(smooth(rate(event('edit'), 8), 2))"
+signals.growth   = "norm(smooth(field('net_bytes'), 10))"
+map.energy       = "rate"
+map.brightness   = "growth"
+map.density      = "rate"
+on_event.edit.chance   = "0.4"
+on_event.edit.pitch    = "0.5 + 0.5 * clamp(attr('bytes') / 1500, -1, 1)"   # growth up, deletion down
+on_event.edit.velocity = "0.25 + 0.7 * intensity"
+on_event.edit.pan      = "if(attr_text('wiki') == 'enwiki', 0.3, 0.7) + 0.2 * (hash(attr('user')) - 0.5)"
+on_event.edit.quantize = "1/16"
+on_event.edit.length   = "0.3"
+
+[[layer]]
+name = "big-edits"
+role = "bells"
+instrument = "bells.glass"
+source = "edits"
+on_event.edit.chance   = "step(0.6, intensity)"
+on_event.edit.pitch    = "hash(attr('title'))"
+on_event.edit.velocity = "0.6 + 0.4 * intensity"
+on_event.edit.pan      = "hash(attr('wiki'))"
+on_event.edit.length   = "5"
+on_event.edit.quantize = "1/8"
+
+[[layer]]
+name = "roof"
+role = "pad"
+instrument = "pad.strings"
+source = "edits"
+signals.rate   = "norm(smooth(rate(event('edit'), 20), 6))"
+map.register   = "0.4 + 0.2 * rate"
+map.cutoff     = "0.3 + 0.5 * rate"
+map.volume     = "0.7"
+
+[[layer]]
+name = "floor"
+role = "bass"
+instrument = "bass.pluck"
+source = "edits"
+signals.rate = "norm(smooth(rate(event('edit'), 20), 6))"
+map.density  = "0.2 + 0.6 * rate"
+
+[[layer]]
+name = "pulse"
+role = "perc"
+instrument = "perc.kit"
+source = "edits"
+signals.rate = "norm(smooth(rate(event('edit'), 10), 3))"
+map.density  = "rate"
+map.volume   = "0.45"

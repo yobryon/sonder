@@ -1,0 +1,93 @@
+# Planet Tonight — the whole Earth as an ensemble.
+#
+# Earthquakes are sub-bass hits placed by longitude. Aircraft over London keep an arp
+# ticking. Wikipedia edits rain as plucks (bots are silent). Solar wind slowly opens
+# and closes the pad. The moon decides how bright the mode is; sunset slows us down.
+#
+# Needs network. Everything is public, no keys.
+
+name = "Planet Tonight"
+description = "Earthquakes, aircraft, Wikipedia edits, solar wind and the moon — stacked."
+tags = ["live", "ambient", "stacked"]
+viz = "map"
+
+[conductor]
+key = "F"
+mode = "ionian"
+tempo = 66
+tempo_range = [58, 80]
+drift = "slow"
+progression = "functional"
+bars_per_chord = 2
+mood_smoothing = 45
+mood_baseline = [0.4, 0.3, 0.5]
+
+[[layer]]
+name = "sky"
+role = "pad"
+instrument = "pad.warm"
+source = { kind = "clock.astro", lat = 51.5, lon = -0.12 }
+signals.moon    = "field('moon_phase')"
+signals.day     = "smooth(field('twilight'), 30)"
+map.brightness  = "0.3 + 0.5 * (1 - abs(moon - 0.5) * 2)"   # full moon = brightest
+map.energy      = "0.25 + 0.4 * day"
+map.register    = "0.45"
+
+[[layer]]
+name = "solar-wind"
+role = "drone"
+instrument = "drone.sub"
+source = { kind = "noaa.space-weather" }
+signals.wind    = "norm(smooth(field('speed'), 60), 250, 800)"
+signals.kp      = "norm(field('kp'), 0, 9)"
+map.texture     = "0.2 + 0.8 * kp"
+map.cutoff      = "0.2 + 0.7 * wind"
+map.tension     = "kp"
+map.volume      = "0.6"
+
+[[layer]]
+name = "quakes"
+role = "perc"
+instrument = "perc.kit"
+source = { kind = "usgs.earthquakes", feed = "all_hour", min_magnitude = 1.0 }
+on_event.quake.drum     = "kick"
+on_event.quake.velocity = "0.3 + 0.7 * intensity"
+on_event.quake.pan      = "attr('lon01')"
+on_event.quake.pitch    = "1 - clamp(attr('depth_km') / 300, 0, 1)"
+
+[[layer]]
+name = "tremor"
+role = "bells"
+instrument = "bells.fm"
+source = "quakes"
+on_event.quake.pitch    = "0.1 + 0.4 * (1 - intensity)"     # big quake → low bell
+on_event.quake.velocity = "0.4 + 0.6 * intensity"
+on_event.quake.pan      = "attr('lon01')"
+on_event.quake.length   = "8"
+
+[[layer]]
+name = "aircraft"
+role = "arp"
+instrument = "arp.pulse"
+source = { kind = "opensky.flights", bbox = [50.5, -1.5, 52.0, 1.0] }
+signals.count   = "norm(smooth(field('count'), 20), 0, 250)"
+signals.climb   = "smooth(field('climbing'), 20)"
+map.density     = "0.2 + 0.7 * count"
+map.register    = "0.5 + 0.3 * climb"
+map.energy      = "count"
+map.volume      = "0.5"
+
+[[layer]]
+name = "edits"
+role = "pluck"
+instrument = "pluck.nylon"
+source = { kind = "wikipedia.recent-changes", include_bots = false }
+signals.rate    = "norm(smooth(rate(event('edit'), 10), 3))"
+map.density     = "rate"
+map.energy      = "rate"
+on_event.edit.chance   = "0.35"
+on_event.edit.pitch    = "hash(attr('wiki')) * 0.6 + 0.4 * intensity"
+on_event.edit.velocity = "0.3 + 0.5 * intensity"
+on_event.edit.pan      = "hash(attr('user'))"
+on_event.edit.quantize = "1/16"
+on_event.edit.length   = "0.4"

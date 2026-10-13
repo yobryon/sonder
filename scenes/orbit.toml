@@ -1,0 +1,48 @@
+# Orbit — the International Space Station, right now.
+#
+# Latitude is the register; longitude is the pan. Crossing the equator rings a bell.
+# A full lap takes 92 minutes; this is a very slow piece.
+
+name = "Orbit"
+description = "The ISS position as a 92-minute melody."
+tags = ["live", "ambient", "slow"]
+viz = "map"
+
+[conductor]
+key = "Db"
+mode = "lydian"
+tempo = 58
+drift = "slow"
+progression = "modal"
+bars_per_chord = 4
+mood_smoothing = 90
+
+[[layer]]
+name = "station"
+role = "lead"
+instrument = "lead.sine"
+source = { kind = "iss.position" }
+signals.lat   = "smooth(field('lat01'), 5)"
+signals.lon   = "smooth(field('lon01'), 5)"
+map.register  = "lat"
+map.pan       = "lon"
+map.density   = "0.25"
+map.step      = "0.2"
+map.brightness = "lat"
+on_event.equator_cross.pitch = "0.5"
+
+[[layer]]
+name = "space"
+role = "pad"
+instrument = "pad.glass"
+source = "station"
+signals.lat  = "smooth(field('lat01'), 20)"
+map.register = "0.3 + 0.3 * lat"
+map.cutoff   = "0.3 + 0.4 * lat"
+
+[[layer]]
+name = "ground"
+role = "drone"
+instrument = "drone.sub"
+source = "station"
+map.volume = "0.5"

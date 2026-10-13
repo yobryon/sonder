@@ -1,0 +1,83 @@
+# Midnight Walk — an offline showcase of every role.
+#
+# Random walks drive everything; a periodic event triggers the plucks. Use it to audition
+# instruments and generators without any data source at all.
+
+name = "Midnight Walk"
+description = "Offline showcase: every role, driven by seeded random walks."
+tags = ["offline", "demo"]
+viz = "generic"
+
+[conductor]
+key = "E"
+mode = "aeolian"
+tempo = 72
+tempo_range = [64, 84]
+drift = "medium"
+progression = "functional"
+bars_per_chord = 2
+mood_smoothing = 15
+seed = 7
+
+[[layer]]
+name = "sky"
+role = "pad"
+instrument = "pad.strings"
+source = { kind = "synthetic.walk", names = ["a", "b", "c"], rate_hz = 10, step = 0.02, event_every = 0.7 }
+signals.a = "smooth(field('a'), 2)"
+signals.b = "smooth(field('b'), 2)"
+map.energy = "a"
+map.brightness = "b"
+map.tension = "field('c')"
+map.cutoff = "0.3 + 0.6 * b"
+
+[[layer]]
+name = "drops"
+role = "pluck"
+instrument = "pluck.glass"
+source = "sky"
+on_event.tick.chance = "0.5 + 0.5 * field('a')"
+on_event.tick.pitch = "random()"
+on_event.tick.velocity = "0.4 + 0.5 * field('b')"
+on_event.tick.pan = "random()"
+on_event.tick.quantize = "1/16"
+
+[[layer]]
+name = "melody"
+role = "lead"
+instrument = "lead.saw"
+source = "sky"
+map.density = "0.3 + 0.5 * field('a')"
+map.step = "field('c')"
+map.register = "0.5 + 0.3 * field('b')"
+
+[[layer]]
+name = "arp"
+role = "arp"
+instrument = "arp.pulse"
+source = "sky"
+map.density = "field('b')"
+map.volume = "0.45"
+
+[[layer]]
+name = "bass"
+role = "bass"
+instrument = "bass.pluck"
+source = "sky"
+map.density = "0.3 + 0.6 * field('a')"
+
+[[layer]]
+name = "drums"
+role = "perc"
+instrument = "perc.kit"
+source = "sky"
+map.density = "field('a')"
+map.volume = "0.6"
+
+[[layer]]
+name = "air"
+role = "texture"
+instrument = "texture.grain"
+source = "sky"
+map.texture = "field('c')"
+map.volume = "0.3"

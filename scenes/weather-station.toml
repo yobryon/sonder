@@ -1,0 +1,82 @@
+# Weather Station — slow music for slow data.
+#
+# Wind speed is the texture; cloud cover closes the filter; rain makes the arp fall;
+# the tide is the bass register; the sun decides the mode. Changes over hours, not seconds.
+
+name = "Weather Station"
+description = "Wind, cloud, rain, pressure, tide and sun for one place. Changes over hours."
+tags = ["live", "ambient", "slow"]
+viz = "generic"
+
+[conductor]
+key = "G"
+mode = "lydian"
+tempo = 54
+tempo_range = [48, 64]
+drift = "slow"
+progression = "modal"
+bars_per_chord = 4
+mood_smoothing = 120
+humanize = 0.3
+
+[effects.reverb]
+size = 0.97
+damping = 0.3
+
+[[layer]]
+name = "sky"
+role = "pad"
+instrument = "pad.choir"
+source = { kind = "open-meteo.weather", lat = 37.77, lon = -122.42 }
+signals.cloud   = "norm(field('cloud_cover'), 0, 100)"
+signals.wind    = "norm(field('wind_speed_10m'), 0, 60)"
+signals.temp    = "norm(field('temperature_2m'), -5, 35)"
+signals.rain    = "norm(field('precipitation'), 0, 5)"
+map.brightness  = "1 - cloud"
+map.cutoff      = "0.25 + 0.6 * (1 - cloud)"
+map.energy      = "0.2 + 0.5 * wind"
+map.tension     = "rain"
+map.register    = "0.3 + 0.4 * temp"
+
+[[layer]]
+name = "wind"
+role = "texture"
+instrument = "texture.wind"
+source = "sky"
+signals.wind = "norm(field('wind_speed_10m'), 0, 60)"
+signals.gust = "norm(field('wind_gusts_10m'), 0, 90)"
+map.texture  = "wind"
+map.cutoff   = "0.2 + 0.6 * gust"
+map.volume   = "0.2 + 0.6 * wind"
+map.pan      = "0.5 + 0.3 * walk(0.2, 30)"
+
+[[layer]]
+name = "rain"
+role = "arp"
+instrument = "arp.glass"
+source = "sky"
+signals.rain = "norm(field('precipitation'), 0, 5)"
+map.density  = "rain"
+map.volume   = "0.2 + 0.6 * rain"
+map.register = "0.75"
+
+[[layer]]
+name = "tide"
+role = "bass"
+instrument = "bass.sub"
+source = { kind = "noaa.tides", station = "9414290" }
+signals.level = "norm(field('water_level'), -0.5, 2.5)"
+map.register  = "0.1 + 0.4 * level"
+map.density   = "0.2"
+
+[[layer]]
+name = "sun"
+role = "drone"
+instrument = "drone.saw"
+source = { kind = "clock.astro", lat = 37.77, lon = -122.42 }
+signals.alt   = "norm(field('sun_altitude'), -18, 60)"
+map.brightness = "alt"
+map.cutoff     = "0.1 + 0.6 * alt"
+map.volume     = "0.5"
+on_event.sunrise.pitch = "0.7"
+on_event.sunset.pitch  = "0.3"

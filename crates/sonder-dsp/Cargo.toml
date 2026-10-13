@@ -8,3 +8,6 @@ license.workspace = true
 [dependencies]
 sonder-core = { workspace = true }
 rustfft = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
