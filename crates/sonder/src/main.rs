@@ -288,10 +288,10 @@ async fn play(args: PlayArgs, tui: bool) -> anyhow::Result<()> {
             eprintln!("sonder: web ui at {u}");
         }
         eprintln!("sonder: Ctrl-C to stop");
-        let mut done = handle.done;
+        let mut handle = handle;
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},
-            r = &mut done => { r.ok().transpose()?; },
+            r = &mut handle.done => { r.ok().transpose()?; },
         }
         handle.shutdown();
     }

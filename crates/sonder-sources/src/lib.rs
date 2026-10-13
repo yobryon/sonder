@@ -7,6 +7,13 @@
 //! Builtin kinds live under [`adapters`]; shared plumbing (backoff, polling,
 //! status de-dup, HTTP helpers) is in [`util`]; [`jsonpath`] and [`sse`] are the
 //! small parsers the generic adapters use; [`probe`] implements `sonder probe`.
+//!
+//! # Testing
+//!
+//! Unit tests run offline against canned payloads. Tests that hit the real public
+//! endpoints are `#[ignore]`d; run them with network access via
+//! `cargo test -p sonder-sources -- --ignored` (or a single one, e.g.
+//! `cargo test -p sonder-sources -- --ignored usgs`).
 
 #![forbid(unsafe_code)]
 

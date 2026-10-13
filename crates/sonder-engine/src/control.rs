@@ -63,7 +63,7 @@ impl ControlLoop {
     pub fn new(
         scene: Scene,
         seed: u64,
-        synth: SynthController,
+        mut synth: SynthController,
         tap: Option<AudioTap>,
         web_audio: Option<tokio::sync::broadcast::Sender<Arc<Vec<f32>>>>,
         audio_backend: String,
@@ -104,7 +104,7 @@ impl ControlLoop {
         synth.send(SynthCommand::SetEffects(Box::new(scene.effects.clone())));
         synth.send(SynthCommand::SetTempo { bpm: scene.conductor.tempo as f32 });
 
-        let analyzer = Analyzer::new(synth.sample_rate() as f32, 48);
+        let analyzer = Analyzer::new(synth.sample_rate(), 48);
         let n = scene.layers.len();
         Ok(Self {
             scene,
@@ -291,11 +291,14 @@ impl ControlLoop {
         while let Some(old) = self.synth.take_recycled() {
             drop(old);
         }
-        self.synth.poll_feedback(&mut |fb| {
+        while let Some(old) = self.synth.take_recycled_effects() {
+            drop(old);
+        }
+        while let Some(fb) = self.synth.poll_feedback() {
             if let SynthFeedback::Underruns(n) = fb {
                 self.underruns = self.underruns.saturating_add(n);
             }
-        });
+        }
         if let Some(tap) = self.tap.as_mut() {
             self.tap_buf.clear();
             let n = tap.pop_chunk(&mut self.tap_buf);

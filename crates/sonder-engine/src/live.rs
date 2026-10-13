@@ -96,9 +96,9 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
 
     // Audio first, so we know the real sample rate.
     let tap_cfg = if opts.web_tap { Some(sonder_audio::TapConfig::default()) } else { None };
-    let (controller, host, stream, backend_name) = open_audio(opts.backend, requested_sr, max_layers, tap_cfg)?;
-    let (controller, tap) = controller.split_tap();
-    let sample_rate = controller.sample_rate();
+    let (mut controller, stream, backend_name) = open_audio(opts.backend, requested_sr, max_layers, tap_cfg)?;
+    let tap = controller.take_tap();
+    let sample_rate = controller.sample_rate() as u32;
 
     let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(Arc::new(EngineSnapshot::default()));
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<UserCommand>(64);
@@ -184,7 +184,7 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
     })
 }
 
-type Opened = (sonder_audio::SynthController, Option<sonder_audio::SynthHost>, Option<AudioStream>, String);
+type Opened = (sonder_audio::SynthController, AudioStream, String);
 
 /// Open the requested backend, falling back to Null for `Auto`.
 fn open_audio(
@@ -194,10 +194,16 @@ fn open_audio(
     tap: Option<sonder_audio::TapConfig>,
 ) -> anyhow::Result<Opened> {
     let try_backend = |backend: Backend, tap: Option<sonder_audio::TapConfig>| -> anyhow::Result<Opened> {
-        let (controller, host) = sonder_audio::synth_pair(sample_rate as f32, max_layers, tap);
         let name = backend.name().to_string();
+        // Build the synth at the device's real rate so pitch is right.
+        let sr = match backend {
+            #[cfg(feature = "native-audio")]
+            Backend::Native => sonder_audio::native_default_sample_rate().unwrap_or(sample_rate),
+            _ => sample_rate,
+        };
+        let (controller, host) = sonder_audio::synth_pair(sr as f32, max_layers, tap);
         let stream = AudioStream::start(backend, host).map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
-        Ok((controller, None, Some(stream), name))
+        Ok((controller, stream, name))
     };
     match choice {
         AudioBackendChoice::Native => try_backend(Backend::Native, tap),

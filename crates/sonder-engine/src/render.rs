@@ -51,7 +51,6 @@ async fn render_inner(scene: &Scene, seconds: f64, seed: u64) -> anyhow::Result<
     const SR: u32 = 48_000;
     let max_layers = scene.layers.len().max(1);
     let (controller, mut host) = sonder_audio::synth_pair(SR as f32, max_layers, None);
-    let (controller, _tap) = controller.split_tap();
     let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(Arc::new(EngineSnapshot::default()));
     let (sample_tx, mut sample_rx) = tokio::sync::mpsc::channel::<Sample>(65_536);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
