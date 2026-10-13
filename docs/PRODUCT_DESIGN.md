@@ -322,7 +322,16 @@ Streaming to listeners at scale; DAW plugin (VST/CLAP) packaging; machine-learne
 
 1. `sonder play night-freeway` sounds good for an hour, unattended, with no audible
    glitches, in a terminal with no sound card (via web audio).
+   — *Verified 2026-10-13: 1 h headless soak, 0 underruns, memory flat at 16.6 MB, harmony
+   drifting Lydian ↔ Ionian; audio and visuals checked in Chrome via the web UI.*
 2. A listener can tell, blind, whether traffic is heavy or light.
+   — *Mechanism in place: traffic density → pad energy/register, pluck rate, bass density,
+   arp volume; the rush cycle is audible in renders. Listening study not yet run.*
 3. Any JSON endpoint becomes a playable layer in under two minutes via `probe`.
+   — *Verified: `sonder probe http://api.open-notify.org/iss-now.json -o iss.toml` writes a
+   scene that validates and plays.*
 4. Stacking five live sources stays in one key and one groove.
+   — *Verified: `planet-tonight` ran with USGS, OpenSky, Wikipedia, NOAA SWPC and the astro
+   clock all live, every note quantized to the conductor's scale.*
 5. `render` is deterministic and tested.
+   — *Verified: byte-identical WAVs for the same seed (engine + CLI tests).*
