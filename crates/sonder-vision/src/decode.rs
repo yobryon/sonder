@@ -52,11 +52,11 @@ impl Decoder {
             return Err(VisionError::BadDownscale(downscale));
         }
         let mut dec = image::codecs::jpeg::JpegDecoder::new(Cursor::new(jpeg))?;
-        dec.set_limits(image::Limits {
-            max_image_width: Some(MAX_DIMENSION),
-            max_image_height: Some(MAX_DIMENSION),
-            max_alloc: Some(512 << 20),
-        })?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_DIMENSION);
+        limits.max_image_height = Some(MAX_DIMENSION);
+        limits.max_alloc = Some(512 << 20);
+        dec.set_limits(limits)?;
         let (w, h) = dec.dimensions();
         let color = dec.color_type();
         let channels = match color {
@@ -186,7 +186,7 @@ mod tests {
         assert_eq!((ow, oh), (2, 1));
         assert_eq!(out.len(), 2);
         // Compare against brute force.
-        for ox in 0..2usize {
+        for (ox, o) in out.iter().enumerate() {
             let mut s = 0u32;
             for dy in 0..3 {
                 for dx in 0..3 {
@@ -194,7 +194,7 @@ mod tests {
                     s += luma(src[i], src[i + 1], src[i + 2]);
                 }
             }
-            assert_eq!(out[ox] as u32, (s + 4) / 9);
+            assert_eq!(*o as u32, (s + 4) / 9);
         }
         assert!(matches!(downscale_luma(&src, w, h, 3, 0, &mut out), Err(VisionError::BadDownscale(0))));
         assert!(downscale_luma(&src, w, h, 3, 8, &mut out).is_err());

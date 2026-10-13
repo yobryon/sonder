@@ -10,13 +10,12 @@
 //! * a `Viz` payload at ≤10 Hz: `{"blobs":[{x,y,w,h,b,id}], "line", "w", "h"}`;
 //! * `Status` transitions, with exponential backoff reconnects.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use sonder_core::{Clock, Datum, Sample, Seconds, SourceSpec, SourceState};
+use sonder_core::{Clock, Sample, Seconds, SourceSpec, SourceState};
 use sonder_sources::{Factory, ParamInfo, Registry, Source, SourceCtx, SourceError, SourceFuture, SourceInfo};
 
 use crate::decode::Decoder;
@@ -488,7 +487,7 @@ async fn run_connection(
 mod tests {
     use super::*;
     use crate::testgen;
-    use std::sync::Arc;
+    use sonder_core::Datum;
 
     #[test]
     fn params_parse_and_validate() {
@@ -570,7 +569,7 @@ mod tests {
         let mut jpegs = Vec::new();
         for i in 0..40 {
             let y = -6.0 + i as f32 * 4.0;
-            let discs = if y < 130.0 { vec![testgen::Disc { x: 80.0, y, r: 5.0, brightness: 235 }] } else { vec![] };
+            let discs = if y < 130.0 { vec![testgen::Disc { x: 100.0, y, r: 5.0, brightness: 235 }] } else { vec![] };
             let frame = testgen::render(w, h, 18, 8, &discs, i as u64 + 1);
             jpegs.push(testgen::encode_jpeg(&frame, w, h, 85).unwrap());
         }

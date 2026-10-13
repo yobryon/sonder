@@ -68,7 +68,7 @@ impl Envelope {
 
     /// Advance one sample and return the new level.
     #[inline]
-    pub fn next(&mut self) -> f32 {
+    pub fn tick(&mut self) -> f32 {
         match self.stage {
             Stage::Idle => {
                 self.level = 0.0;
@@ -114,16 +114,16 @@ mod tests {
         e.trigger();
         let mut peak = 0.0f32;
         for _ in 0..(0.02 * sr) as usize {
-            peak = peak.max(e.next());
+            peak = peak.max(e.tick());
         }
         assert!((peak - 1.0).abs() < 1e-3, "attack reached {peak}");
         for _ in 0..(0.3 * sr) as usize {
-            e.next();
+            e.tick();
         }
         assert!((e.level - 0.5).abs() < 1e-3, "sustain {}", e.level);
         e.release();
         for _ in 0..(0.3 * sr) as usize {
-            e.next();
+            e.tick();
         }
         assert!(e.is_idle());
     }

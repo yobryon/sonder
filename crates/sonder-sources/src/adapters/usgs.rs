@@ -86,64 +86,46 @@ impl Source for UsgsSource {
             let mut em = Emitter::new(ctx);
             let mut seen: SeenSet<String> = SeenSet::new(5000);
             let mut first = true;
-            let min_mag = self.min_mag;
-            // Shared mutable state must be moved into the closure via a RefCell-free
-            // pattern: we collect output per poll and emit from the loop body.
-            let tx = em.ctx.tx.clone();
-            let id = em.ctx.id.clone();
-            let clock = em.ctx.clock.clone();
-            let seen_cell = std::rc::Rc::new(std::cell::RefCell::new((seen, first)));
-            let _ = (&mut seen, &mut first);
-            util::poll_loop(&mut em, self.interval, |ctx| {
-                let url = url.clone();
-                let tx = tx.clone();
-                let id = id.clone();
-                let clock = clock.clone();
-                let seen_cell = seen_cell.clone();
-                async move {
-                    let v = util::get_json(&ctx, &url).await?;
-                    let quakes = parse_feed(&v);
-                    if quakes.is_empty() && v.get("features").is_none() {
-                        return Err("unexpected payload (no features)".into());
-                    }
-                    let mut state = seen_cell.borrow_mut();
-                    let (seen, first) = &mut *state;
-                    let hour_ago = util::unix_now() * 1000.0 - 3_600_000.0;
-                    let count_hour = quakes.iter().filter(|q| q.time_ms >= hour_ago).count() as f64;
-                    let max_mag = quakes.iter().map(|q| q.mag).fold(0.0, f64::max);
-                    let mut fresh: Vec<&Quake> = Vec::new();
-                    for q in &quakes {
-                        let is_new = seen.insert(q.id.clone());
-                        if is_new && q.mag >= min_mag {
-                            fresh.push(q);
-                        }
-                    }
-                    if *first {
-                        // Feed is newest-first; keep only the 3 most recent to seed the scene.
-                        fresh.truncate(3);
-                        fresh.reverse();
-                        *first = false;
-                    } else {
-                        fresh.reverse(); // oldest first
-                    }
-                    let now = clock.now();
-                    let _ = tx
-                        .send(sonder_core::Sample::reading(&id, now, [("count_hour", count_hour), ("max_mag", max_mag), ("count_feed", quakes.len() as f64)]))
-                        .await;
-                    let had_fresh = !fresh.is_empty();
-                    for q in fresh {
-                        let s = sonder_core::Sample {
-                            source: id.clone(),
-                            at: now,
-                            datum: sonder_core::Datum::Event { name: "quake".into(), intensity: q.intensity(), attrs: q.attrs().into_map() },
-                        };
-                        let _ = tx.send(s).await;
-                    }
-                    Ok(if had_fresh { Poll::Live } else { Poll::Idle })
+            let mut poller = util::Poller::new(self.interval);
+            poller.start(&mut em).await;
+            loop {
+                let res = self.poll_once(&mut em, &url, &mut seen, &mut first).await;
+                if !poller.after(&mut em, res).await {
+                    return;
                 }
-            })
-            .await;
+            }
         })
+    }
+}
+
+impl UsgsSource {
+    async fn poll_once(&self, em: &mut Emitter, url: &str, seen: &mut SeenSet<String>, first: &mut bool) -> Result<Poll, String> {
+        let v = util::get_json(&em.ctx, url).await?;
+        if v.get("features").is_none() {
+            return Err("unexpected payload (no features)".into());
+        }
+        let quakes = parse_feed(&v);
+        let hour_ago = util::unix_now() * 1000.0 - 3_600_000.0;
+        let count_hour = quakes.iter().filter(|q| q.time_ms >= hour_ago).count() as f64;
+        let max_mag = quakes.iter().map(|q| q.mag).fold(0.0, f64::max);
+        let mut fresh: Vec<&Quake> = Vec::new();
+        for q in &quakes {
+            if seen.insert(q.id.clone()) && q.mag >= self.min_mag {
+                fresh.push(q);
+            }
+        }
+        if *first {
+            // The feed is newest-first; seed the scene with the 3 most recent only.
+            fresh.truncate(3);
+            *first = false;
+        }
+        fresh.reverse(); // oldest first
+        em.reading([("count_hour", count_hour), ("max_mag", max_mag), ("count_feed", quakes.len() as f64)]).await;
+        let had_fresh = !fresh.is_empty();
+        for q in fresh {
+            em.event("quake", q.intensity(), q.attrs().into_map()).await;
+        }
+        Ok(if had_fresh { Poll::Live } else { Poll::Idle })
     }
 }
 

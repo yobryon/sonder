@@ -17,11 +17,17 @@ use tokio::sync::{mpsc, watch};
 struct Chord {
     phase: [f32; 3],
     rate: f32,
+    /// Real-time pacing: only produce the audio that wall time owes us.
+    started: Option<std::time::Instant>,
+    produced: u64,
 }
 
 impl AudioSource for Chord {
     fn pop_chunk(&mut self, out: &mut Vec<f32>) -> usize {
-        let frames = (self.rate / 100.0) as usize;
+        let start = *self.started.get_or_insert_with(std::time::Instant::now);
+        let owed = (start.elapsed().as_secs_f64() * self.rate as f64) as u64;
+        let frames = owed.saturating_sub(self.produced).min(self.rate as u64 / 4) as usize;
+        self.produced += frames as u64;
         let freqs = [146.83f32, 220.0, 277.18];
         for _ in 0..frames {
             let mut s = 0.0;
@@ -58,7 +64,9 @@ impl Sim {
         if self.rnd() < 0.08 {
             let lane = (self.rnd() * lanes as f64) as usize;
             let dir = if lane < 2 { 0.0 } else { 1.0 };
-            self.cars.push((dir, (lane as f64 + 0.5) / lanes as f64 * 0.8 + 0.1, lane, 0.3 + self.rnd() * 0.7, 0.5 + self.rnd() * 0.5));
+            let size = 0.3 + self.rnd() * 0.7;
+            let bright = 0.5 + self.rnd() * 0.5;
+            self.cars.push((dir, (lane as f64 + 0.5) / lanes as f64 * 0.8 + 0.1, lane, size, bright));
         }
         let mut exited = Vec::new();
         for c in &mut self.cars {
@@ -198,5 +206,5 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     eprintln!("demo ui at http://{addr}");
-    serve(addr, WebHandle { snapshot: snap_rx, commands: cmd_tx, audio: Some(Box::new(Chord { phase: [0.0; 3], rate: 48000.0 })), sample_rate: 48000 }).await
+    serve(addr, WebHandle { snapshot: snap_rx, commands: cmd_tx, audio: Some(Box::new(Chord { phase: [0.0; 3], rate: 48000.0, started: None, produced: 0 })), sample_rate: 48000 }).await
 }

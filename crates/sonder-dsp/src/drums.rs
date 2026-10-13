@@ -52,6 +52,18 @@ impl Default for DrumVoice {
     }
 }
 
+/// Parameters of one percussion hit.
+#[derive(Debug, Clone, Copy)]
+pub struct DrumHit {
+    pub layer: LayerId,
+    pub kind: Drum,
+    pub velocity: f32,
+    pub pan: f32,
+    pub tone: f32,
+    pub age: u64,
+    pub seed: u32,
+}
+
 /// Exponential decay reaching −60 dB at `seconds`.
 #[inline]
 fn decay(t: f32, seconds: f32) -> f32 {
@@ -59,7 +71,8 @@ fn decay(t: f32, seconds: f32) -> f32 {
 }
 
 impl DrumVoice {
-    pub fn trigger(&mut self, sr: f32, layer: LayerId, kind: Drum, velocity: f32, pan: f32, tone: f32, age: u64, seed: u32) {
+    pub fn trigger(&mut self, sr: f32, hit: DrumHit) {
+        let DrumHit { layer, kind, velocity, pan, tone, age, seed } = hit;
         self.sr = sr;
         self.active = true;
         self.layer = layer;
@@ -145,12 +158,12 @@ impl DrumVoice {
                     const RATIOS: [f32; 6] = [1.0, 1.4471, 1.6170, 1.9265, 2.5028, 2.6637];
                     let base = 320.0 * lerp(0.9, 1.15, tone);
                     let mut sum = 0.0;
-                    for k in 0..6 {
-                        self.phase[k] += base * RATIOS[k] * inv_sr;
-                        if self.phase[k] >= 1.0 {
-                            self.phase[k] -= 1.0;
+                    for (ph, ratio) in self.phase.iter_mut().zip(RATIOS.iter()) {
+                        *ph += base * ratio * inv_sr;
+                        if *ph >= 1.0 {
+                            *ph -= 1.0;
                         }
-                        sum += if self.phase[k] < 0.5 { 1.0 } else { -1.0 };
+                        sum += if *ph < 0.5 { 1.0 } else { -1.0 };
                     }
                     let metal = self.svf.hp(sum / 6.0, &c1);
                     let metal = self.svf2.lp(metal, &c2);

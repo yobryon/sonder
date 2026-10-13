@@ -530,6 +530,56 @@ where
     }
 }
 
+/// Stateful counterpart of [`poll_loop`] for adapters that keep per-poll state:
+///
+/// ```ignore
+/// let mut poller = Poller::new(interval);
+/// poller.start(&mut em).await;
+/// loop {
+///     let res = do_poll(&mut em, &mut state).await;   // Result<Poll, String>
+///     if !poller.after(&mut em, res).await { return; } // status + backoff + shutdown-aware sleep
+/// }
+/// ```
+pub struct Poller {
+    interval: Duration,
+    attempt: u32,
+    rng: rand_chacha::ChaCha8Rng,
+}
+
+impl Poller {
+    pub fn new(interval: Duration) -> Self {
+        Self { interval, attempt: 0, rng: rng_from_seed(0x51ed_270e) }
+    }
+    /// Emit the initial `Connecting` status.
+    pub async fn start(&mut self, em: &mut Emitter) {
+        self.rng = rng_from_seed(instance_seed(em.ctx.seed, em.ctx.id.as_str(), None) ^ 0x51ed_270e);
+        em.status(SourceState::Connecting, "connecting").await;
+    }
+    /// Report the outcome of one poll and sleep until the next. Returns `false` on shutdown.
+    pub async fn after(&mut self, em: &mut Emitter, res: Result<Poll, String>) -> bool {
+        let delay = match res {
+            Ok(Poll::Live) => {
+                self.attempt = 0;
+                em.status(SourceState::Live, "live").await;
+                self.interval
+            }
+            Ok(Poll::Idle) => {
+                self.attempt = 0;
+                em.status(SourceState::Idle, "no new data").await;
+                self.interval
+            }
+            Err(msg) => {
+                let d = retry_delay(self.attempt, &mut self.rng).max(self.interval.min(Duration::from_secs(5)));
+                self.attempt = self.attempt.saturating_add(1);
+                tracing::warn!(source = %em.ctx.id, attempt = self.attempt, %msg, "poll failed");
+                em.status_force(SourceState::Reconnecting, format!("{msg}; retry in {:.0}s", d.as_secs_f64())).await;
+                d
+            }
+        };
+        em.sleep(delay).await
+    }
+}
+
 /// Like [`poll_loop`] but for long-lived connections (SSE, WebSocket): `f` runs until
 /// the connection drops, then we reconnect with backoff. `f` returns `Ok(())` for a
 /// clean end-of-stream, `Err(msg)` for a failure.
@@ -580,6 +630,11 @@ pub fn json_f64(v: Option<&Json>) -> Option<f64> {
         Json::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
         _ => None,
     }
+}
+
+/// Number from a JSON value reference (numbers, numeric strings, bools; null → None).
+pub fn json_f64_opt(v: &Json) -> Option<f64> {
+    json_f64(Some(v))
 }
 
 /// `obj[key]` as f64.

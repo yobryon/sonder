@@ -6,7 +6,7 @@
 use sonder_core::{Effects, Instrument, LayerId, LayerParam, Meter, NoteId, SynthCommand, SynthFeedback};
 
 use crate::delay::StereoDelay;
-use crate::drums::DrumVoice;
+use crate::drums::{DrumHit, DrumVoice};
 use crate::master::MasterChain;
 use crate::math::{onepole_coef, pan_gains, sane};
 use crate::reverb::Plate;
@@ -355,13 +355,15 @@ impl Synth {
                 };
                 self.drums[slot].trigger(
                     sr,
-                    layer,
-                    drum,
-                    sane(velocity, 0.0, 1.0),
-                    sane(pan, 0.0, 1.0),
-                    sane(tone, 0.0, 1.0),
-                    age,
-                    seed,
+                    DrumHit {
+                        layer,
+                        kind: drum,
+                        velocity: sane(velocity, 0.0, 1.0),
+                        pan: sane(pan, 0.0, 1.0),
+                        tone: sane(tone, 0.0, 1.0),
+                        age,
+                        seed,
+                    },
                 );
             }
             SynthCommand::AllNotesOff { layer } => {

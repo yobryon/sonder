@@ -155,9 +155,9 @@ function updateHeader(s) {
       const pc = ((h.tonic ?? 0) + i) % 12;
       const d = document.createElement('i');
       d.title = PC_NAMES[pc];
-      if (scale.has(pc)) d.classList.add('scale');
-      if (chord.has(pc)) d.classList.add('chord');
-      if (i === 0) d.classList.add('tonic');
+      if (scale.has(pc)) d.classList.add('in-scale');
+      if (chord.has(pc)) d.classList.add('in-chord');
+      if (i === 0) d.classList.add('is-tonic');
       degEl.appendChild(d);
     }
   }

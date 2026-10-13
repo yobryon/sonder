@@ -4,7 +4,9 @@
 use sonder_core::{Adsr, Filter, FilterKind, Instrument, Lfo, LfoShape, Osc, Role, Wave};
 
 /// `(name, description, constructor)` for every preset, in display order.
-const PRESETS: &[(&str, &str, fn() -> Instrument)] = &[
+type Builder = fn() -> Instrument;
+
+const PRESETS: &[(&str, &str, Builder)] = &[
     ("pad.glass", "Bright, slow glassy pad: detuned triangles with a gentle resonant sweep", pad_glass),
     ("pad.warm", "Soft analogue pad: wide supersaw under a low-pass, long release", pad_warm),
     ("pad.strings", "Ensemble strings: slow attack supersaw with vibrato and air", pad_strings),

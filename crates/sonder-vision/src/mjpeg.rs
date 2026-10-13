@@ -215,6 +215,15 @@ impl Parser {
         }
     }
 
+    /// Signal end of input: a frame still waiting on a (lying) `Content-Length`
+    /// is re-examined structurally so a complete trailing JPEG is not lost.
+    pub fn finish(&mut self) -> Option<Bytes> {
+        if let State::Fixed { .. } = self.state {
+            self.state = State::Scan { cursor: 2, entropy: false };
+        }
+        self.next_frame()
+    }
+
     /// Skip the SOI at `buf[0]` and look for the next one.
     fn resync(&mut self) {
         let skip = self.buf.len().min(2);
@@ -255,6 +264,9 @@ fn scan(buf: &[u8], mut cursor: usize, mut entropy: bool) -> (ScanResult, usize,
     let len = buf.len();
     loop {
         if entropy {
+            if cursor >= len {
+                return (ScanResult::Incomplete, cursor, true);
+            }
             // Find a marker (FF followed by anything but 00 / RSTn / FF).
             let Some(off) = buf[cursor..].iter().position(|&b| b == 0xFF) else {
                 return (ScanResult::Incomplete, len, true);
@@ -370,7 +382,7 @@ impl Stream for FrameStream {
                 return Poll::Ready(Some(Ok(frame)));
             }
             if self.done {
-                return Poll::Ready(None);
+                return Poll::Ready(self.parser.finish().map(Ok));
             }
             let this = &mut *self;
             match &mut this.inner {
@@ -524,9 +536,20 @@ mod tests {
             body.extend_from_slice(f);
             body.extend_from_slice(b"\r\n");
         }
+        // Every frame but the last is pulled in when the next part's bytes arrive.
         let (out, stats) = parse_all(&body, 50);
-        assert_eq!(out.len(), fr.len(), "{stats:?}");
+        assert_eq!(out.len(), fr.len() - 1, "{stats:?}");
         assert_eq!(stats.fast_path, 0);
+        // At end of input the pending frame is flushed structurally.
+        let mut p = Parser::new();
+        p.push(&body);
+        let mut n = 0;
+        while p.next_frame().is_some() {
+            n += 1;
+        }
+        assert_eq!(n, fr.len() - 1);
+        assert_eq!(p.finish().as_deref(), Some(&fr[fr.len() - 1][..]));
+        assert!(p.finish().is_none());
     }
 
     #[test]

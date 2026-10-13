@@ -4,21 +4,10 @@ use std::collections::BTreeMap;
 
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use sonder_core::{
-    map_keys, parse_pitch_class, pitch_class_name as core_pc_name, ConductorConfig, Drift, HarmonySnapshot, Mood,
-    Progression,
-};
-use sonder_theory::{diatonic_chord, mode_by_name, modes_by_brightness, progression, Chord, Scale};
+use sonder_core::{map_keys, parse_pitch_class, ConductorConfig, Drift, HarmonySnapshot, Mood, Progression};
+use sonder_theory::{diatonic_chord, mode_by_name, modes_by_brightness, pitch_class_name, progression, Chord, Scale};
 
 use crate::ComposeError;
-
-fn core_pc_name_shim(pc: u8, flats: bool) -> String {
-    sonder_theory::pitch_class_name(pc, flats).to_string()
-}
-#[allow(dead_code)]
-fn _unused(_: fn(i32) -> String) {}
-#[allow(dead_code)]
-const _: fn(i32) -> String = core_pc_name;
 
 /// What changed in the harmony this tick.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -315,7 +304,7 @@ impl Conductor {
     pub fn fill(&self, snap: &mut HarmonySnapshot) {
         let h = &self.harmony;
         snap.tonic = h.scale.tonic;
-        snap.key_name = core_pc_name_shim(h.scale.tonic, h.scale.prefers_flats());
+        snap.key_name = pitch_class_name(h.scale.tonic, h.scale.prefers_flats()).to_string();
         snap.mode = h.scale.mode.name.to_string();
         snap.scale = h.scale_pcs.clone();
         snap.chord = h.chord_pcs.clone();

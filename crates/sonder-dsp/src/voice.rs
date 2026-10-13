@@ -303,16 +303,15 @@ impl Voice {
         let mut alive = true;
         for i in 0..BLOCK {
             let t = i as f32 * inv;
-            let amp = self.amp_env.next();
-            self.filt_env.next();
+            let amp = self.amp_env.tick();
+            self.filt_env.tick();
             if self.amp_env.is_idle() {
                 alive = false;
                 break;
             }
             // FM index follows the amp envelope when requested.
-            for k in 0..n_osc {
-                let o = &self.patch.osc[k];
-                params[k].fm_index = o.fm_index * (1.0 - o.fm_index_env + o.fm_index_env * amp);
+            for (p, o) in params.iter_mut().zip(self.patch.osc.iter()).take(n_osc) {
+                p.fm_index = o.fm_index * (1.0 - o.fm_index_env + o.fm_index_env * amp);
             }
             let mut l = 0.0;
             let mut r = 0.0;

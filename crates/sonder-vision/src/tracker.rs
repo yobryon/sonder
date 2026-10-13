@@ -236,9 +236,10 @@ struct Det {
 impl Det {
     fn from_acc(a: &Acc) -> Self {
         let n = a.n as f32;
+        // Pixel i covers [i, i+1), so centroids sit at +0.5.
         Det {
-            cx: a.sx as f32 / n,
-            cy: a.sy as f32 / n,
+            cx: a.sx as f32 / n + 0.5,
+            cy: a.sy as f32 / n + 0.5,
             minx: a.minx as f32,
             miny: a.miny as f32,
             maxx: a.maxx as f32 + 1.0,
@@ -289,7 +290,7 @@ struct Track {
 }
 
 impl Track {
-    fn to_blob(&self, now: Seconds) -> Blob {
+    fn blob(&self, now: Seconds) -> Blob {
         let age = (now - self.start_t).max(0.0) as f32;
         let dy = self.y - self.start_y;
         Blob {
@@ -308,8 +309,8 @@ impl Track {
             dir: if dy > 1e-4 { 1.0 } else if dy < -1e-4 { -1.0 } else { 0.0 },
         }
     }
-    fn to_exit_blob(&self) -> Blob {
-        let mut b = self.to_blob(self.last_t);
+    fn exit_blob(&self) -> Blob {
+        let mut b = self.blob(self.last_t);
         b.speed = if b.age_s > 1e-3 { self.distance / b.age_s } else { b.speed };
         b
     }
@@ -712,7 +713,7 @@ impl Tracker {
                 tr.confirmed = true;
             }
             if tr.confirmed {
-                let b = tr.to_blob(t);
+                let b = tr.blob(t);
                 if !was_confirmed {
                     out.entered.push(b);
                 }
@@ -756,7 +757,7 @@ impl Tracker {
                 matched: true,
             };
             if confirm_now {
-                let b = tr.to_blob(t);
+                let b = tr.blob(t);
                 out.entered.push(b);
                 out.blobs.push(b);
             }
@@ -773,7 +774,7 @@ impl Tracker {
             tr.missed += 1;
             if tr.missed > max_missed {
                 if tr.confirmed {
-                    exited.push(tr.to_exit_blob());
+                    exited.push(tr.exit_blob());
                 }
                 false
             } else {
@@ -830,9 +831,10 @@ mod tests {
         let mut areas: Vec<f32> = a.blobs.iter().map(|b| b.area * (w * h) as f32).collect();
         areas.sort_by(|x, y| x.partial_cmp(y).unwrap());
         assert_eq!(areas.iter().map(|a| a.round() as u32).collect::<Vec<_>>(), vec![3, 4, 4, 6]);
-        // the 2x2 block at top-left: centroid (0.5,0.5) px -> normalized
+        // the 2x2 block at top-left: centroid (1.0,1.0) px -> normalized
         let tl = a.blobs.iter().find(|b| b.x < 0.2 && b.y < 0.2).unwrap();
-        assert!((tl.x - 0.5 / w as f32).abs() < 1e-5);
+        assert!((tl.x - 1.0 / w as f32).abs() < 1e-5);
+        assert!((tl.y - 1.0 / h as f32).abs() < 1e-5);
         assert!((tl.w - 2.0 / w as f32).abs() < 1e-5);
         assert!((tl.brightness - 1.0).abs() < 1e-5);
         assert!(a.motion_energy > 0.0);
@@ -856,8 +858,8 @@ mod tests {
     #[test]
     fn tracks_three_discs_moving_down_and_emits_three_exits() {
         let (w, h) = (160u32, 120u32);
-        let fps = 20.0;
-        let speed_px = 2.0; // px per frame downward
+        let fps = 20.0f32;
+        let speed_px = 2.0f32; // px per frame downward
         let mut tr = Tracker::new(TrackerConfig { line: Some(0.5), ..Default::default() });
         let mut entered = 0;
         let mut exits = Vec::new();
@@ -871,7 +873,7 @@ mod tests {
                 Disc { x: 130.0, y: y - 5.0, r: 4.0, brightness: 240 },
             ];
             let frame = testgen::render(w, h, 18, 10, &discs, f as u64 + 1);
-            let a = tr.process(&frame, w, h, f as f64 / fps);
+            let a = tr.process(&frame, w, h, f as f64 / fps as f64);
             entered += a.entered.len();
             crossings += a.crossings.len();
             exits.extend(a.exited.iter().copied());
@@ -880,7 +882,7 @@ mod tests {
         // Discs leave the bottom at y=120 around frame 65; push a few empty frames.
         for f in 60..75 {
             let frame = testgen::render(w, h, 18, 10, &[], f as u64 + 1);
-            let a = tr.process(&frame, w, h, f as f64 / fps);
+            let a = tr.process(&frame, w, h, f as f64 / fps as f64);
             exits.extend(a.exited.iter().copied());
             crossings += a.crossings.len();
         }
@@ -1006,5 +1008,35 @@ mod tests {
         let median = times[times.len() / 2];
         eprintln!("320x240 bright-mode frame: median {:?}, max {:?}", median, times[times.len() - 1]);
         assert!(median < std::time::Duration::from_millis(20), "median {median:?}");
+
+        // Motion mode on the same frames (background diff + update).
+        let mut tr = Tracker::new(TrackerConfig { mode: Mode::Motion, threshold: 0.25, ..Default::default() });
+        let mut times = Vec::new();
+        for f in 0..30 {
+            let discs: Vec<Disc> =
+                (0..12).map(|i| Disc { x: 20.0 + i as f32 * 25.0, y: (f * 3 + i * 17) as f32 % 240.0, r: 5.0, brightness: 230 }).collect();
+            let frame = testgen::render(w, h, 20, 30, &discs, f as u64 + 1);
+            let start = std::time::Instant::now();
+            tr.process_into(&frame, w, h, f as f64 / 15.0, &mut out);
+            times.push(start.elapsed());
+        }
+        times.sort();
+        let median = times[times.len() / 2];
+        eprintln!("320x240 motion-mode frame: median {:?}, max {:?}", median, times[times.len() - 1]);
+        assert!(median < std::time::Duration::from_millis(20), "median {median:?}");
+
+        // Decode + downscale of a 320x240 JPEG.
+        let frame = testgen::render(w, h, 20, 30, &[], 9);
+        let jpeg = testgen::encode_jpeg(&frame, w, h, 85).unwrap();
+        let mut dec = crate::decode::Decoder::new();
+        let mut gray = Vec::new();
+        let mut times = Vec::new();
+        for _ in 0..20 {
+            let start = std::time::Instant::now();
+            dec.decode_into(&jpeg, 2, &mut gray).unwrap();
+            times.push(start.elapsed());
+        }
+        times.sort();
+        eprintln!("320x240 jpeg decode + 2x downscale: median {:?}", times[times.len() / 2]);
     }
 }
