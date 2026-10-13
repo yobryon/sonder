@@ -1,1 +1,162 @@
-//! Embedded web UI: snapshot + audio over WebSocket, canvas visualizers
+//! Embedded web UI for Sonder: engine snapshots and rendered audio over
+//! WebSocket, plus a zero-build vanilla-JS frontend with canvas visualizers.
+//!
+//! ```text
+//! GET  /              embedded index.html
+//! GET  /app.js        embedded ES module (UI)
+//! GET  /app.css       embedded stylesheet
+//! GET  /worklet.js    embedded AudioWorklet processor
+//! GET  /api/snapshot  latest `EngineSnapshot` as JSON
+//! WS   /ws            server → snapshot JSON on every change (coalesced);
+//!                     client → `UserCommand` JSON (`{"cmd":"toggle_mute","layer":0}`)
+//! WS   /audio         server → one text header `{"sample_rate","channels","format":"s16le"}`
+//!                     then binary frames of interleaved i16 stereo PCM (~20 ms each)
+//! ```
+//!
+//! The server shuts down gracefully when the snapshot `watch` sender is
+//! dropped (i.e. the engine ended).
+
+#![forbid(unsafe_code)]
+
+mod assets;
+mod audio;
+mod ws;
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use axum::extract::State;
+use axum::response::IntoResponse;
+use axum::routing::get;
+use axum::{Json, Router};
+use sonder_core::{EngineSnapshot, UserCommand};
+use tokio::sync::{mpsc, watch};
+
+pub use audio::AudioSource;
+
+/// Everything the web server needs from the running engine.
+pub struct WebHandle {
+    /// Latest engine snapshot; the server pushes a JSON copy to `/ws` clients on every change.
+    pub snapshot: watch::Receiver<Arc<EngineSnapshot>>,
+    /// Commands from UI clients are forwarded here.
+    pub commands: mpsc::Sender<UserCommand>,
+    /// Rendered audio for `/audio`. `None` disables browser playback.
+    pub audio: Option<Box<dyn AudioSource>>,
+    /// Sample rate of the audio produced by [`WebHandle::audio`].
+    pub sample_rate: u32,
+}
+
+/// Shared server state.
+pub(crate) struct AppState {
+    pub snapshot: watch::Receiver<Arc<EngineSnapshot>>,
+    pub commands: mpsc::Sender<UserCommand>,
+    pub audio: Option<audio::AudioHub>,
+}
+
+/// Build the axum router (exposed for tests and embedding).
+fn router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/", get(assets::index))
+        .route("/index.html", get(assets::index))
+        .route("/app.js", get(assets::app_js))
+        .route("/app.css", get(assets::app_css))
+        .route("/worklet.js", get(assets::worklet_js))
+        .route("/api/snapshot", get(api_snapshot))
+        .route("/ws", get(ws::snapshot_ws))
+        .route("/audio", get(audio::audio_ws))
+        .with_state(state)
+}
+
+async fn api_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let snap = state.snapshot.borrow().clone();
+    Json(snap)
+}
+
+/// Serve the UI on `addr` until the engine ends (snapshot sender dropped).
+///
+/// Binds immediately; the bound address is logged at `info`. Returns when the
+/// snapshot watch channel closes and all in-flight connections have finished.
+pub async fn serve(addr: SocketAddr, handle: WebHandle) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    serve_on(listener, handle).await
+}
+
+/// Like [`serve`] but on an already-bound listener (lets callers pick port 0
+/// and learn the real address first).
+pub async fn serve_on(listener: tokio::net::TcpListener, handle: WebHandle) -> anyhow::Result<()> {
+    let local = listener.local_addr()?;
+    tracing::info!(%local, "sonder web ui listening");
+
+    let (audio, pump) = match handle.audio {
+        Some(src) => {
+            let (hub, pump) = audio::AudioHub::start(src, handle.sample_rate);
+            (Some(hub), Some(pump))
+        }
+        None => (None, None),
+    };
+
+    let mut shutdown_rx = handle.snapshot.clone();
+    let state = Arc::new(AppState { snapshot: handle.snapshot, commands: handle.commands, audio });
+    let app = router(state);
+
+    let shutdown = async move {
+        // `changed()` errors only when the sender is dropped: the engine is gone.
+        while shutdown_rx.changed().await.is_ok() {}
+        tracing::info!("engine ended; shutting down web ui");
+    };
+
+    let result = axum::serve(listener, app).with_graceful_shutdown(shutdown).await;
+    if let Some(pump) = pump {
+        pump.stop();
+    }
+    result.map_err(Into::into)
+}
+
+/// Best-effort "open this URL in the user's browser". Never fails; failures are
+/// logged at `debug`. Tries `xdg-open` (and `wslview` / `cmd.exe /c start` on
+/// WSL) on Linux, `open` on macOS, `cmd /c start` on Windows.
+pub fn open_browser(url: &str) {
+    use std::process::{Command, Stdio};
+
+    fn try_run(cmd: &str, args: &[&str]) -> bool {
+        Command::new(cmd)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+    }
+
+    let is_wsl = std::env::var_os("WSL_DISTRO_NAME").is_some()
+        || std::fs::read_to_string("/proc/version").map(|v| v.to_ascii_lowercase().contains("microsoft")).unwrap_or(false);
+
+    let ok = if cfg!(target_os = "macos") {
+        try_run("open", &[url])
+    } else if cfg!(target_os = "windows") {
+        try_run("cmd", &["/c", "start", "", url])
+    } else if is_wsl {
+        try_run("wslview", &[url]) || try_run("cmd.exe", &["/c", "start", "", url]) || try_run("xdg-open", &[url])
+    } else {
+        try_run("xdg-open", &[url])
+    };
+    if !ok {
+        tracing::debug!(url, "could not open a browser; open the URL manually");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_assets_are_wired() {
+        assert!(!assets::INDEX_HTML.is_empty());
+        assert!(!assets::APP_JS.is_empty());
+        assert!(!assets::APP_CSS.is_empty());
+        assert!(!assets::WORKLET_JS.is_empty());
+        assert!(assets::INDEX_HTML.contains("/app.js"));
+        assert!(assets::INDEX_HTML.contains("/app.css"));
+        assert!(assets::APP_JS.contains("/worklet.js"));
+    }
+}

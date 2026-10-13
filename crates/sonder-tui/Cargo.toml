@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 sonder-core = { workspace = true }
 ratatui = { workspace = true }
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["event-stream"] }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
