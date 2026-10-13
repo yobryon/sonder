@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sonder</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="app">
+  <header id="hdr">
+    <div class="brand">
+      <span class="logo">sonder</span>
+      <span id="scene" class="scene">—</span>
+      <span id="paused" class="paused" hidden>paused</span>
+    </div>
+
+    <div class="transport" title="bar.beat · tempo">
+      <span id="pos" class="mono big">1.1</span>
+      <span id="bpm" class="mono dim">— bpm</span>
+    </div>
+
+    <div class="harmony">
+      <div id="chord" class="chord">—</div>
+      <div class="hsub">
+        <span id="key" class="key dim">—</span>
+        <span id="degrees" class="degrees" title="pitch classes: lit = in scale, bright = in chord"></span>
+      </div>
+    </div>
+
+    <div class="mood" title="mood: energy / tension / brightness">
+      <div class="mrow"><label>energy</label><div class="mbar"><i id="m-energy"></i></div></div>
+      <div class="mrow"><label>tension</label><div class="mbar"><i id="m-tension"></i></div></div>
+      <div class="mrow"><label>bright</label><div class="mbar"><i id="m-brightness"></i></div></div>
+    </div>
+
+    <div class="listen">
+      <button id="listen" class="btn primary" title="start audio in the browser">▶ Listen</button>
+      <canvas id="vu" width="72" height="18" title="level L/R"></canvas>
+      <input id="vol" type="range" min="0" max="1" step="0.01" value="0.8" title="volume">
+      <span id="buf" class="buf mono dim" title="playback buffer / underruns">—</span>
+    </div>
+
+    <div class="conn" title="connection">
+      <span id="dot" class="dot connecting"></span>
+      <span id="conn-label" class="dim">connecting</span>
+      <button id="help" class="btn ghost" title="keyboard shortcuts (?)">?</button>
+    </div>
+  </header>
+
+  <div id="note" class="caption">…</div>
+
+  <main id="stage">
+    <canvas id="viz"></canvas>
+    <canvas id="overlay"></canvas>
+    <div id="vizlabel" class="vizlabel mono"></div>
+  </main>
+
+  <aside id="layers" class="panel">
+    <h2>Layers <span class="hint dim">1–9 mute · ⇧ solo</span></h2>
+    <div id="layer-list"></div>
+  </aside>
+
+  <aside id="sources" class="panel">
+    <h2>Sources</h2>
+    <div id="source-list"></div>
+  </aside>
+
+  <aside id="ticker" class="panel">
+    <h2>Events</h2>
+    <ol id="event-list" class="mono"></ol>
+  </aside>
+
+  <div id="legend" class="legend" hidden>
+    <h3>Keys</h3>
+    <table>
+      <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>mute layer</td></tr>
+      <tr><td><kbd>⇧</kbd>+<kbd>1</kbd>–<kbd>9</kbd></td><td>solo layer</td></tr>
+      <tr><td><kbd>space</kbd></td><td>pause / resume</td></tr>
+      <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>tempo −2 / +2</td></tr>
+      <tr><td><kbd>-</kbd> / <kbd>=</kbd></td><td>density −0.1 / +0.1</td></tr>
+      <tr><td><kbd>k</kbd> / <kbd>K</kbd></td><td>transpose +1 / −1</td></tr>
+      <tr><td><kbd>m</kbd> / <kbd>M</kbd></td><td>next / previous mode</td></tr>
+      <tr><td><kbd>c</kbd></td><td>next chord</td></tr>
+      <tr><td><kbd>?</kbd></td><td>toggle this legend</td></tr>
+    </table>
+  </div>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

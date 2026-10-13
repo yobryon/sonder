@@ -41,8 +41,8 @@ pub fn saturate(x: f32, drive: f32) -> f32 {
         return x;
     }
     let g = 1.0 + drive * 3.0;
-    let wet = fast_tanh(x * g) / g;
-    x + drive * (wet - x) * 1.0 + drive * wet * 0.5
+    let wet = fast_tanh(x * g) / g * (1.0 + 0.6 * drive);
+    lerp(x, wet, drive)
 }
 
 #[inline]

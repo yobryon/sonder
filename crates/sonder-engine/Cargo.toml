@@ -8,18 +8,22 @@ license.workspace = true
 [dependencies]
 sonder-core = { workspace = true }
 sonder-expr = { workspace = true }
+sonder-theory = { workspace = true }
 sonder-compose = { workspace = true }
 sonder-dsp = { workspace = true }
 sonder-sources = { workspace = true }
 sonder-vision = { workspace = true }
-sonder-audio = { workspace = true }
-tokio = { workspace = true }
+sonder-audio = { workspace = true, default-features = false }
+tokio = { workspace = true, features = ["test-util"] }
 serde_json = { workspace = true }
 toml = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
+reqwest = { workspace = true }
+hound = { workspace = true }
+rand = { workspace = true }
 
 [features]
 default = ["native-audio"]

@@ -3,3 +3,4 @@
 *.wav
 !assets/**/*.wav
 /.sonder
+/sonder.log

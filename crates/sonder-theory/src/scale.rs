@@ -31,9 +31,30 @@ impl Scale {
         self.mode.steps.is_empty()
     }
 
-    /// Does this key conventionally spell with flats (F, Bb, Eb, Ab, Db, Gb)?
+    /// Does this scale conventionally spell with flats? Each black key in the
+    /// scale votes: if the natural below it is in the scale but the one above
+    /// is not, it reads as a flat (D present, E absent → Eb), and vice versa.
+    /// Ties fall back to the tonic's usual spelling (F, Bb, Eb, Ab, Db, Gb → flats).
     pub fn prefers_flats(&self) -> bool {
-        matches!(self.tonic, 5 | 10 | 3 | 8 | 1)
+        let pcs = self.pitch_classes();
+        let has = |pc: i32| pcs.contains(&(pc.rem_euclid(12) as u8));
+        let mut flats = 0;
+        let mut sharps = 0;
+        for black in [1, 3, 6, 8, 10] {
+            if !has(black) {
+                continue;
+            }
+            match (has(black - 1), has(black + 1)) {
+                (true, false) => flats += 1,
+                (false, true) => sharps += 1,
+                _ => {}
+            }
+        }
+        if flats != sharps {
+            flats > sharps
+        } else {
+            matches!(self.tonic, 5 | 10 | 3 | 8 | 1)
+        }
     }
 
     /// Pitch classes ascending from the tonic (the tonic comes first).

@@ -1,1 +1,36 @@
-//! Wires sources -> features -> composer -> synth -> output; publishes snapshots
+//! The engine: wires sources → features → composer → synth → output, and publishes
+//! [`EngineSnapshot`]s for UIs.
+//!
+//! Two modes share one control loop ([`control::ControlLoop`]):
+//! - **live** ([`start`]): sources run on the caller's tokio runtime, the control loop
+//!   runs on its own thread at 50 Hz against a wall clock, audio runs on the backend's
+//!   thread.
+//! - **offline** ([`render_to_wav`]): everything runs in lockstep on one thread inside a
+//!   paused-time tokio runtime driving a [`VirtualClock`], so a given scene + seed renders
+//!   to an identical WAV every time (for sources that don't touch the network).
+
+#![forbid(unsafe_code)]
+
+pub mod control;
+pub mod instruments;
+pub mod live;
+pub mod render;
+pub mod scenes;
+pub mod validate;
+
+pub use live::{start, AudioBackendChoice, EngineHandle, EngineOptions, WebAudio};
+pub use render::{render_to_wav, RenderStats};
+pub use scenes::{builtin_scenes, load_scene, parse_scene};
+pub use validate::validate;
+
+use sonder_core::EngineSnapshot;
+use std::sync::Arc;
+
+/// Control-loop tick period. 50 Hz.
+pub const TICK_SECONDS: f64 = 0.02;
+
+/// Snapshot publish cadence, in ticks (every 2nd tick = 25 Hz).
+pub const SNAPSHOT_EVERY_TICKS: u32 = 2;
+
+/// Convenience alias.
+pub type SnapshotRx = tokio::sync::watch::Receiver<Arc<EngineSnapshot>>;

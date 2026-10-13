@@ -210,6 +210,33 @@ impl Emitter {
         self.send(s).await;
     }
 
+    /// Emit a reading stamped with an explicit simulation time.
+    pub async fn reading_at(&mut self, at: Seconds, values: impl IntoIterator<Item = (impl Into<String>, f64)>) {
+        let values: BTreeMap<String, f64> =
+            values.into_iter().filter(|(_, v)| v.is_finite()).map(|(k, v)| (k.into(), v)).collect();
+        if values.is_empty() {
+            return;
+        }
+        let s = Sample { source: self.ctx.id.clone(), at, datum: Datum::Reading { values } };
+        self.send(s).await;
+    }
+
+    /// Emit an event stamped with an explicit simulation time.
+    pub async fn event_at(&mut self, at: Seconds, name: &str, intensity: f64, attrs: BTreeMap<String, Value>) {
+        let s = Sample {
+            source: self.ctx.id.clone(),
+            at,
+            datum: Datum::Event { name: name.to_string(), intensity: sanitize(intensity), attrs },
+        };
+        self.send(s).await;
+    }
+
+    /// Emit a viz payload stamped with an explicit simulation time.
+    pub async fn viz_at(&mut self, at: Seconds, payload: Json) {
+        let s = Sample::viz(&self.ctx.id, at, payload);
+        self.send(s).await;
+    }
+
     /// Emit a raw sample.
     pub async fn send(&mut self, sample: Sample) {
         if self.closed {

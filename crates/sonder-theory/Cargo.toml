@@ -9,3 +9,6 @@ license.workspace = true
 sonder-core = { workspace = true }
 serde = { workspace = true }
 rand = { workspace = true }
+
+[dev-dependencies]
+rand_chacha = { workspace = true }

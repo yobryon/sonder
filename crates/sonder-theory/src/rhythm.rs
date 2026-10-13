@@ -8,14 +8,62 @@ pub fn euclidean(steps: usize, pulses: usize, rotation: usize) -> Vec<bool> {
     if steps == 0 {
         return Vec::new();
     }
-    let pulses = pulses.min(steps);
-    // Bresenham-style bucket fill is equivalent to Bjorklund's algorithm up to
-    // rotation, and always lands the first pulse on step 0.
-    let raw: Vec<bool> = (0..steps).map(|i| (i * pulses) % steps < pulses).collect();
+    let raw = if pulses == 0 {
+        vec![false; steps]
+    } else if pulses >= steps {
+        vec![true; steps]
+    } else {
+        bjorklund(steps, pulses)
+    };
     let r = rotation % steps;
     let mut out = vec![false; steps];
     for (i, &v) in raw.iter().enumerate() {
         out[(i + r) % steps] = v;
+    }
+    out
+}
+
+/// Bjorklund's algorithm proper (the canonical "x.xx.xx." shapes), with the
+/// result rotated so the first pulse lands on step 0.
+fn bjorklund(steps: usize, pulses: usize) -> Vec<bool> {
+    let mut counts: Vec<usize> = Vec::new();
+    let mut remainders: Vec<usize> = vec![pulses];
+    let mut divisor = steps - pulses;
+    let mut level = 0usize;
+    loop {
+        counts.push(divisor / remainders[level]);
+        remainders.push(divisor % remainders[level]);
+        divisor = remainders[level];
+        level += 1;
+        if remainders[level] <= 1 {
+            break;
+        }
+    }
+    counts.push(divisor);
+
+    fn build(level: i32, counts: &[usize], remainders: &[usize], out: &mut Vec<bool>) {
+        match level {
+            -1 => out.push(false),
+            -2 => out.push(true),
+            l => {
+                let l = l as usize;
+                for _ in 0..counts[l] {
+                    build(level - 1, counts, remainders, out);
+                }
+                if remainders[l] != 0 {
+                    build(level - 2, counts, remainders, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(steps);
+    build(level as i32, &counts, &remainders, &mut out);
+    out.truncate(steps);
+    while out.len() < steps {
+        out.push(false);
+    }
+    if let Some(first) = out.iter().position(|&b| b) {
+        out.rotate_left(first);
     }
     out
 }

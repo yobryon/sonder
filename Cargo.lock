@@ -553,6 +553,7 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
+ "futures-core",
  "mio",
  "parking_lot",
  "rustix",
@@ -2921,6 +2922,7 @@ name = "sonder-dsp"
 version = "0.1.0"
 dependencies = [
  "rustfft",
+ "serde_json",
  "sonder-core",
 ]
 
@@ -2929,7 +2931,10 @@ name = "sonder-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "hound",
  "parking_lot",
+ "rand 0.10.3",
+ "reqwest",
  "serde_json",
  "sonder-audio",
  "sonder-compose",
@@ -2937,6 +2942,7 @@ dependencies = [
  "sonder-dsp",
  "sonder-expr",
  "sonder-sources",
+ "sonder-theory",
  "sonder-vision",
  "thiserror 2.0.21",
  "tokio",
@@ -2963,6 +2969,7 @@ dependencies = [
  "chrono",
  "futures",
  "rand 0.10.3",
+ "rand_chacha 0.10.0",
  "reqwest",
  "serde",
  "serde_json",
@@ -2980,6 +2987,7 @@ name = "sonder-theory"
 version = "0.1.0"
 dependencies = [
  "rand 0.10.3",
+ "rand_chacha 0.10.0",
  "serde",
  "sonder-core",
 ]
@@ -2990,7 +2998,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossterm",
+ "futures",
  "ratatui",
+ "serde_json",
  "sonder-core",
  "tokio",
 ]
@@ -3002,11 +3012,13 @@ dependencies = [
  "bytes",
  "futures",
  "image",
+ "reqwest",
  "serde_json",
  "sonder-core",
  "sonder-sources",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -3018,9 +3030,12 @@ dependencies = [
  "axum",
  "bytes",
  "futures",
+ "reqwest",
+ "serde",
  "serde_json",
  "sonder-core",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "tracing",
 ]
 

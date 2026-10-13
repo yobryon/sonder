@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 sonder-core = { workspace = true }
-sonder-engine = { workspace = true }
+sonder-engine = { workspace = true, default-features = false }
 sonder-web = { workspace = true }
 sonder-tui = { workspace = true }
 sonder-sources = { workspace = true }
