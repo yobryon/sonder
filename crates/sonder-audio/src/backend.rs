@@ -210,7 +210,17 @@ impl Drop for AudioStream {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(t) = self.thread.take() {
-            let _ = t.join();
+            // A backend blocked in a write (e.g. PCM on a stalled pipe) can't observe
+            // `stop`; don't let that pin the process — give it a moment, then detach.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+            while !t.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if t.is_finished() {
+                let _ = t.join();
+            } else {
+                tracing::warn!("audio backend `{}` did not stop in time; detaching", self.name);
+            }
         }
     }
 }

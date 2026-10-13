@@ -302,7 +302,21 @@ async fn play(args: PlayArgs, tui: bool) -> anyhow::Result<()> {
     let mut handle = handle;
     if tui {
         let opts = sonder_tui::TuiOptions { web_url: web_url.clone(), ..Default::default() };
-        let res = sonder_tui::run(handle.snapshot.clone(), handle.commands.clone(), opts).await;
+        let tui_run = sonder_tui::run(handle.snapshot.clone(), handle.commands.clone(), opts);
+        tokio::pin!(tui_run);
+        // The engine can end on its own (quit command, control-thread failure); don't leave
+        // the TUI showing a frozen snapshot when it does.
+        let res = tokio::select! {
+            r = &mut tui_run => r,
+            r = &mut handle.done => {
+                handle.shutdown();
+                match r {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(_) => Err(anyhow::anyhow!("engine stopped unexpectedly")),
+                }
+            }
+        };
         handle.shutdown();
         // Let the engine finish (MIDI note-offs, audio thread join) before the process exits.
         let _ = tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle.done).await;
