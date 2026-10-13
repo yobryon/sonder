@@ -10,7 +10,6 @@ pub struct MasterChain {
     saturation: f32,
     ceiling: f32,
     env: f32,
-    attack_coef: f32,
     release_coef: f32,
 }
 
@@ -21,7 +20,6 @@ impl MasterChain {
             saturation: 0.1,
             ceiling: db_to_lin(-1.0),
             env: 0.0,
-            attack_coef: onepole_coef(0.0002, sample_rate),
             release_coef: onepole_coef(0.15, sample_rate),
         };
         m.configure(&MasterSettings::default());
@@ -47,7 +45,8 @@ impl MasterChain {
             // Peak follower: instant attack toward the current peak, slow release.
             let peak = l.abs().max(r.abs());
             if peak > self.env {
-                self.env += self.attack_coef.max(1.0) * (peak - self.env);
+                // Instant attack: no lookahead, so the gain must react on this very sample.
+                self.env = peak;
             } else {
                 self.env += self.release_coef * (peak - self.env);
             }

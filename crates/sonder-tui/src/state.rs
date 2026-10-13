@@ -29,7 +29,10 @@ pub struct History {
 impl History {
     /// A history that keeps the last `cap` values.
     pub fn new(cap: usize) -> Self {
-        Self { buf: VecDeque::with_capacity(cap.max(1)), cap: cap.max(1) }
+        Self {
+            buf: VecDeque::with_capacity(cap.max(1)),
+            cap: cap.max(1),
+        }
     }
 
     /// Push a value, evicting the oldest if full. Non-finite values become 0.
@@ -63,7 +66,10 @@ impl History {
 
     /// The last `n` values as sparkline units (`0..=100`), oldest first.
     pub fn tail_u64(&self, n: usize) -> Vec<u64> {
-        self.tail(n).into_iter().map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as u64).collect()
+        self.tail(n)
+            .into_iter()
+            .map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as u64)
+            .collect()
     }
 }
 
@@ -151,7 +157,8 @@ impl UiState {
         self.now = snap.time;
 
         // Signal histories.
-        self.signal_hist.resize_with(snap.layers.len(), || History::new(HISTORY_LEN));
+        self.signal_hist
+            .resize_with(snap.layers.len(), || History::new(HISTORY_LEN));
         self.signal_name.resize_with(snap.layers.len(), String::new);
         for (i, layer) in snap.layers.iter().enumerate() {
             let (name, value) = layer
@@ -183,7 +190,11 @@ impl UiState {
         while self.events.len() > EVENT_BUFFER {
             self.events.pop_front();
         }
-        while self.map_events.front().is_some_and(|m| self.now - m.at > MAP_FADE_SECONDS) {
+        while self
+            .map_events
+            .front()
+            .is_some_and(|m| self.now - m.at > MAP_FADE_SECONDS)
+        {
             self.map_events.pop_front();
         }
         while self.map_events.len() > EVENT_BUFFER {
@@ -198,15 +209,20 @@ impl UiState {
         }
         self.note_cursor = max_at;
         for buffered in self.notes.iter_mut().filter(|n| n.active) {
-            let fresh =
-                snap.notes.iter().find(|n| n.layer == buffered.layer && n.at == buffered.at && n.midi == buffered.midi);
+            let fresh = snap.notes.iter().find(|n| {
+                n.layer == buffered.layer && n.at == buffered.at && n.midi == buffered.midi
+            });
             match fresh {
                 Some(f) => buffered.active = f.active,
                 None => buffered.active = false,
             }
         }
         let horizon = self.now - ROLL_SECONDS - 1.0;
-        while self.notes.front().is_some_and(|n| !n.active && n.at < horizon) {
+        while self
+            .notes
+            .front()
+            .is_some_and(|n| !n.active && n.at < horizon)
+        {
             self.notes.pop_front();
         }
         while self.notes.len() > NOTE_BUFFER {
@@ -216,13 +232,17 @@ impl UiState {
         // Car trails for the freeway viz.
         let cars = freeway_cars(snap);
         if self.trails.len() < cars.len() {
-            self.trails.resize_with(cars.len(), || VecDeque::with_capacity(TRAIL_LEN));
+            self.trails
+                .resize_with(cars.len(), || VecDeque::with_capacity(TRAIL_LEN));
         }
         for (i, trail) in self.trails.iter_mut().enumerate() {
             match cars.get(i) {
                 Some(&(x, y)) => {
                     // A jump of more than half the frame means the slot was reused.
-                    if trail.back().is_some_and(|&(px, py)| (px - x).abs() > 0.5 || (py - y).abs() > 0.5) {
+                    if trail
+                        .back()
+                        .is_some_and(|&(px, py)| (px - x).abs() > 0.5 || (py - y).abs() > 0.5)
+                    {
                         trail.clear();
                     }
                     if trail.len() == TRAIL_LEN {
@@ -234,7 +254,11 @@ impl UiState {
             }
         }
 
-        if self.status.as_ref().is_some_and(|(_, until)| self.now > *until) {
+        if self
+            .status
+            .as_ref()
+            .is_some_and(|(_, until)| self.now > *until)
+        {
             self.status = None;
         }
     }
@@ -296,7 +320,13 @@ pub fn freeway_lanes(viz: &BTreeMap<String, serde_json::Value>) -> usize {
 fn map_event(ev: &EventSnapshot) -> Option<MapEvent> {
     let lat01 = ev.attrs.get("lat01")?.as_f64()?;
     let lon01 = ev.attrs.get("lon01")?.as_f64()?;
-    Some(MapEvent { at: ev.at, lat01, lon01, intensity: ev.intensity, layer: ev.layer.0 })
+    Some(MapEvent {
+        at: ev.at,
+        lat01,
+        lon01,
+        intensity: ev.intensity,
+        layer: ev.layer.0,
+    })
 }
 
 #[cfg(test)]
@@ -322,17 +352,34 @@ mod tests {
     }
 
     fn ev(at: f64, name: &str) -> EventSnapshot {
-        EventSnapshot { at, layer: LayerId(0), name: name.into(), intensity: 0.5, attrs: BTreeMap::new() }
+        EventSnapshot {
+            at,
+            layer: LayerId(0),
+            name: name.into(),
+            intensity: 0.5,
+            attrs: BTreeMap::new(),
+        }
     }
 
     fn note(at: f64, midi: f32, active: bool) -> NoteSnapshot {
-        NoteSnapshot { at, layer: LayerId(1), midi, velocity: 0.8, pan: 0.5, duration: Some(0.5), active }
+        NoteSnapshot {
+            at,
+            layer: LayerId(1),
+            midi,
+            velocity: 0.8,
+            pan: 0.5,
+            duration: Some(0.5),
+            active,
+        }
     }
 
     #[test]
     fn events_and_notes_are_deduped_by_at() {
         let mut st = UiState::new();
-        let mut snap = EngineSnapshot { time: 1.0, ..Default::default() };
+        let mut snap = EngineSnapshot {
+            time: 1.0,
+            ..Default::default()
+        };
         snap.events = vec![ev(0.2, "a"), ev(0.5, "b")];
         snap.notes = vec![note(0.3, 60.0, true)];
         st.ingest(&snap);
@@ -349,7 +396,13 @@ mod tests {
         snap.events = vec![ev(0.5, "b"), ev(0.9, "c")];
         snap.notes = vec![note(0.3, 60.0, false), note(1.2, 64.0, true)];
         st.ingest(&snap);
-        assert_eq!(st.events.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        assert_eq!(
+            st.events
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
         assert_eq!(st.notes.len(), 2);
         assert!(!st.notes[0].active, "buffered note should pick up release");
         assert!(st.notes[1].active);
@@ -364,7 +417,10 @@ mod tests {
     #[test]
     fn old_notes_are_dropped_and_restart_resets() {
         let mut st = UiState::new();
-        let mut snap = EngineSnapshot { time: 1.0, ..Default::default() };
+        let mut snap = EngineSnapshot {
+            time: 1.0,
+            ..Default::default()
+        };
         snap.notes = vec![note(0.5, 60.0, false)];
         st.ingest(&snap);
         snap.time = 1.0 + ROLL_SECONDS + 5.0;
@@ -382,7 +438,10 @@ mod tests {
     #[test]
     fn map_events_fade_out() {
         let mut st = UiState::new();
-        let mut snap = EngineSnapshot { time: 1.0, ..Default::default() };
+        let mut snap = EngineSnapshot {
+            time: 1.0,
+            ..Default::default()
+        };
         let mut e = ev(0.5, "quake");
         e.attrs.insert("lat01".into(), Value::Num(0.4));
         e.attrs.insert("lon01".into(), Value::Num(0.6));
@@ -398,7 +457,10 @@ mod tests {
     fn signal_histories_track_layers_and_selection_clamps() {
         let mut st = UiState::new();
         let mut snap = EngineSnapshot::default();
-        let mut l = LayerSnapshot { name: "a".into(), ..Default::default() };
+        let mut l = LayerSnapshot {
+            name: "a".into(),
+            ..Default::default()
+        };
         l.signals.insert("density".into(), 0.7);
         snap.layers = vec![l.clone(), LayerSnapshot::default()];
         st.selected = 5;
@@ -433,13 +495,17 @@ mod tests {
         assert_eq!(st.trails[0].len(), TRAIL_LEN);
         assert_eq!(freeway_lanes(&snap.viz), 3);
         // Slot reused for a car at the far end: trail resets.
-        snap.viz.insert("traffic".into(), serde_json::json!({ "cars": [{ "x": 0.2, "y": 0.0, "lane": 2 }] }));
+        snap.viz.insert(
+            "traffic".into(),
+            serde_json::json!({ "cars": [{ "x": 0.9, "y": 0.0, "lane": 2 }] }),
+        );
         snap.time += 1.0;
         st.ingest(&snap);
         assert_eq!(st.trails[0].len(), 1);
         assert_eq!(freeway_lanes(&snap.viz), 3);
         // Car gone: trail cleared.
-        snap.viz.insert("traffic".into(), serde_json::json!({ "cars": [] }));
+        snap.viz
+            .insert("traffic".into(), serde_json::json!({ "cars": [] }));
         st.ingest(&snap);
         assert!(st.trails[0].is_empty());
     }

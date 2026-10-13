@@ -16,7 +16,9 @@ pub fn parse_grid(s: &str) -> Result<Option<f64>, ExprError> {
     if t.is_empty() || t == "off" || t == "none" || t == "0" {
         return Ok(None);
     }
-    let bad = || ExprError::new(format!("bad grid `{raw}`: expected `off`, `1/4`, `1/8`, `1/16`, `1/8t`, `1/8.` or a number of beats"));
+    let bad = || {
+        ExprError::new(format!("bad grid `{raw}`: expected `off`, `1/4`, `1/8`, `1/16`, `1/8t`, `1/8.` or a number of beats"))
+    };
     let (body, mult) = if let Some(b) = t.strip_suffix('t') {
         (b, 2.0 / 3.0)
     } else if let Some(b) = t.strip_suffix('.') {
@@ -72,6 +74,9 @@ mod tests {
         for s in ["x", "1/0", "-1", "1/", "/4", "1/8x", "nan"] {
             assert!(parse_grid(s).is_err(), "{s} should fail");
         }
-        assert!(parse_grid("abc").unwrap_err().to_string().contains("bad grid `abc`"));
+        assert!(parse_grid("abc")
+            .unwrap_err()
+            .to_string()
+            .contains("bad grid `abc`"));
     }
 }

@@ -15,7 +15,7 @@
 //! goes, then the bottom pane.
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::canvas::{Canvas, Context, Line as CanvasLine, Points, Rectangle};
@@ -26,8 +26,8 @@ use ratatui::Frame;
 use sonder_core::EngineSnapshot;
 
 use crate::format::{
-    dim_color, fmt_bar_beat, fmt_num, fmt_time, fmt_time_tenths, layer_color, meter_color, meter_glyphs, mini_gauge,
-    resample_max, source_state_style, summarize_attrs, truncate,
+    dim_color, fmt_bar_beat, fmt_num, fmt_time, fmt_time_tenths, layer_color, meter_color,
+    meter_glyphs, mini_gauge, resample_max, source_state_style, summarize_attrs, truncate,
 };
 use crate::state::{freeway_lanes, UiState, HISTORY_LEN, MAP_FADE_SECONDS, ROLL_SECONDS};
 
@@ -47,11 +47,21 @@ fn block(title: &str) -> Block<'_> {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(format!(" {title} "), Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        ))
 }
 
 /// Draw one frame.
-pub fn draw(frame: &mut Frame<'_>, snap: &EngineSnapshot, state: &mut UiState, web_url: Option<&str>) {
+pub fn draw(
+    frame: &mut Frame<'_>,
+    snap: &EngineSnapshot,
+    state: &mut UiState,
+    web_url: Option<&str>,
+) {
     let area = frame.area();
     if area.height < 4 || area.width < 20 {
         frame.render_widget(Paragraph::new("terminal too small"), area);
@@ -76,7 +86,8 @@ pub fn draw(frame: &mut Frame<'_>, snap: &EngineSnapshot, state: &mut UiState, w
     draw_top(frame, top, snap);
 
     if wide {
-        let [left, right] = Layout::horizontal([Constraint::Percentage(45), Constraint::Fill(1)]).areas(main);
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(45), Constraint::Fill(1)]).areas(main);
         draw_layers(frame, left, snap, state);
         let mut rc = vec![Constraint::Fill(3), Constraint::Fill(2)];
         if show_spectrum {
@@ -93,7 +104,8 @@ pub fn draw(frame: &mut Frame<'_>, snap: &EngineSnapshot, state: &mut UiState, w
     }
 
     if let Some(bottom) = bottom {
-        let [ev, src] = Layout::horizontal([Constraint::Percentage(55), Constraint::Fill(1)]).areas(bottom);
+        let [ev, src] =
+            Layout::horizontal([Constraint::Percentage(55), Constraint::Fill(1)]).areas(bottom);
         draw_events(frame, ev, snap, state);
         draw_sources(frame, src, snap);
     }
@@ -106,51 +118,107 @@ pub fn draw(frame: &mut Frame<'_>, snap: &EngineSnapshot, state: &mut UiState, w
 }
 
 fn draw_top(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
+    let wide = area.width >= 100;
     let t = &snap.transport;
     let h = &snap.harmony;
     let sep = Span::styled(" · ", Style::default().fg(Color::DarkGray));
     let mut spans = vec![
         Span::styled(
-            format!(" {} ", if snap.scene_name.is_empty() { "sonder" } else { &snap.scene_name }),
-            Style::default().fg(Color::Black).bg(Color::Indexed(81)).add_modifier(Modifier::BOLD),
+            format!(
+                " {} ",
+                if snap.scene_name.is_empty() {
+                    "sonder"
+                } else {
+                    &snap.scene_name
+                }
+            ),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Indexed(81))
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
+    ];
+    if snap.paused {
+        spans.push(Span::styled(
+            " PAUSED ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    spans.extend([
         Span::styled(fmt_time(snap.time), Style::default().fg(Color::Gray)),
         sep.clone(),
-        Span::styled(fmt_bar_beat(t.bar, t.beat), Style::default().fg(Color::White)),
+        Span::styled(
+            fmt_bar_beat(t.bar, t.beat),
+            Style::default().fg(Color::White),
+        ),
         sep.clone(),
         Span::raw(format!("{} bpm", fmt_num(t.bpm))),
         sep.clone(),
-        Span::styled(format!("{} {}", h.key_name, h.mode), Style::default().fg(Color::Indexed(220))),
+        Span::styled(
+            format!("{} {}", h.key_name, h.mode),
+            Style::default().fg(Color::Indexed(220)),
+        ),
         sep.clone(),
-        Span::styled(h.chord_name.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        sep.clone(),
-        Span::styled("E", Style::default().fg(Color::DarkGray)),
-        Span::styled(mini_gauge(snap.mood.energy, 5), Style::default().fg(Color::Indexed(209))),
-        Span::raw(" "),
-        Span::styled("T", Style::default().fg(Color::DarkGray)),
-        Span::styled(mini_gauge(snap.mood.tension, 5), Style::default().fg(Color::Indexed(171))),
-        Span::raw(" "),
-        Span::styled("B", Style::default().fg(Color::DarkGray)),
-        Span::styled(mini_gauge(snap.mood.brightness, 5), Style::default().fg(Color::Indexed(220))),
-    ];
-    if snap.paused {
+        Span::styled(
+            h.chord_name.clone(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    if wide {
+        spans.extend([
+            sep.clone(),
+            Span::styled("E", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                mini_gauge(snap.mood.energy, 5),
+                Style::default().fg(Color::Indexed(209)),
+            ),
+            Span::raw(" "),
+            Span::styled("T", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                mini_gauge(snap.mood.tension, 5),
+                Style::default().fg(Color::Indexed(171)),
+            ),
+            Span::raw(" "),
+            Span::styled("B", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                mini_gauge(snap.mood.brightness, 5),
+                Style::default().fg(Color::Indexed(220)),
+            ),
+        ]);
         spans.push(sep.clone());
-        spans.push(Span::styled(" PAUSED ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(
+            if snap.audio_backend.is_empty() {
+                "no audio".to_string()
+            } else {
+                snap.audio_backend.clone()
+            },
+            Style::default().fg(Color::DarkGray),
+        ));
     }
-    spans.push(sep.clone());
-    spans.push(Span::styled(
-        if snap.audio_backend.is_empty() { "no audio".to_string() } else { snap.audio_backend.clone() },
-        Style::default().fg(Color::DarkGray),
-    ));
     if snap.underruns > 0 {
         spans.push(sep);
-        spans.push(Span::styled(format!("{} underruns", snap.underruns), Style::default().fg(Color::Red)));
+        spans.push(Span::styled(
+            format!("{} underruns", snap.underruns),
+            Style::default().fg(Color::Red),
+        ));
     }
-    let note = Line::from(Span::styled(format!(" {}", snap.conductor_note), Style::default().fg(Color::DarkGray)));
+    let note = Line::from(Span::styled(
+        format!(" {}", snap.conductor_note),
+        Style::default().fg(Color::DarkGray),
+    ));
     let text = Text::from(vec![Line::from(spans), note]);
-    let widget = Paragraph::new(text)
-        .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::DarkGray)));
+    let widget = Paragraph::new(text).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     frame.render_widget(widget, area);
 }
 
@@ -171,13 +239,25 @@ fn draw_layers(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot, state: 
         }
         h
     };
-    let header = Row::new(header_cells.into_iter().map(|c| Cell::from(c).style(Style::default().fg(Color::DarkGray))));
+    let header = Row::new(
+        header_cells
+            .into_iter()
+            .map(|c| Cell::from(c).style(Style::default().fg(Color::DarkGray))),
+    );
 
-    let mut widths = vec![Constraint::Length(3), Constraint::Fill(2), Constraint::Length(7)];
+    let mut widths = vec![
+        Constraint::Length(3),
+        Constraint::Fill(2),
+        Constraint::Length(7),
+    ];
     if show_instr {
         widths.push(Constraint::Fill(2));
     }
-    widths.extend([Constraint::Length(METER_CELLS as u16), Constraint::Length(3), Constraint::Length(2)]);
+    widths.extend([
+        Constraint::Length(METER_CELLS as u16),
+        Constraint::Length(3),
+        Constraint::Length(2),
+    ]);
     if show_spark {
         widths.push(Constraint::Length(SPARK_W));
     }
@@ -206,22 +286,41 @@ fn draw_layers(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot, state: 
                 },
             ]);
             let name_style = if l.muted {
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::CROSSED_OUT)
             } else {
                 Style::default().fg(color).add_modifier(Modifier::BOLD)
             };
             let mut cells = vec![
-                Cell::from(Span::styled(if i < 9 { format!("[{}]", i + 1) } else { "   ".into() }, Style::default().fg(Color::DarkGray))),
+                Cell::from(Span::styled(
+                    if i < 9 {
+                        format!("[{}]", i + 1)
+                    } else {
+                        "   ".into()
+                    },
+                    Style::default().fg(Color::DarkGray),
+                )),
                 Cell::from(Span::styled(l.name.clone(), name_style)),
-                Cell::from(Span::styled(l.role.name(), Style::default().fg(Color::Gray))),
+                Cell::from(Span::styled(
+                    l.role.name(),
+                    Style::default().fg(Color::Gray),
+                )),
             ];
             if show_instr {
-                cells.push(Cell::from(Span::styled(l.instrument.clone(), Style::default().fg(Color::DarkGray))));
+                cells.push(Cell::from(Span::styled(
+                    l.instrument.clone(),
+                    Style::default().fg(Color::DarkGray),
+                )));
             }
             cells.push(Cell::from(meter));
             cells.push(Cell::from(Span::styled(
                 format!("{:>2}", l.active_notes.min(99)),
-                Style::default().fg(if l.active_notes > 0 { Color::White } else { Color::DarkGray }),
+                Style::default().fg(if l.active_notes > 0 {
+                    Color::White
+                } else {
+                    Color::DarkGray
+                }),
             )));
             cells.push(Cell::from(flags));
             if show_spark {
@@ -231,7 +330,11 @@ fn draw_layers(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot, state: 
         })
         .collect();
 
-    let mut ts = TableState::default().with_selected(if snap.layers.is_empty() { None } else { Some(state.selected) });
+    let mut ts = TableState::default().with_selected(if snap.layers.is_empty() {
+        None
+    } else {
+        Some(state.selected)
+    });
     let table = Table::new(rows, widths)
         .header(header)
         .block(blk)
@@ -246,21 +349,35 @@ fn draw_layers(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot, state: 
         let offset = ts.offset();
         let spark_x = inner.right().saturating_sub(SPARK_W);
         for (row_i, layer_i) in (offset..snap.layers.len()).take(visible).enumerate() {
-            let Some(hist) = state.signal_hist.get(layer_i) else { continue };
+            let Some(hist) = state.signal_hist.get(layer_i) else {
+                continue;
+            };
             let y = first_row_y + row_i as u16;
             if y >= inner.bottom() {
                 break;
             }
-            let rect = Rect { x: spark_x, y, width: SPARK_W, height: 1 };
+            let rect = Rect {
+                x: spark_x,
+                y,
+                width: SPARK_W,
+                height: 1,
+            };
             let data = hist.tail_u64(SPARK_W as usize);
-            let spark = Sparkline::default().data(data).max(100).style(Style::default().fg(layer_color(layer_i)));
+            let spark = Sparkline::default()
+                .data(data)
+                .max(100)
+                .style(Style::default().fg(layer_color(layer_i)));
             frame.render_widget(spark, rect);
         }
     }
 }
 
 fn draw_stage(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot, state: &UiState) {
-    let kind = if snap.viz_kind.is_empty() { "generic" } else { snap.viz_kind.as_str() };
+    let kind = if snap.viz_kind.is_empty() {
+        "generic"
+    } else {
+        snap.viz_kind.as_str()
+    };
     let has_cars = snap.viz.values().any(|p| p.get("cars").is_some());
     let has_blobs = snap.viz.values().any(|p| p.get("blobs").is_some());
     let kind = match kind {
@@ -306,7 +423,8 @@ fn paint_freeway(ctx: &mut Context<'_>, snap: &EngineSnapshot, state: &UiState) 
         for (i, &(x, y)) in trail.iter().enumerate() {
             let age = n - 1 - i; // 0 = newest
             if age > 0 {
-                by_age[age.min(by_age.len() - 1)].push((x, 1.0 - y));
+                let slot = age.min(by_age.len() - 1);
+                by_age[slot].push((x, 1.0 - y));
             }
         }
     }
@@ -322,12 +440,21 @@ fn paint_freeway(ctx: &mut Context<'_>, snap: &EngineSnapshot, state: &UiState) 
     ];
     for (age, pts) in by_age.iter().enumerate().rev() {
         if !pts.is_empty() {
-            ctx.draw(&Points { coords: pts, color: TRAIL_COLORS[age.min(7)] });
+            ctx.draw(&Points {
+                coords: pts,
+                color: TRAIL_COLORS[age.min(7)],
+            });
         }
     }
     ctx.layer();
-    let cars: Vec<(f64, f64)> = crate::state::freeway_cars(snap).into_iter().map(|(x, y)| (x, 1.0 - y)).collect();
-    ctx.draw(&Points { coords: &cars, color: Color::Indexed(231) });
+    let cars: Vec<(f64, f64)> = crate::state::freeway_cars(snap)
+        .into_iter()
+        .map(|(x, y)| (x, 1.0 - y))
+        .collect();
+    ctx.draw(&Points {
+        coords: &cars,
+        color: Color::Indexed(231),
+    });
     // Bright headlights get a second, slightly offset dot so they look bigger.
     let bright: Vec<(f64, f64)> = snap
         .viz
@@ -341,16 +468,31 @@ fn paint_freeway(ctx: &mut Context<'_>, snap: &EngineSnapshot, state: &UiState) 
             (x + 0.004, 1.0 - y)
         })
         .collect();
-    ctx.draw(&Points { coords: &bright, color: Color::Indexed(229) });
+    ctx.draw(&Points {
+        coords: &bright,
+        color: Color::Indexed(229),
+    });
 }
 
 fn paint_camera(ctx: &mut Context<'_>, snap: &EngineSnapshot) {
-    let blobs = snap.viz.values().filter_map(|p| p.get("blobs").and_then(|b| b.as_array())).flatten();
+    let blobs = snap
+        .viz
+        .values()
+        .filter_map(|p| p.get("blobs").and_then(|b| b.as_array()))
+        .flatten();
     for (i, b) in blobs.enumerate() {
         let x = b.get("x").and_then(|v| v.as_f64()).unwrap_or(0.5);
         let y = b.get("y").and_then(|v| v.as_f64()).unwrap_or(0.5);
-        let w = b.get("w").and_then(|v| v.as_f64()).unwrap_or(0.02).max(0.01);
-        let h = b.get("h").and_then(|v| v.as_f64()).unwrap_or(0.02).max(0.01);
+        let w = b
+            .get("w")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.02)
+            .max(0.01);
+        let h = b
+            .get("h")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.02)
+            .max(0.01);
         let bright = b.get("b").and_then(|v| v.as_f64()).unwrap_or(1.0);
         let color = if bright > 0.66 {
             Color::Indexed(231)
@@ -360,7 +502,13 @@ fn paint_camera(ctx: &mut Context<'_>, snap: &EngineSnapshot) {
             Color::Indexed(244)
         };
         let _ = i;
-        ctx.draw(&Rectangle { x: x - w / 2.0, y: 1.0 - y - h / 2.0, width: w, height: h, color });
+        ctx.draw(&Rectangle {
+            x: x - w / 2.0,
+            y: 1.0 - y - h / 2.0,
+            width: w,
+            height: h,
+            color,
+        });
     }
 }
 
@@ -379,12 +527,23 @@ fn paint_map(ctx: &mut Context<'_>, state: &UiState) {
         let age = ((state.now - me.at) / MAP_FADE_SECONDS).clamp(0.0, 0.999);
         let bucket = (age * 4.0) as usize;
         buckets[bucket].push((me.lon01, me.lat01));
-        colors[bucket].push(if bucket == 0 { layer_color(me.layer as usize) } else { dim_color(me.layer as usize) });
+        colors[bucket].push(if bucket == 0 {
+            layer_color(me.layer as usize)
+        } else {
+            dim_color(me.layer as usize)
+        });
     }
     for bucket in (0..4).rev() {
         for (pt, color) in buckets[bucket].iter().zip(&colors[bucket]) {
-            let color = if bucket >= 2 { Color::Indexed(240 - (bucket as u8 - 2) * 3) } else { *color };
-            ctx.draw(&Points { coords: std::slice::from_ref(pt), color });
+            let color = if bucket >= 2 {
+                Color::Indexed(240 - (bucket as u8 - 2) * 3)
+            } else {
+                *color
+            };
+            ctx.draw(&Points {
+                coords: std::slice::from_ref(pt),
+                color,
+            });
         }
     }
 }
@@ -398,7 +557,11 @@ fn paint_generic(ctx: &mut Context<'_>, snap: &EngineSnapshot, state: &UiState) 
         if pts.len() < 2 {
             continue;
         }
-        let color = if snap.layers[i].muted { dim_color(i) } else { layer_color(i) };
+        let color = if snap.layers[i].muted {
+            dim_color(i)
+        } else {
+            layer_color(i)
+        };
         // Right-align: newest at x = 1.
         let x0 = 1.0 - (pts.len() as f64 - 1.0) / (HISTORY_LEN as f64 - 1.0);
         for w in pts.windows(2).enumerate() {
@@ -409,10 +572,21 @@ fn paint_generic(ctx: &mut Context<'_>, snap: &EngineSnapshot, state: &UiState) 
             let yb = base + pair[1].clamp(0.0, 1.0) * band * 0.9;
             ctx.draw(&CanvasLine::new(xa, ya, xb, yb, color));
         }
-        ctx.print(0.0, base + band * 0.5, Span::styled(truncate(&snap.layers[i].name, 10), Style::default().fg(color)));
+        ctx.print(
+            0.0,
+            base + band * 0.5,
+            Span::styled(
+                truncate(&snap.layers[i].name, 10),
+                Style::default().fg(color),
+            ),
+        );
     }
     if snap.layers.is_empty() {
-        ctx.print(0.3, 0.5, Span::styled("waiting for layers…", Style::default().fg(Color::DarkGray)));
+        ctx.print(
+            0.3,
+            0.5,
+            Span::styled("waiting for layers…", Style::default().fg(Color::DarkGray)),
+        );
     }
 }
 
@@ -433,34 +607,64 @@ fn draw_piano_roll(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot, sta
         .paint(|ctx| {
             // Octave guides.
             for midi in (48..96).step_by(12) {
-                ctx.draw(&CanvasLine::new(t0, midi as f64, now, midi as f64, Color::Indexed(235)));
+                ctx.draw(&CanvasLine::new(
+                    t0,
+                    midi as f64,
+                    now,
+                    midi as f64,
+                    Color::Indexed(235),
+                ));
             }
             // Bar lines.
             let bpm = snap.transport.bpm.max(1.0);
             let bar_len = 60.0 / bpm * snap.transport.beats_per_bar.max(1) as f64;
-            let mut t = now - snap.transport.phase * 60.0 / bpm - snap.transport.beat as f64 * 60.0 / bpm;
+            let mut t =
+                now - snap.transport.phase * 60.0 / bpm - snap.transport.beat as f64 * 60.0 / bpm;
             while t > t0 {
-                ctx.draw(&CanvasLine::new(t, ROLL_MIDI.0, t, ROLL_MIDI.1, Color::Indexed(237)));
+                ctx.draw(&CanvasLine::new(
+                    t,
+                    ROLL_MIDI.0,
+                    t,
+                    ROLL_MIDI.1,
+                    Color::Indexed(237),
+                ));
                 t -= bar_len;
             }
             ctx.layer();
             for n in state.notes.iter() {
                 let start = n.at;
-                let end = if n.active { now } else { start + n.duration.unwrap_or(0.25).max(0.08) };
+                let end = if n.active {
+                    now
+                } else {
+                    start + n.duration.unwrap_or(0.25).max(0.08)
+                };
                 if end < t0 {
                     continue;
                 }
                 let midi = (n.midi as f64).clamp(ROLL_MIDI.0, ROLL_MIDI.1);
                 let idx = n.layer.0 as usize;
-                let color = if n.active { layer_color(idx) } else { dim_color(idx) };
-                ctx.draw(&CanvasLine::new(start.max(t0), midi, end.min(now), midi, color));
+                let color = if n.active {
+                    layer_color(idx)
+                } else {
+                    dim_color(idx)
+                };
+                ctx.draw(&CanvasLine::new(
+                    start.max(t0),
+                    midi,
+                    end.min(now),
+                    midi,
+                    color,
+                ));
             }
         });
     frame.render_widget(canvas, area);
 }
 
 fn draw_spectrum(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
-    let title = format!("Spectrum · master {}", fmt_num((snap.master.rms * 100.0).round()));
+    let title = format!(
+        "Spectrum · master {}",
+        fmt_num(f64::from((snap.master.rms * 100.0).round()))
+    );
     let blk = block(&title);
     let inner = blk.inner(area);
     if inner.width == 0 || inner.height == 0 {
@@ -468,8 +672,15 @@ fn draw_spectrum(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
         return;
     }
     let bins = resample_max(&snap.spectrum, inner.width as usize);
-    let data: Vec<u64> = bins.iter().map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as u64).collect();
-    let spark = Sparkline::default().block(blk).data(data).max(100).style(Style::default().fg(Color::Indexed(81)));
+    let data: Vec<u64> = bins
+        .iter()
+        .map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as u64)
+        .collect();
+    let spark = Sparkline::default()
+        .block(blk)
+        .data(data)
+        .max(100)
+        .style(Style::default().fg(Color::Indexed(81)));
     frame.render_widget(spark, area);
 }
 
@@ -484,17 +695,32 @@ fn draw_events(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot, state: 
             let lname = snap.layers.get(idx).map(|l| l.name.as_str()).unwrap_or("?");
             let bar = mini_gauge(ev.intensity, 5);
             Line::from(vec![
-                Span::styled(format!("{:>7} ", fmt_time_tenths(ev.at)), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:<10} ", truncate(lname, 10)), Style::default().fg(layer_color(idx))),
-                Span::styled(format!("{:<10} ", truncate(&ev.name, 10)), Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{:>7} ", fmt_time_tenths(ev.at)),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("{:<10} ", truncate(lname, 10)),
+                    Style::default().fg(layer_color(idx)),
+                ),
+                Span::styled(
+                    format!("{:<10} ", truncate(&ev.name, 10)),
+                    Style::default().fg(Color::White),
+                ),
                 Span::styled(bar, Style::default().fg(Color::Indexed(209))),
                 Span::raw(" "),
-                Span::styled(summarize_attrs(&ev.attrs, 2), Style::default().fg(Color::Gray)),
+                Span::styled(
+                    summarize_attrs(&ev.attrs, 2),
+                    Style::default().fg(Color::Gray),
+                ),
             ])
         })
         .collect();
     let text = if lines.is_empty() {
-        Text::from(Span::styled(" no events yet", Style::default().fg(Color::DarkGray)))
+        Text::from(Span::styled(
+            " no events yet",
+            Style::default().fg(Color::DarkGray),
+        ))
     } else {
         Text::from(lines)
     };
@@ -511,19 +737,37 @@ fn draw_sources(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
         .map(|s| {
             let (label, color) = source_state_style(s.state);
             let mut spans = vec![
-                Span::styled(format!("{:<12} ", truncate(&s.name, 12)), Style::default().fg(Color::White)),
-                Span::styled(format!("{:<12} ", truncate(&s.kind, 12)), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{label:<12} "), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{:>6}/s ", fmt_num((s.rate * 10.0).round() / 10.0)), Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!("{:<12} ", truncate(&s.name, 12)),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!("{:<12} ", truncate(&s.kind, 12)),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("{label:<12} "),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:>6}/s ", fmt_num((s.rate * 10.0).round() / 10.0)),
+                    Style::default().fg(Color::Gray),
+                ),
             ];
             if wide {
-                spans.push(Span::styled(truncate(&s.message, 40), Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    truncate(&s.message, 40),
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
             Line::from(spans)
         })
         .collect();
     let text = if lines.is_empty() {
-        Text::from(Span::styled(" no sources", Style::default().fg(Color::DarkGray)))
+        Text::from(Span::styled(
+            " no sources",
+            Style::default().fg(Color::DarkGray),
+        ))
     } else {
         Text::from(lines)
     };
@@ -533,14 +777,35 @@ fn draw_sources(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
 fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &UiState, web_url: Option<&str>) {
     let mut spans = Vec::new();
     if let Some((msg, _)) = &state.status {
-        spans.push(Span::styled(format!(" {msg} "), Style::default().fg(Color::Black).bg(Color::Indexed(114))));
+        spans.push(Span::styled(
+            format!(" {msg} "),
+            Style::default().fg(Color::Black).bg(Color::Indexed(114)),
+        ));
         spans.push(Span::raw(" "));
     }
-    spans.push(Span::styled(format!(" {KEY_LEGEND}"), Style::default().fg(Color::DarkGray)));
-    if let Some(url) = web_url {
-        spans.push(Span::styled(format!("  {url}"), Style::default().fg(Color::Indexed(81))));
+    spans.push(Span::styled(
+        format!(" {KEY_LEGEND}"),
+        Style::default().fg(Color::DarkGray),
+    ));
+    let url_w = web_url.map(|u| u.chars().count() as u16 + 2).unwrap_or(0);
+    let (legend_area, url_area) = if url_w > 0 && area.width > url_w + 20 {
+        let [l, r] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(url_w)]).areas(area);
+        (l, Some(r))
+    } else {
+        (area, None)
+    };
+    frame.render_widget(Paragraph::new(Line::from(spans)), legend_area);
+    if let (Some(url), Some(r)) = (web_url, url_area) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!("{url} "),
+                Style::default().fg(Color::Indexed(81)),
+            ))
+            .right_aligned(),
+            r,
+        );
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_help(frame: &mut Frame<'_>, area: Rect, web_url: Option<&str>) {
@@ -571,7 +836,10 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, web_url: Option<&str>) {
         .iter()
         .map(|(k, d)| {
             Line::from(vec![
-                Span::styled(format!(" {k:<24}"), Style::default().fg(Color::Indexed(220))),
+                Span::styled(
+                    format!(" {k:<24}"),
+                    Style::default().fg(Color::Indexed(220)),
+                ),
                 Span::styled(*d, Style::default().fg(Color::White)),
             ])
         })
@@ -588,7 +856,11 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, web_url: Option<&str>) {
     let para = Paragraph::new(text)
         .wrap(Wrap { trim: false })
         .alignment(Alignment::Left)
-        .block(block("Keys").border_style(Style::default().fg(Color::Indexed(81))).style(Style::default().bg(Color::Indexed(234))));
+        .block(
+            block("Keys")
+                .border_style(Style::default().fg(Color::Indexed(81)))
+                .style(Style::default().bg(Color::Indexed(234))),
+        );
     frame.render_widget(para, popup);
 }
 
@@ -598,8 +870,8 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use sonder_core::{
-        EventSnapshot, HarmonySnapshot, LayerId, LayerSnapshot, Meter, Mood, NoteSnapshot, Role, SourceSnapshot,
-        SourceState, TransportPos, Value,
+        EventSnapshot, HarmonySnapshot, LayerId, LayerSnapshot, Meter, Mood, NoteSnapshot, Role,
+        SourceSnapshot, SourceState, TransportPos, Value,
     };
     use std::collections::BTreeMap;
 
@@ -612,7 +884,10 @@ mod tests {
                 instrument: instr.into(),
                 muted: i == 2,
                 soloed: i == 1,
-                meter: Meter { rms: 0.2 * (i as f32 + 1.0), peak: 0.5 },
+                meter: Meter {
+                    rms: 0.2 * (i as f32 + 1.0),
+                    peak: 0.5,
+                },
                 active_notes: i * 2,
                 source: Some("traffic".into()),
                 ..Default::default()
@@ -629,7 +904,11 @@ mod tests {
             .map(|i| EventSnapshot {
                 at: 20.0 + i as f64 * 0.7,
                 layer: LayerId(i % 3),
-                name: if i % 2 == 0 { "car".into() } else { "quake".into() },
+                name: if i % 2 == 0 {
+                    "car".into()
+                } else {
+                    "quake".into()
+                },
                 intensity: 0.1 * i as f64,
                 attrs: attrs.clone(),
             })
@@ -655,7 +934,14 @@ mod tests {
             viz_kind: "freeway".into(),
             time: 30.0,
             paused: false,
-            transport: TransportPos { bpm: 62.0, beats_per_bar: 4, bar: 11, beat: 2, phase: 0.5, beats: 46.5 },
+            transport: TransportPos {
+                bpm: 62.0,
+                beats_per_bar: 4,
+                bar: 11,
+                beat: 2,
+                phase: 0.5,
+                beats: 46.5,
+            },
             harmony: HarmonySnapshot {
                 tonic: 2,
                 key_name: "D".into(),
@@ -666,7 +952,11 @@ mod tests {
                 chord_degree: 1,
                 beats_to_change: 5.5,
             },
-            mood: Mood { energy: 0.6, tension: 0.3, brightness: 0.8 },
+            mood: Mood {
+                energy: 0.6,
+                tension: 0.3,
+                brightness: 0.8,
+            },
             conductor_note: "energy 0.62 (driven by traffic.density), tension rising".into(),
             layers: vec![
                 mk_layer(0, "traffic", Role::Pad, "pad.glass", "density", 0.4),
@@ -695,8 +985,13 @@ mod tests {
             ],
             events,
             notes,
-            master: Meter { rms: 0.3, peak: 0.6 },
-            spectrum: (0..48).map(|i| ((i as f32) / 48.0 * std::f32::consts::PI).sin()).collect(),
+            master: Meter {
+                rms: 0.3,
+                peak: 0.6,
+            },
+            spectrum: (0..48)
+                .map(|i| ((i as f32) / 48.0 * std::f32::consts::PI).sin())
+                .collect(),
             viz,
             underruns: 3,
             audio_backend: "cpal:pulse".into(),
@@ -717,7 +1012,8 @@ mod tests {
 
     fn render(w: u16, h: u16, snap: &EngineSnapshot, state: &mut UiState) -> String {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-        term.draw(|f| draw(f, snap, state, Some("http://127.0.0.1:7878"))).unwrap();
+        term.draw(|f| draw(f, snap, state, Some("http://127.0.0.1:7878")))
+            .unwrap();
         buffer_text(&term)
     }
 
@@ -772,7 +1068,10 @@ mod tests {
         for kind in ["camera", "map", "generic", "freeway", "unknown", ""] {
             let mut snap = fake_snapshot();
             snap.viz_kind = kind.into();
-            snap.viz.insert("cam".into(), serde_json::json!({"blobs": [{"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1, "b": 0.9}]}));
+            snap.viz.insert(
+                "cam".into(),
+                serde_json::json!({"blobs": [{"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1, "b": 0.9}]}),
+            );
             state.ingest(&snap);
             let text = render(100, 30, &snap, &mut state);
             assert!(text.contains("Stage"), "{text}");

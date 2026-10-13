@@ -71,20 +71,42 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ExprError> {
             b'>' if bytes.get(i + 1) == Some(&b'=') => push(&mut out, Tok::Ge, start, &mut i, 2),
             b'>' => push(&mut out, Tok::Gt, start, &mut i, 1),
             b'=' if bytes.get(i + 1) == Some(&b'=') => push(&mut out, Tok::EqEq, start, &mut i, 2),
-            b'=' => return Err(ExprError::at((start, start + 1), "single `=`; use `==` for comparison")),
+            b'=' => {
+                return Err(ExprError::at(
+                    (start, start + 1),
+                    "single `=`; use `==` for comparison",
+                ))
+            }
             b'!' if bytes.get(i + 1) == Some(&b'=') => push(&mut out, Tok::Ne, start, &mut i, 2),
             b'!' => push(&mut out, Tok::Bang, start, &mut i, 1),
-            b'&' if bytes.get(i + 1) == Some(&b'&') => push(&mut out, Tok::AndAnd, start, &mut i, 2),
-            b'&' => return Err(ExprError::at((start, start + 1), "single `&`; use `&&` for logical and")),
+            b'&' if bytes.get(i + 1) == Some(&b'&') => {
+                push(&mut out, Tok::AndAnd, start, &mut i, 2)
+            }
+            b'&' => {
+                return Err(ExprError::at(
+                    (start, start + 1),
+                    "single `&`; use `&&` for logical and",
+                ))
+            }
             b'|' if bytes.get(i + 1) == Some(&b'|') => push(&mut out, Tok::OrOr, start, &mut i, 2),
-            b'|' => return Err(ExprError::at((start, start + 1), "single `|`; use `||` for logical or")),
+            b'|' => {
+                return Err(ExprError::at(
+                    (start, start + 1),
+                    "single `|`; use `||` for logical or",
+                ))
+            }
             b'\'' | b'"' => {
                 let quote = c;
                 i += 1;
                 let mut s = String::new();
                 loop {
                     match bytes.get(i) {
-                        None => return Err(ExprError::at((start, bytes.len()), "unterminated string literal")),
+                        None => {
+                            return Err(ExprError::at(
+                                (start, bytes.len()),
+                                "unterminated string literal",
+                            ))
+                        }
                         Some(&b) if b == quote => {
                             i += 1;
                             break;
@@ -94,7 +116,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ExprError> {
                                 Some(&e @ (b'\\' | b'\'' | b'"')) => s.push(e as char),
                                 Some(b'n') => s.push('\n'),
                                 Some(b't') => s.push('\t'),
-                                _ => return Err(ExprError::at((i, (i + 2).min(bytes.len())), "unknown escape in string")),
+                                _ => {
+                                    return Err(ExprError::at(
+                                        (i, (i + 2).min(bytes.len())),
+                                        "unknown escape in string",
+                                    ))
+                                }
                             }
                             i += 2;
                         }
@@ -106,7 +133,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ExprError> {
                         }
                     }
                 }
-                out.push(Token { tok: Tok::Str(s), span: (start, i) });
+                out.push(Token {
+                    tok: Tok::Str(s),
+                    span: (start, i),
+                });
             }
             b'0'..=b'9' | b'.' => {
                 if c == b'.' && !bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
@@ -122,9 +152,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ExprError> {
                     }
                 }
                 let num_end = i;
-                let mut value: f64 = src[start..num_end]
-                    .parse()
-                    .map_err(|_| ExprError::at((start, num_end), format!("bad number `{}`", &src[start..num_end])))?;
+                let mut value: f64 = src[start..num_end].parse().map_err(|_| {
+                    ExprError::at(
+                        (start, num_end),
+                        format!("bad number `{}`", &src[start..num_end]),
+                    )
+                })?;
                 // Unit suffix: letters immediately following the digits.
                 while i < bytes.len() && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
                     i += 1;
@@ -143,26 +176,43 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ExprError> {
                         ))
                     }
                 };
-                out.push(Token { tok: Tok::Num(value), span: (start, i) });
+                out.push(Token {
+                    tok: Tok::Num(value),
+                    span: (start, i),
+                });
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.') {
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.')
+                {
                     i += 1;
                 }
-                out.push(Token { tok: Tok::Ident(src[start..i].to_string()), span: (start, i) });
+                out.push(Token {
+                    tok: Tok::Ident(src[start..i].to_string()),
+                    span: (start, i),
+                });
             }
             _ => {
                 let ch = src[i..].chars().next().unwrap_or('?');
-                return Err(ExprError::at((start, start + ch.len_utf8()), format!("unexpected character `{ch}`")));
+                return Err(ExprError::at(
+                    (start, start + ch.len_utf8()),
+                    format!("unexpected character `{ch}`"),
+                ));
             }
         }
     }
-    out.push(Token { tok: Tok::Eof, span: (bytes.len(), bytes.len()) });
+    out.push(Token {
+        tok: Tok::Eof,
+        span: (bytes.len(), bytes.len()),
+    });
     Ok(out)
 }
 
 fn push(out: &mut Vec<Token>, tok: Tok, start: usize, i: &mut usize, len: usize) {
-    out.push(Token { tok, span: (start, start + len) });
+    out.push(Token {
+        tok,
+        span: (start, start + len),
+    });
     *i += len;
 }
 
@@ -210,7 +260,10 @@ mod tests {
 
     #[test]
     fn strings_and_comments() {
-        assert_eq!(toks("\"a b\" # comment\n 'c'"), vec![Tok::Str("a b".into()), Tok::Str("c".into()), Tok::Eof]);
+        assert_eq!(
+            toks("\"a b\" # comment\n 'c'"),
+            vec![Tok::Str("a b".into()), Tok::Str("c".into()), Tok::Eof]
+        );
         assert_eq!(toks(r#"'it\'s'"#)[0], Tok::Str("it's".into()));
         assert!(lex("'open").unwrap_err().message.contains("unterminated"));
     }
@@ -227,6 +280,9 @@ mod tests {
         assert!(lex("a = 1").unwrap_err().message.contains("`==`"));
         assert!(lex("a & b").unwrap_err().message.contains("`&&`"));
         assert!(lex("a | b").unwrap_err().message.contains("`||`"));
-        assert!(lex("a $ b").unwrap_err().message.contains("unexpected character"));
+        assert!(lex("a $ b")
+            .unwrap_err()
+            .message
+            .contains("unexpected character"));
     }
 }

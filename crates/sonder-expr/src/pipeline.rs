@@ -48,7 +48,11 @@ pub struct LayerPipeline {
 
 impl LayerPipeline {
     /// Compile a layer's `signals` and `map` tables. Any source channel name is accepted.
-    pub fn compile(signals: &BTreeMap<String, String>, map: &BTreeMap<String, String>, seed: u64) -> Result<Self, ExprError> {
+    pub fn compile(
+        signals: &BTreeMap<String, String>,
+        map: &BTreeMap<String, String>,
+        seed: u64,
+    ) -> Result<Self, ExprError> {
         Self::compile_with_fields(signals, map, seed, &[])
     }
 
@@ -80,7 +84,11 @@ impl LayerPipeline {
         }
         let order = dependency_order(&names, &asts)?;
 
-        let scope = Scope { signals: names.clone(), fields: fields.to_vec(), event_ctx: false };
+        let scope = Scope {
+            signals: names.clone(),
+            fields: fields.to_vec(),
+            event_ctx: false,
+        };
         let mut env = Env::default();
         // Allocate signal slots in key order so indices are stable.
         for n in &names {
@@ -90,23 +98,58 @@ impl LayerPipeline {
         let mut compiled_signals = Vec::with_capacity(names.len());
         for name in &order {
             let ast = &asts[name.as_str()];
-            let node = lower(ast, &mut Lowerer { env: &mut env, scope: &scope, seed, call_sites: &mut sites })
-                .map_err(|e| e.with_context(&format!("signals.{name}")))?;
+            let node = lower(
+                ast,
+                &mut Lowerer {
+                    env: &mut env,
+                    scope: &scope,
+                    seed,
+                    call_sites: &mut sites,
+                },
+            )
+            .map_err(|e| e.with_context(&format!("signals.{name}")))?;
             let slot = env.signal_slot(name);
-            compiled_signals.push(Compiled { name: name.clone(), is_edge: node.is_edge_detector(), node, slot });
+            compiled_signals.push(Compiled {
+                name: name.clone(),
+                is_edge: node.is_edge_detector(),
+                node,
+                slot,
+            });
         }
         let mut params = Vec::with_capacity(map.len());
         for (key, src) in map {
             let ast = parse(src).map_err(|e| e.with_context(&format!("map.{key}")))?;
-            let node = lower(&ast, &mut Lowerer { env: &mut env, scope: &scope, seed, call_sites: &mut sites })
-                .map_err(|e| e.with_context(&format!("map.{key}")))?;
-            params.push(Compiled { name: key.clone(), is_edge: node.is_edge_detector(), node, slot: usize::MAX });
+            let node = lower(
+                &ast,
+                &mut Lowerer {
+                    env: &mut env,
+                    scope: &scope,
+                    seed,
+                    call_sites: &mut sites,
+                },
+            )
+            .map_err(|e| e.with_context(&format!("map.{key}")))?;
+            params.push(Compiled {
+                name: key.clone(),
+                is_edge: node.is_edge_detector(),
+                node,
+                slot: usize::MAX,
+            });
         }
 
         let signal_values: BTreeMap<String, f64> = names.iter().map(|n| (n.clone(), 0.0)).collect();
         let signal_order = signal_values.keys().map(|n| env.signal_slot(n)).collect();
         let param_values = map.keys().map(|k| (k.clone(), 0.0)).collect();
-        Ok(Self { env, signals: compiled_signals, params, signal_values, param_values, signal_order, seed, ticks: 0 })
+        Ok(Self {
+            env,
+            signals: compiled_signals,
+            params,
+            signal_values,
+            param_values,
+            signal_order,
+            seed,
+            ticks: 0,
+        })
     }
 
     /// Update the latest values of source channels (only referenced ones are kept).
@@ -117,7 +160,13 @@ impl LayerPipeline {
     /// Record an event. Its intensity is added to every matching `event(..)` impulse
     /// for the next tick; `attrs` and `at` are accepted for interface symmetry and
     /// are not used by signal expressions.
-    pub fn push_event(&mut self, name: &str, intensity: f64, attrs: &BTreeMap<String, Value>, at: Seconds) {
+    pub fn push_event(
+        &mut self,
+        name: &str,
+        intensity: f64,
+        attrs: &BTreeMap<String, Value>,
+        at: Seconds,
+    ) {
         let _ = (attrs, at);
         self.env.push_event(name, intensity);
     }
@@ -145,10 +194,17 @@ impl LayerPipeline {
             let sig = &self.signals[i];
             self.env.signal_values[sig.slot] = v;
             if sig.is_edge && v != 0.0 {
-                fired.push(Fired { name: sig.name.clone(), intensity: v });
+                fired.push(Fired {
+                    name: sig.name.clone(),
+                    intensity: v,
+                });
             }
         }
-        for (dst, &slot) in self.signal_values.values_mut().zip(self.signal_order.iter()) {
+        for (dst, &slot) in self
+            .signal_values
+            .values_mut()
+            .zip(self.signal_order.iter())
+        {
             *dst = self.env.signal_values[slot];
         }
         for (i, dst) in self.param_values.values_mut().enumerate() {
@@ -197,7 +253,11 @@ impl LayerPipeline {
 
     /// Names of signals whose top-level node is an edge detector (they produce [`Fired`]).
     pub fn edge_signals(&self) -> Vec<String> {
-        self.signals.iter().filter(|s| s.is_edge).map(|s| s.name.clone()).collect()
+        self.signals
+            .iter()
+            .filter(|s| s.is_edge)
+            .map(|s| s.name.clone())
+            .collect()
     }
 
     /// Signal names in evaluation order.
@@ -217,9 +277,14 @@ impl LayerPipeline {
 }
 
 /// Topologically sort signals by their references (stable: ties broken by key order).
-fn dependency_order(names: &[String], asts: &BTreeMap<&str, Expr>) -> Result<Vec<String>, ExprError> {
-    let deps: BTreeMap<&str, Vec<String>> =
-        names.iter().map(|n| (n.as_str(), referenced_signals(&asts[n.as_str()], names))).collect();
+fn dependency_order(
+    names: &[String],
+    asts: &BTreeMap<&str, Expr>,
+) -> Result<Vec<String>, ExprError> {
+    let deps: BTreeMap<&str, Vec<String>> = names
+        .iter()
+        .map(|n| (n.as_str(), referenced_signals(&asts[n.as_str()], names)))
+        .collect();
     let mut done: Vec<String> = Vec::with_capacity(names.len());
     let mut remaining: Vec<&str> = names.iter().map(String::as_str).collect();
     while !remaining.is_empty() {

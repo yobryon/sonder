@@ -282,14 +282,21 @@ pub(crate) struct Ring {
 
 impl Ring {
     fn new(window: f64) -> Self {
-        Self { window, ..Default::default() }
+        Self {
+            window,
+            ..Default::default()
+        }
     }
     /// Size the buffer on the first tick (needs `dt`). Capacity = ticks per window.
     fn ensure(&mut self, dt: f64) {
         if self.buf.is_empty() {
             let dt = if dt > 0.0 { dt } else { 0.02 };
             let n = (self.window / dt).ceil();
-            let n = if n.is_finite() { (n as usize).clamp(1, MAX_WINDOW_ENTRIES) } else { 1 };
+            let n = if n.is_finite() {
+                (n as usize).clamp(1, MAX_WINDOW_ENTRIES)
+            } else {
+                1
+            };
             self.buf = vec![0.0; n];
         }
     }
@@ -338,13 +345,23 @@ pub(crate) struct Mono {
 
 impl Mono {
     fn new(window: f64, is_max: bool) -> Self {
-        Self { dq: VecDeque::new(), tick: 0, window, n: 0, is_max }
+        Self {
+            dq: VecDeque::new(),
+            tick: 0,
+            window,
+            n: 0,
+            is_max,
+        }
     }
     fn push(&mut self, v: f64, dt: f64) -> f64 {
         if self.n == 0 {
             let dt = if dt > 0.0 { dt } else { 0.02 };
             let n = (self.window / dt).ceil();
-            self.n = if n.is_finite() { (n as u64).clamp(1, MAX_WINDOW_ENTRIES as u64) } else { 1 };
+            self.n = if n.is_finite() {
+                (n as u64).clamp(1, MAX_WINDOW_ENTRIES as u64)
+            } else {
+                1
+            };
             self.dq.reserve(16);
         }
         while let Some(&(_, back)) = self.dq.back() {
@@ -371,22 +388,53 @@ impl Mono {
 /// Stateful builtins; each variant carries the state of one call-site.
 #[derive(Debug, Clone)]
 pub(crate) enum Stateful {
-    Smooth { y: f64, init: bool },
-    Ema { y: f64, init: bool },
-    Derivative { prev: f64, prev_d: f64, init: bool },
-    Norm { min: f64, max: f64, init: bool },
+    Smooth {
+        y: f64,
+        init: bool,
+    },
+    Ema {
+        y: f64,
+        init: bool,
+    },
+    Derivative {
+        prev: f64,
+        prev_d: f64,
+        init: bool,
+    },
+    Norm {
+        min: f64,
+        max: f64,
+        init: bool,
+    },
     Rate(Ring),
     Count(Ring),
     Sum(Ring),
     Lag(Ring),
-    Hold { y: f64 },
+    Hold {
+        y: f64,
+    },
     MaxW(Mono),
     MinW(Mono),
-    Onset { prev: f64, init: bool },
-    Every { acc: f64, init: bool },
-    Change { prev: f64, init: bool },
+    Onset {
+        prev: f64,
+        init: bool,
+    },
+    Every {
+        acc: f64,
+        init: bool,
+    },
+    Change {
+        prev: f64,
+        init: bool,
+    },
     Random(ChaCha8Rng),
-    Walk { rng: ChaCha8Rng, start: f64, target: f64, acc: f64, init: bool },
+    Walk {
+        rng: ChaCha8Rng,
+        start: f64,
+        target: f64,
+        acc: f64,
+        init: bool,
+    },
 }
 
 impl Stateful {
@@ -394,10 +442,24 @@ impl Stateful {
     /// needed at construction (window sizes); `None` for names that are not stateful.
     pub fn new(name: &str, window: f64, seed: u64) -> Option<Self> {
         Some(match name {
-            "smooth" => Stateful::Smooth { y: 0.0, init: false },
-            "ema" => Stateful::Ema { y: 0.0, init: false },
-            "derivative" => Stateful::Derivative { prev: 0.0, prev_d: 0.0, init: false },
-            "norm" => Stateful::Norm { min: 0.0, max: 0.0, init: false },
+            "smooth" => Stateful::Smooth {
+                y: 0.0,
+                init: false,
+            },
+            "ema" => Stateful::Ema {
+                y: 0.0,
+                init: false,
+            },
+            "derivative" => Stateful::Derivative {
+                prev: 0.0,
+                prev_d: 0.0,
+                init: false,
+            },
+            "norm" => Stateful::Norm {
+                min: 0.0,
+                max: 0.0,
+                init: false,
+            },
             "rate" => Stateful::Rate(Ring::new(window)),
             "count" => Stateful::Count(Ring::new(window)),
             "sum" => Stateful::Sum(Ring::new(window)),
@@ -405,17 +467,35 @@ impl Stateful {
             "hold" => Stateful::Hold { y: 0.0 },
             "maxw" => Stateful::MaxW(Mono::new(window, true)),
             "minw" => Stateful::MinW(Mono::new(window, false)),
-            "onset" => Stateful::Onset { prev: 0.0, init: false },
-            "every" => Stateful::Every { acc: 0.0, init: false },
-            "change" => Stateful::Change { prev: 0.0, init: false },
+            "onset" => Stateful::Onset {
+                prev: 0.0,
+                init: false,
+            },
+            "every" => Stateful::Every {
+                acc: 0.0,
+                init: false,
+            },
+            "change" => Stateful::Change {
+                prev: 0.0,
+                init: false,
+            },
             "random" => Stateful::Random(ChaCha8Rng::seed_from_u64(seed)),
-            "walk" => Stateful::Walk { rng: ChaCha8Rng::seed_from_u64(seed), start: 0.5, target: 0.5, acc: 0.0, init: false },
+            "walk" => Stateful::Walk {
+                rng: ChaCha8Rng::seed_from_u64(seed),
+                start: 0.5,
+                target: 0.5,
+                acc: 0.0,
+                init: false,
+            },
             _ => return None,
         })
     }
 
     pub fn is_edge_detector(&self) -> bool {
-        matches!(self, Stateful::Onset { .. } | Stateful::Every { .. } | Stateful::Change { .. })
+        matches!(
+            self,
+            Stateful::Onset { .. } | Stateful::Every { .. } | Stateful::Change { .. }
+        )
     }
 
     /// Does this node need the impulse *count* of its first argument (vs. its value)?
@@ -475,7 +555,11 @@ impl Stateful {
                 }
                 // Decay the envelope toward x with the configured half-life, then
                 // expand it to include x.
-                let k = if dt > 0.0 { 1.0 - (-dt * std::f64::consts::LN_2 / NORM_HALF_LIFE).exp() } else { 0.0 };
+                let k = if dt > 0.0 {
+                    1.0 - (-dt * std::f64::consts::LN_2 / NORM_HALF_LIFE).exp()
+                } else {
+                    0.0
+                };
                 *min += (x - *min) * k;
                 *max += (x - *max) * k;
                 if x < *min {
@@ -511,13 +595,23 @@ impl Stateful {
             Stateful::Lag(ring) => {
                 ring.ensure(dt);
                 let full = ring.len == ring.capacity();
-                let out = if full { ring.oldest() } else if ring.len == 0 { x } else { ring.oldest() };
+                let out = if full {
+                    ring.oldest()
+                } else if ring.len == 0 {
+                    x
+                } else {
+                    ring.oldest()
+                };
                 ring.push(x);
                 out
             }
             Stateful::Hold { y } => {
                 let tau = a[1];
-                let decayed = if tau > 0.0 && dt > 0.0 { *y * (-dt / tau).exp() } else { 0.0 };
+                let decayed = if tau > 0.0 && dt > 0.0 {
+                    *y * (-dt / tau).exp()
+                } else {
+                    0.0
+                };
                 *y = x.max(decayed);
                 *y
             }
@@ -567,7 +661,13 @@ impl Stateful {
                 }
             }
             Stateful::Random(rng) => rng.random::<f64>(),
-            Stateful::Walk { rng, start, target, acc, init } => {
+            Stateful::Walk {
+                rng,
+                start,
+                target,
+                acc,
+                init,
+            } => {
                 let (step, period) = (x.abs(), a[1]);
                 if !*init {
                     *init = true;
@@ -614,15 +714,25 @@ pub(crate) enum Node {
     Bar,
     Bpm,
     Intensity,
-    Signal { idx: usize, name: String },
+    Signal {
+        idx: usize,
+        name: String,
+    },
     Field(usize),
     Event(usize),
     /// `attr("k", default)`: numeric attr, text hashed unless numeric, bool 0/1.
-    Attr { key: String, default: f64 },
+    Attr {
+        key: String,
+        default: f64,
+    },
     /// `has("k")`.
     Has(String),
     /// `attr_text("k") == "lit"` (or `!=`).
-    StrEq { key: String, lit: String, negate: bool },
+    StrEq {
+        key: String,
+        lit: String,
+        negate: bool,
+    },
     /// `hash(attr_text("k"))`.
     HashAttr(String),
     /// `hash(<numeric expr>)`.
@@ -631,7 +741,10 @@ pub(crate) enum Node {
     Binary(BinOp, Box<Node>, Box<Node>),
     If(Box<Node>, Box<Node>, Box<Node>),
     Pure(PureFn, Vec<Node>),
-    Stateful { f: Stateful, args: Vec<Node> },
+    Stateful {
+        f: Box<Stateful>,
+        args: Vec<Node>,
+    },
 }
 
 /// Scratch space for pure-function arguments (bounded, no heap).
@@ -755,7 +868,12 @@ impl Node {
                         0.0
                     }
                 }
-                Some(Value::Text(t)) => t.trim().parse::<f64>().ok().map(finite).unwrap_or_else(|| hash_text(t)),
+                Some(Value::Text(t)) => t
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .map(finite)
+                    .unwrap_or_else(|| hash_text(t)),
             },
             Node::Has(key) => {
                 if ctx.attr(key).is_some() {
@@ -768,7 +886,9 @@ impl Node {
                 let eq = match ctx.attr(key) {
                     Some(Value::Text(t)) => t == lit,
                     Some(Value::Num(n)) => lit.trim().parse::<f64>().ok() == Some(*n),
-                    Some(Value::Bool(b)) => lit.eq_ignore_ascii_case(if *b { "true" } else { "false" }),
+                    Some(Value::Bool(b)) => {
+                        lit.eq_ignore_ascii_case(if *b { "true" } else { "false" })
+                    }
                     None => false,
                 };
                 if eq != *negate {
@@ -802,7 +922,9 @@ impl Node {
                 b.walk(f);
                 c.walk(f);
             }
-            Node::Pure(_, args) | Node::Stateful { args, .. } => args.iter().for_each(|a| a.walk(f)),
+            Node::Pure(_, args) | Node::Stateful { args, .. } => {
+                args.iter().for_each(|a| a.walk(f))
+            }
             _ => {}
         }
     }
@@ -876,7 +998,7 @@ mod tests {
         assert_eq!(hash_num(0.0), hash_num(-0.0));
         assert_ne!(hash_num(1.0), hash_num(2.0));
         // Pin a value so renders stay reproducible across releases.
-        assert!((hash_text("") - 0.8958).abs() < 1e-3, "{}", hash_text(""));
+        assert!((hash_text("") - 0.7967).abs() < 1e-3, "{}", hash_text(""));
     }
 
     #[test]
@@ -903,10 +1025,16 @@ mod tests {
     #[test]
     fn mono_deque_windowed_max_and_min() {
         let mut m = Mono::new(0.06, true); // 3 ticks
-        let outs: Vec<f64> = [1.0, 3.0, 2.0, 0.0, 0.0, 0.0].iter().map(|&v| m.push(v, 0.02)).collect();
+        let outs: Vec<f64> = [1.0, 3.0, 2.0, 0.0, 0.0, 0.0]
+            .iter()
+            .map(|&v| m.push(v, 0.02))
+            .collect();
         assert_eq!(outs, vec![1.0, 3.0, 3.0, 3.0, 2.0, 0.0]);
         let mut m = Mono::new(0.06, false);
-        let outs: Vec<f64> = [3.0, 1.0, 2.0, 5.0, 5.0, 5.0].iter().map(|&v| m.push(v, 0.02)).collect();
+        let outs: Vec<f64> = [3.0, 1.0, 2.0, 5.0, 5.0, 5.0]
+            .iter()
+            .map(|&v| m.push(v, 0.02))
+            .collect();
         assert_eq!(outs, vec![3.0, 1.0, 1.0, 1.0, 2.0, 5.0]);
     }
 

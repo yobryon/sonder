@@ -27,11 +27,18 @@ pub struct Scope {
 impl Scope {
     /// A signal-expression scope: these signals, any field, not event context.
     pub fn signals(names: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self { signals: names.into_iter().map(Into::into).collect(), ..Default::default() }
+        Self {
+            signals: names.into_iter().map(Into::into).collect(),
+            ..Default::default()
+        }
     }
     /// An `on_event` scope.
     pub fn event(signal_names: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self { signals: signal_names.into_iter().map(Into::into).collect(), fields: Vec::new(), event_ctx: true }
+        Self {
+            signals: signal_names.into_iter().map(Into::into).collect(),
+            fields: Vec::new(),
+            event_ctx: true,
+        }
     }
 }
 
@@ -41,14 +48,55 @@ pub const CONSTANTS: &[&str] = &["time", "dt", "beat", "bar", "bpm", "pi", "tau"
 pub const EVENT_CONSTANTS: &[&str] = &["intensity"];
 /// Pure builtin function names.
 pub const PURE_FUNCTIONS: &[&str] = &[
-    "abs", "min", "max", "clamp", "lerp", "pow", "sqrt", "exp", "log", "log2", "log10", "floor", "ceil", "round",
-    "fract", "sign", "step", "smoothstep", "if", "sin", "cos", "tan", "tanh", "wrap", "hash", "has", "attr",
-    "attr_text", "field", "event",
+    "abs",
+    "min",
+    "max",
+    "clamp",
+    "lerp",
+    "pow",
+    "sqrt",
+    "exp",
+    "log",
+    "log2",
+    "log10",
+    "floor",
+    "ceil",
+    "round",
+    "fract",
+    "sign",
+    "step",
+    "smoothstep",
+    "if",
+    "sin",
+    "cos",
+    "tan",
+    "tanh",
+    "wrap",
+    "hash",
+    "has",
+    "attr",
+    "attr_text",
+    "field",
+    "event",
 ];
 /// Stateful builtin function names (each call-site owns state).
 pub const STATEFUL_FUNCTIONS: &[&str] = &[
-    "smooth", "ema", "derivative", "norm", "rate", "count", "sum", "lag", "hold", "maxw", "minw", "onset", "every",
-    "change", "random", "walk",
+    "smooth",
+    "ema",
+    "derivative",
+    "norm",
+    "rate",
+    "count",
+    "sum",
+    "lag",
+    "hold",
+    "maxw",
+    "minw",
+    "onset",
+    "every",
+    "change",
+    "random",
+    "walk",
 ];
 
 /// Compile-time bookkeeping for one pipeline (shared across its expressions).
@@ -78,7 +126,10 @@ pub(crate) fn lower(expr: &Expr, lw: &mut Lowerer) -> Result<Node, ExprError> {
 fn lower_ident(name: &str, span: Span, lw: &mut Lowerer) -> Result<Node, ExprError> {
     if lw.scope.signals.iter().any(|s| s == name) {
         let idx = lw.env.signal_slot(name);
-        return Ok(Node::Signal { idx, name: name.to_string() });
+        return Ok(Node::Signal {
+            idx,
+            name: name.to_string(),
+        });
     }
     if !lw.scope.event_ctx && lw.scope.fields.iter().any(|f| f == name) {
         return Ok(Node::Field(lw.env.field_slot(name)));
@@ -94,7 +145,10 @@ fn lower_ident(name: &str, span: Span, lw: &mut Lowerer) -> Result<Node, ExprErr
         "e" => return Ok(Node::Const(std::f64::consts::E)),
         "intensity" if lw.scope.event_ctx => return Ok(Node::Intensity),
         "intensity" => {
-            return Err(ExprError::at(span, "`intensity` is only available in on_event expressions"));
+            return Err(ExprError::at(
+                span,
+                "`intensity` is only available in on_event expressions",
+            ));
         }
         _ => {}
     }
@@ -106,7 +160,14 @@ fn lower_ident(name: &str, span: Span, lw: &mut Lowerer) -> Result<Node, ExprErr
 
 fn unknown_ident_message(name: &str, scope: &Scope) -> String {
     let mut msg = format!("unknown identifier `{name}`");
-    if let Some(s) = suggest(name, scope.signals.iter().chain(scope.fields.iter()).map(String::as_str)) {
+    if let Some(s) = suggest(
+        name,
+        scope
+            .signals
+            .iter()
+            .chain(scope.fields.iter())
+            .map(String::as_str),
+    ) {
         msg.push_str(&format!(" (did you mean `{s}`?)"));
     }
     msg.push_str(". Known signals: ");
@@ -155,7 +216,13 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
-fn lower_binary(op: BinOp, lhs: &Expr, rhs: &Expr, span: Span, lw: &mut Lowerer) -> Result<Node, ExprError> {
+fn lower_binary(
+    op: BinOp,
+    lhs: &Expr,
+    rhs: &Expr,
+    span: Span,
+    lw: &mut Lowerer,
+) -> Result<Node, ExprError> {
     // String equality: `attr_text("k") == "lit"` in either order.
     if matches!(op, BinOp::Eq | BinOp::Ne) {
         let negate = op == BinOp::Ne;
@@ -165,7 +232,11 @@ fn lower_binary(op: BinOp, lhs: &Expr, rhs: &Expr, span: Span, lw: &mut Lowerer)
             }
             (Expr::Str { value, .. }, other) | (other, Expr::Str { value, .. }) => {
                 let key = expect_attr_text(other, lw)?;
-                return Ok(Node::StrEq { key, lit: value.clone(), negate });
+                return Ok(Node::StrEq {
+                    key,
+                    lit: value.clone(),
+                    negate,
+                });
             }
             _ => {}
         }
@@ -173,8 +244,17 @@ fn lower_binary(op: BinOp, lhs: &Expr, rhs: &Expr, span: Span, lw: &mut Lowerer)
     if let Some(call_span) = find_attr_text(lhs).or_else(|| find_attr_text(rhs)) {
         return Err(ExprError::at(call_span, "`attr_text(..)` can only be compared with `==`/`!=` to a string, or passed to `hash()`"));
     }
-    let _ = span;
-    Ok(Node::Binary(op, Box::new(lower(lhs, lw)?), Box::new(lower(rhs, lw)?)))
+    if matches!(lhs, Expr::Str { .. }) || matches!(rhs, Expr::Str { .. }) {
+        return Err(ExprError::at(
+            span,
+            format!("operator `{}` cannot be applied to a string; strings are only valid as function arguments or in `attr_text(..) == \"..\"`", op.symbol()),
+        ));
+    }
+    Ok(Node::Binary(
+        op,
+        Box::new(lower(lhs, lw)?),
+        Box::new(lower(rhs, lw)?),
+    ))
 }
 
 fn find_attr_text(e: &Expr) -> Option<Span> {
@@ -203,7 +283,10 @@ fn require_event_ctx(name: &str, span: Span, lw: &Lowerer) -> Result<(), ExprErr
     if lw.scope.event_ctx {
         Ok(())
     } else {
-        Err(ExprError::at(span, format!("`{name}` is only available in on_event expressions")))
+        Err(ExprError::at(
+            span,
+            format!("`{name}` is only available in on_event expressions"),
+        ))
     }
 }
 
@@ -220,20 +303,30 @@ fn arity(name: &str, args: &[Expr], min: usize, max: usize, span: Span) -> Resul
         format!("{min} to {max}")
     };
     let plural = if expected == "1" { "" } else { "s" };
-    Err(ExprError::at(span, format!("`{name}` takes {expected} argument{plural}, got {n}")))
+    Err(ExprError::at(
+        span,
+        format!("`{name}` takes {expected} argument{plural}, got {n}"),
+    ))
 }
 
 fn string_arg(fname: &str, e: &Expr) -> Result<String, ExprError> {
     match e {
         Expr::Str { value, .. } => Ok(value.clone()),
-        other => Err(ExprError::at(other.span(), format!("`{fname}` expects a quoted string, e.g. {fname}(\"name\")"))),
+        other => Err(ExprError::at(
+            other.span(),
+            format!("`{fname}` expects a quoted string, e.g. {fname}(\"name\")"),
+        )),
     }
 }
 
 fn const_arg(fname: &str, what: &str, e: &Expr) -> Result<f64, ExprError> {
     match e {
         Expr::Num { value, .. } => Ok(*value),
-        Expr::Unary { op: crate::ast::UnOp::Neg, rhs, .. } => const_arg(fname, what, rhs).map(|v| -v),
+        Expr::Unary {
+            op: crate::ast::UnOp::Neg,
+            rhs,
+            ..
+        } => const_arg(fname, what, rhs).map(|v| -v),
         other => Err(ExprError::at(
             other.span(),
             format!("`{fname}` {what} must be a constant number (e.g. `10s`, `250ms`, `2m`)"),
@@ -245,7 +338,13 @@ fn lower_args(args: &[Expr], lw: &mut Lowerer) -> Result<Vec<Node>, ExprError> {
     args.iter().map(|a| lower(a, lw)).collect()
 }
 
-fn lower_call(name: &str, name_span: Span, args: &[Expr], span: Span, lw: &mut Lowerer) -> Result<Node, ExprError> {
+fn lower_call(
+    name: &str,
+    name_span: Span,
+    args: &[Expr],
+    span: Span,
+    lw: &mut Lowerer,
+) -> Result<Node, ExprError> {
     // Data sources and event-context accessors.
     match name {
         "field" => {
@@ -254,7 +353,7 @@ fn lower_call(name: &str, name_span: Span, args: &[Expr], span: Span, lw: &mut L
             }
             arity(name, args, 1, 1, span)?;
             let fname = string_arg(name, &args[0])?;
-            if !lw.scope.fields.is_empty() && !lw.scope.fields.iter().any(|f| *f == fname) {
+            if !lw.scope.fields.is_empty() && !lw.scope.fields.contains(&fname) {
                 let mut msg = format!("unknown field `{fname}`");
                 if let Some(s) = suggest(&fname, lw.scope.fields.iter().map(String::as_str)) {
                     msg.push_str(&format!(" (did you mean `{s}`?)"));
@@ -266,12 +365,18 @@ fn lower_call(name: &str, name_span: Span, args: &[Expr], span: Span, lw: &mut L
         }
         "event" => {
             if lw.scope.event_ctx {
-                return Err(ExprError::at(span, "`event` is not available in on_event expressions; use `intensity`"));
+                return Err(ExprError::at(
+                    span,
+                    "`event` is not available in on_event expressions; use `intensity`",
+                ));
             }
             arity(name, args, 1, 1, span)?;
             let pat = string_arg(name, &args[0])?;
             if pat.is_empty() {
-                return Err(ExprError::at(args[0].span(), "event name must not be empty (use \"*\" for any event)"));
+                return Err(ExprError::at(
+                    args[0].span(),
+                    "event name must not be empty (use \"*\" for any event)",
+                ));
             }
             return Ok(Node::Event(lw.env.event_slot(&pat)));
         }
@@ -279,7 +384,11 @@ fn lower_call(name: &str, name_span: Span, args: &[Expr], span: Span, lw: &mut L
             require_event_ctx(name, span, lw)?;
             arity(name, args, 1, 2, span)?;
             let key = string_arg(name, &args[0])?;
-            let default = if args.len() == 2 { const_arg(name, "default", &args[1])? } else { 0.0 };
+            let default = if args.len() == 2 {
+                const_arg(name, "default", &args[1])?
+            } else {
+                0.0
+            };
             return Ok(Node::Attr { key, default });
         }
         "attr_text" => {
@@ -294,7 +403,12 @@ fn lower_call(name: &str, name_span: Span, args: &[Expr], span: Span, lw: &mut L
             arity(name, args, 1, 1, span)?;
             return Ok(match &args[0] {
                 Expr::Str { value, .. } => Node::Const(hash_text(value)),
-                Expr::Call { name: inner, args: inner_args, span: inner_span, .. } if inner == "attr_text" => {
+                Expr::Call {
+                    name: inner,
+                    args: inner_args,
+                    span: inner_span,
+                    ..
+                } if inner == "attr_text" => {
                     require_event_ctx(inner, *inner_span, lw)?;
                     arity(inner, inner_args, 1, 1, *inner_span)?;
                     Node::HashAttr(string_arg(inner, &inner_args[0])?)
@@ -355,7 +469,13 @@ fn lower_call(name: &str, name_span: Span, args: &[Expr], span: Span, lw: &mut L
         "random" => (0, 0, None),
         _ => {
             let mut msg = format!("unknown function `{name}`");
-            if let Some(s) = suggest(name, PURE_FUNCTIONS.iter().chain(STATEFUL_FUNCTIONS.iter()).copied()) {
+            if let Some(s) = suggest(
+                name,
+                PURE_FUNCTIONS
+                    .iter()
+                    .chain(STATEFUL_FUNCTIONS.iter())
+                    .copied(),
+            ) {
                 msg.push_str(&format!(" (did you mean `{s}`?)"));
             }
             msg.push_str(&format!(
@@ -367,7 +487,13 @@ fn lower_call(name: &str, name_span: Span, args: &[Expr], span: Span, lw: &mut L
         }
     };
     if name == "norm" && args.len() != 1 {
-        return Err(ExprError::at(span, format!("`norm` takes 1 argument (adaptive) or 3 (`norm(x, lo, hi)`), got {}", args.len())));
+        return Err(ExprError::at(
+            span,
+            format!(
+                "`norm` takes 1 argument (adaptive) or 3 (`norm(x, lo, hi)`), got {}",
+                args.len()
+            ),
+        ));
     }
     arity(name, args, min, max, span)?;
     if lw.scope.event_ctx {
@@ -380,7 +506,10 @@ fn lower_call(name: &str, name_span: Span, args: &[Expr], span: Span, lw: &mut L
         Some(i) => {
             let w = const_arg(name, "window", &args[i])?;
             if w <= 0.0 {
-                return Err(ExprError::at(args[i].span(), format!("`{name}` window must be positive")));
+                return Err(ExprError::at(
+                    args[i].span(),
+                    format!("`{name}` window must be positive"),
+                ));
             }
             w
         }
@@ -388,9 +517,16 @@ fn lower_call(name: &str, name_span: Span, args: &[Expr], span: Span, lw: &mut L
     };
     let site = *lw.call_sites;
     *lw.call_sites += 1;
-    let f = Stateful::new(name, window, site_seed(lw.seed, site))
-        .ok_or_else(|| ExprError::at(name_span, format!("internal: `{name}` has no state constructor")))?;
-    Ok(Node::Stateful { f, args: lower_args(args, lw)? })
+    let f = Stateful::new(name, window, site_seed(lw.seed, site)).ok_or_else(|| {
+        ExprError::at(
+            name_span,
+            format!("internal: `{name}` has no state constructor"),
+        )
+    })?;
+    Ok(Node::Stateful {
+        f: Box::new(f),
+        args: lower_args(args, lw)?,
+    })
 }
 
 /// Collect the signal names referenced by bare identifiers in `expr`.
@@ -424,7 +560,13 @@ pub struct Tick {
 impl Tick {
     /// Convenience: a tick at `now` with the nominal 20 ms step and no transport.
     pub fn at(now: Seconds) -> Self {
-        Self { now, dt: 0.02, beat: 0.0, bar: 0.0, bpm: 0.0 }
+        Self {
+            now,
+            dt: 0.02,
+            beat: 0.0,
+            bar: 0.0,
+            bpm: 0.0,
+        }
     }
 }
 
@@ -460,7 +602,8 @@ impl Program {
     /// Does the expression use any stateful builtin?
     pub fn is_stateful(&self) -> bool {
         let mut any = false;
-        self.node.walk(&mut |n| any |= matches!(n, Node::Stateful { .. }));
+        self.node
+            .walk(&mut |n| any |= matches!(n, Node::Stateful { .. }));
         any
     }
     /// Update the latest value of referenced channels (others are ignored).
@@ -532,8 +675,21 @@ pub fn compile_seeded(src: &str, scope: &Scope, seed: u64) -> Result<Program, Ex
     let ast = parse(src)?;
     let mut env = Env::default();
     let mut sites = 0;
-    let node = lower(&ast, &mut Lowerer { env: &mut env, scope, seed, call_sites: &mut sites })?;
-    Ok(Program { env, node, scope: scope.clone(), signal_map: BTreeMap::new() })
+    let node = lower(
+        &ast,
+        &mut Lowerer {
+            env: &mut env,
+            scope,
+            seed,
+            call_sites: &mut sites,
+        },
+    )?;
+    Ok(Program {
+        env,
+        node,
+        scope: scope.clone(),
+        signal_map: BTreeMap::new(),
+    })
 }
 
 #[cfg(test)]

@@ -37,7 +37,10 @@ impl EventExpr {
     pub fn compile(src: &str, signal_names: &[String]) -> Result<Self, ExprError> {
         let scope = Scope::event(signal_names.iter().cloned());
         let program = compile(src, &scope)?;
-        Ok(Self { program, src: src.to_string() })
+        Ok(Self {
+            program,
+            src: src.to_string(),
+        })
     }
 
     /// Evaluate for one event. Non-finite results become 0.

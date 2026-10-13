@@ -50,7 +50,9 @@ pub fn meter_glyphs(rms: f32, cells: usize) -> (String, String) {
     let level = rms.clamp(0.0, 1.0).sqrt();
     let lit = (level * cells as f32).round() as usize;
     let lit = lit.min(cells);
-    let lit_s: String = (0..lit).map(|i| RAMP[(i * RAMP.len()) / cells.max(1)].min(RAMP[7])).collect();
+    let lit_s: String = (0..lit)
+        .map(|i| RAMP[(i * RAMP.len()) / cells.max(1)])
+        .collect();
     let unlit_s: String = std::iter::repeat_n('·', cells - lit).collect();
     (lit_s, unlit_s)
 }
@@ -68,7 +70,11 @@ pub fn meter_color(rms: f32) -> Color {
 
 /// A fixed-width horizontal bar of `width` cells for a 0..1 value, e.g. `███░░`.
 pub fn mini_gauge(value: f64, width: usize) -> String {
-    let v = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
+    let v = if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let filled = (v * width as f64).round() as usize;
     let filled = filled.min(width);
     let mut s = String::with_capacity(width * 3);
@@ -79,7 +85,11 @@ pub fn mini_gauge(value: f64, width: usize) -> String {
 
 /// Format engine seconds as `m:ss` (or `h:mm:ss` past an hour).
 pub fn fmt_time(secs: f64) -> String {
-    let total = if secs.is_finite() && secs > 0.0 { secs.floor() as u64 } else { 0 };
+    let total = if secs.is_finite() && secs > 0.0 {
+        secs.floor() as u64
+    } else {
+        0
+    };
     let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
     if h > 0 {
         format!("{h}:{m:02}:{s:02}")
@@ -90,7 +100,11 @@ pub fn fmt_time(secs: f64) -> String {
 
 /// Format engine seconds with tenths, e.g. `1:02.3`.
 pub fn fmt_time_tenths(secs: f64) -> String {
-    let tenths = if secs.is_finite() && secs > 0.0 { ((secs * 10.0).floor() as u64) % 10 } else { 0 };
+    let tenths = if secs.is_finite() && secs > 0.0 {
+        ((secs * 10.0).floor() as u64) % 10
+    } else {
+        0
+    };
     format!("{}.{}", fmt_time(secs), tenths)
 }
 
@@ -245,9 +259,12 @@ mod tests {
         let mut attrs = BTreeMap::new();
         attrs.insert("lat01".to_string(), Value::Num(0.5));
         attrs.insert("mag".to_string(), Value::Num(4.25));
-        attrs.insert("place".to_string(), Value::Text("Off the coast of Oregon".into()));
+        attrs.insert(
+            "place".to_string(),
+            Value::Text("Off the coast of Oregon".into()),
+        );
         attrs.insert("lon01".to_string(), Value::Num(0.25));
-        assert_eq!(summarize_attrs(&attrs, 2), "mag=4.25 place=Off the co…");
+        assert_eq!(summarize_attrs(&attrs, 2), "mag=4.25 place=Off the coa…");
         // Falls back to viz hints when nothing else is there.
         let mut only_geo = BTreeMap::new();
         only_geo.insert("lat01".to_string(), Value::Num(0.5));

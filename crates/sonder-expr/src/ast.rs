@@ -49,12 +49,35 @@ impl BinOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    Num { value: f64, span: Span },
-    Str { value: String, span: Span },
-    Ident { name: String, span: Span },
-    Call { name: String, name_span: Span, args: Vec<Expr>, span: Span },
-    Unary { op: UnOp, rhs: Box<Expr>, span: Span },
-    Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr>, span: Span },
+    Num {
+        value: f64,
+        span: Span,
+    },
+    Str {
+        value: String,
+        span: Span,
+    },
+    Ident {
+        name: String,
+        span: Span,
+    },
+    Call {
+        name: String,
+        name_span: Span,
+        args: Vec<Expr>,
+        span: Span,
+    },
+    Unary {
+        op: UnOp,
+        rhs: Box<Expr>,
+        span: Span,
+    },
+    Binary {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {

@@ -264,18 +264,12 @@ impl Drum {
 }
 
 /// Settings for the shared effect buses and master chain.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Effects {
     pub reverb: ReverbSettings,
     pub delay: DelaySettings,
     pub master: MasterSettings,
-}
-
-impl Default for Effects {
-    fn default() -> Self {
-        Self { reverb: ReverbSettings::default(), delay: DelaySettings::default(), master: MasterSettings::default() }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

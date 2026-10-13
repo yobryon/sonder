@@ -14,7 +14,10 @@ pub fn parse(src: &str) -> Result<Expr, ExprError> {
     let e = p.expr()?;
     match p.peek() {
         Tok::Eof => Ok(e),
-        other => Err(ExprError::at(p.span(), format!("unexpected {} after expression", describe(other)))),
+        other => Err(ExprError::at(
+            p.span(),
+            format!("unexpected {} after expression", describe(other)),
+        )),
     }
 }
 
@@ -68,7 +71,10 @@ impl Parser {
         if *self.peek() == want {
             Ok(self.bump().span)
         } else {
-            Err(ExprError::at(self.span(), format!("expected {what}, found {}", describe(self.peek()))))
+            Err(ExprError::at(
+                self.span(),
+                format!("expected {what}, found {}", describe(self.peek())),
+            ))
         }
     }
 
@@ -110,8 +116,14 @@ impl Parser {
         self.bump();
         let rhs = self.add()?;
         let e = binary(op, lhs, rhs);
-        if matches!(self.peek(), Tok::Lt | Tok::Le | Tok::Gt | Tok::Ge | Tok::EqEq | Tok::Ne) {
-            return Err(ExprError::at(self.span(), "comparisons cannot be chained; use `&&` (e.g. `a < b && b < c`)"));
+        if matches!(
+            self.peek(),
+            Tok::Lt | Tok::Le | Tok::Gt | Tok::Ge | Tok::EqEq | Tok::Ne
+        ) {
+            return Err(ExprError::at(
+                self.span(),
+                "comparisons cannot be chained; use `&&` (e.g. `a < b && b < c`)",
+            ));
         }
         Ok(e)
     }
@@ -154,7 +166,11 @@ impl Parser {
         let start = self.bump().span.0;
         let rhs = self.unary()?;
         let span = (start, rhs.span().1);
-        Ok(Expr::Unary { op, rhs: Box::new(rhs), span })
+        Ok(Expr::Unary {
+            op,
+            rhs: Box::new(rhs),
+            span,
+        })
     }
 
     fn pow(&mut self) -> Result<Expr, ExprError> {
@@ -170,8 +186,14 @@ impl Parser {
     fn atom(&mut self) -> Result<Expr, ExprError> {
         let t = self.bump();
         match t.tok {
-            Tok::Num(value) => Ok(Expr::Num { value, span: t.span }),
-            Tok::Str(value) => Ok(Expr::Str { value, span: t.span }),
+            Tok::Num(value) => Ok(Expr::Num {
+                value,
+                span: t.span,
+            }),
+            Tok::Str(value) => Ok(Expr::Str {
+                value,
+                span: t.span,
+            }),
             Tok::Ident(name) => {
                 if *self.peek() == Tok::LParen {
                     self.bump();
@@ -184,17 +206,23 @@ impl Parser {
                                     self.bump();
                                 }
                                 Tok::RParen => break,
-                                other => {
-                                    return Err(ExprError::at(
-                                        self.span(),
-                                        format!("expected `,` or `)` in arguments of `{name}`, found {}", describe(other)),
-                                    ))
-                                }
+                                other => return Err(ExprError::at(
+                                    self.span(),
+                                    format!(
+                                        "expected `,` or `)` in arguments of `{name}`, found {}",
+                                        describe(other)
+                                    ),
+                                )),
                             }
                         }
                     }
                     let end = self.expect(Tok::RParen, "`)`")?.1;
-                    Ok(Expr::Call { name, name_span: t.span, args, span: (t.span.0, end) })
+                    Ok(Expr::Call {
+                        name,
+                        name_span: t.span,
+                        args,
+                        span: (t.span.0, end),
+                    })
                 } else {
                     Ok(Expr::Ident { name, span: t.span })
                 }
@@ -205,15 +233,26 @@ impl Parser {
                 // Keep the inner node but widen its span to include the parens.
                 Ok(widen(inner, (t.span.0, end)))
             }
-            Tok::Eof => Err(ExprError::at(t.span, "unexpected end of input; expected a value")),
-            other => Err(ExprError::at(t.span, format!("expected a value, found {}", describe(&other)))),
+            Tok::Eof => Err(ExprError::at(
+                t.span,
+                "unexpected end of input; expected a value",
+            )),
+            other => Err(ExprError::at(
+                t.span,
+                format!("expected a value, found {}", describe(&other)),
+            )),
         }
     }
 }
 
 fn binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
     let span = (lhs.span().0, rhs.span().1);
-    Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs), span }
+    Expr::Binary {
+        op,
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+        span,
+    }
 }
 
 fn widen(e: Expr, span: Span) -> Expr {
@@ -221,7 +260,17 @@ fn widen(e: Expr, span: Span) -> Expr {
         Expr::Num { value, .. } => Expr::Num { value, span },
         Expr::Str { value, .. } => Expr::Str { value, span },
         Expr::Ident { name, .. } => Expr::Ident { name, span },
-        Expr::Call { name, name_span, args, .. } => Expr::Call { name, name_span, args, span },
+        Expr::Call {
+            name,
+            name_span,
+            args,
+            ..
+        } => Expr::Call {
+            name,
+            name_span,
+            args,
+            span,
+        },
         Expr::Unary { op, rhs, .. } => Expr::Unary { op, rhs, span },
         Expr::Binary { op, lhs, rhs, .. } => Expr::Binary { op, lhs, rhs, span },
     }
@@ -237,12 +286,21 @@ mod tests {
             Expr::Str { value, .. } => format!("{value:?}"),
             Expr::Ident { name, .. } => name.clone(),
             Expr::Call { name, args, .. } => {
-                format!("{name}({})", args.iter().map(show).collect::<Vec<_>>().join(", "))
+                format!(
+                    "{name}({})",
+                    args.iter().map(show).collect::<Vec<_>>().join(", ")
+                )
             }
             Expr::Unary { op, rhs, .. } => {
-                format!("({}{})", if *op == UnOp::Neg { "-" } else { "!" }, show(rhs))
+                format!(
+                    "({}{})",
+                    if *op == UnOp::Neg { "-" } else { "!" },
+                    show(rhs)
+                )
             }
-            Expr::Binary { op, lhs, rhs, .. } => format!("({} {} {})", show(lhs), op.symbol(), show(rhs)),
+            Expr::Binary { op, lhs, rhs, .. } => {
+                format!("({} {} {})", show(lhs), op.symbol(), show(rhs))
+            }
         }
     }
 
@@ -252,7 +310,10 @@ mod tests {
         assert_eq!(show(&parse("1 - 2 - 3").unwrap()), "((1 - 2) - 3)");
         assert_eq!(show(&parse("2 ^ 3 ^ 2").unwrap()), "(2 ^ (3 ^ 2))");
         assert_eq!(show(&parse("-2 ^ 2").unwrap()), "(-(2 ^ 2))");
-        assert_eq!(show(&parse("a < b && c || !d").unwrap()), "(((a < b) && c) || (!d))");
+        assert_eq!(
+            show(&parse("a < b && c || !d").unwrap()),
+            "(((a < b) && c) || (!d))"
+        );
         assert_eq!(show(&parse("(1 + 2) * 3").unwrap()), "((1 + 2) * 3)");
         assert_eq!(show(&parse("a % 2 == 0").unwrap()), "((a % 2) == 0)");
     }
@@ -264,7 +325,10 @@ mod tests {
             "norm(smooth(rate(event(\"car\"), 10), 3))"
         );
         assert_eq!(show(&parse("random()").unwrap()), "random()");
-        assert_eq!(show(&parse("attr_text(\"k\") == 'x'").unwrap()), "(attr_text(\"k\") == \"x\")");
+        assert_eq!(
+            show(&parse("attr_text(\"k\") == 'x'").unwrap()),
+            "(attr_text(\"k\") == \"x\")"
+        );
     }
 
     #[test]

@@ -18,12 +18,18 @@ pub struct ExprError {
 impl ExprError {
     /// Error with a span.
     pub fn at(span: (usize, usize), message: impl Into<String>) -> Self {
-        Self { message: message.into(), span: Some(span) }
+        Self {
+            message: message.into(),
+            span: Some(span),
+        }
     }
 
     /// Error without a location.
     pub fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into(), span: None }
+        Self {
+            message: message.into(),
+            span: None,
+        }
     }
 
     /// Return the same error with a prefix like `signals.density: ` prepended.
@@ -44,7 +50,13 @@ impl ExprError {
             Some((start, end)) if start <= end && end <= src.len() => {
                 let width = src[start..end].chars().count().max(1);
                 let lead = src[..start].chars().count();
-                format!("{}\n  {}\n  {}{}", self.message, src, " ".repeat(lead), "^".repeat(width))
+                format!(
+                    "{}\n  {}\n  {}{}",
+                    self.message,
+                    src,
+                    " ".repeat(lead),
+                    "^".repeat(width)
+                )
             }
             _ => self.message.clone(),
         }

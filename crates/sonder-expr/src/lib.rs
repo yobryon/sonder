@@ -55,7 +55,8 @@ mod parser;
 mod pipeline;
 
 pub use compile::{
-    compile, compile_seeded, Program, Scope, Tick, CONSTANTS, EVENT_CONSTANTS, PURE_FUNCTIONS, STATEFUL_FUNCTIONS,
+    compile, compile_seeded, Program, Scope, Tick, CONSTANTS, EVENT_CONSTANTS, PURE_FUNCTIONS,
+    STATEFUL_FUNCTIONS,
 };
 pub use error::ExprError;
 pub use event::{EventCtx, EventExpr};
