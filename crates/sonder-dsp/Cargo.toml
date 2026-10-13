@@ -1,0 +1,10 @@
+[package]
+name = "sonder-dsp"
+description = "Polyphonic synth, drums, effects, mixer, analyzer. Pure DSP, realtime-safe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sonder-core = { workspace = true }
+rustfft = { workspace = true }

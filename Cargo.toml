@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/genuye/sonder"
+authors = ["Sonder contributors"]
+
+[workspace.dependencies]
+sonder-core = { path = "crates/sonder-core" }
+sonder-expr = { path = "crates/sonder-expr" }
+sonder-theory = { path = "crates/sonder-theory" }
+sonder-compose = { path = "crates/sonder-compose" }
+sonder-dsp = { path = "crates/sonder-dsp" }
+sonder-sources = { path = "crates/sonder-sources" }
+sonder-vision = { path = "crates/sonder-vision" }
+sonder-audio = { path = "crates/sonder-audio" }
+sonder-engine = { path = "crates/sonder-engine" }
+sonder-web = { path = "crates/sonder-web" }
+sonder-tui = { path = "crates/sonder-tui" }
+
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+toml = "1"
+thiserror = "2"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.10"
+rand_chacha = "0.10"
+crossbeam-channel = "0.5"
+rtrb = "0.4"
+parking_lot = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+sysinfo = "0.39"
+hound = "3"
+cpal = "0.18"
+midir = "0.11"
+rustfft = "6"
+realfft = "3"
+axum = { version = "0.8", features = ["ws"] }
+ratatui = "0.30"
+crossterm = "0.29"
+clap = { version = "4", features = ["derive"] }
+chrono = "0.4"
+bytes = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 1
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

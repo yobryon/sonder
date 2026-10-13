@@ -1,0 +1,20 @@
+[package]
+name = "sonder-audio"
+description = "Audio output backends (cpal, wav, pcm stdout, web tap) and the realtime synth host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sonder-core = { workspace = true }
+sonder-dsp = { workspace = true }
+rtrb = { workspace = true }
+hound = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+cpal = { workspace = true, optional = true }
+
+[features]
+default = ["native-audio"]
+native-audio = ["cpal"]

@@ -1,0 +1,11 @@
+[package]
+name = "sonder-theory"
+description = "Music theory: scales, modes, chords, progressions, quantization, voice leading"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sonder-core = { workspace = true }
+serde = { workspace = true }
+rand = { workspace = true }

@@ -1,0 +1,26 @@
+[package]
+name = "sonder-engine"
+description = "Wires sources -> features -> composer -> synth -> output; publishes snapshots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sonder-core = { workspace = true }
+sonder-expr = { workspace = true }
+sonder-compose = { workspace = true }
+sonder-dsp = { workspace = true }
+sonder-sources = { workspace = true }
+sonder-vision = { workspace = true }
+sonder-audio = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+
+[features]
+default = ["native-audio"]
+native-audio = ["sonder-audio/native-audio"]

@@ -1,0 +1,22 @@
+[package]
+name = "sonder-sources"
+description = "Live data source adapters + registry + probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sonder-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+sysinfo = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+bytes = { workspace = true }
+rand = { workspace = true }

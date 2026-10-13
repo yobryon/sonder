@@ -1,0 +1,11 @@
+[package]
+name = "sonder-expr"
+description = "Feature/mapping expression language: stateful signal processing at control rate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sonder-core = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

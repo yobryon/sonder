@@ -1,0 +1,11 @@
+[package]
+name = "sonder-core"
+description = "Shared types for Sonder: samples, scenes, instruments, synth commands, snapshots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

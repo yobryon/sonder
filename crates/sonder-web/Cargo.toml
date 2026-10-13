@@ -1,0 +1,16 @@
+[package]
+name = "sonder-web"
+description = "Embedded web UI: snapshot + audio over WebSocket, canvas visualizers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sonder-core = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+anyhow = { workspace = true }
