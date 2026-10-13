@@ -206,13 +206,15 @@ impl Parser {
                                     self.bump();
                                 }
                                 Tok::RParen => break,
-                                other => return Err(ExprError::at(
-                                    self.span(),
-                                    format!(
+                                other => {
+                                    return Err(ExprError::at(
+                                        self.span(),
+                                        format!(
                                         "expected `,` or `)` in arguments of `{name}`, found {}",
                                         describe(other)
                                     ),
-                                )),
+                                    ))
+                                }
                             }
                         }
                     }
