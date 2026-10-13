@@ -12,6 +12,10 @@ use crate::ast::{BinOp, UnOp};
 
 /// Half-life of the adaptive-normalization envelope, in seconds (~2 minutes).
 pub const NORM_HALF_LIFE: f64 = 120.0;
+
+/// Seconds over which `norm` fades from a neutral 0.5 to its adaptive output, so a
+/// value that is simply rising from zero at startup doesn't read as "maximum".
+pub const NORM_WARMUP: f64 = 30.0;
 /// Upper bound on per-node ring buffer entries (bounded memory for huge windows).
 pub const MAX_WINDOW_ENTRIES: usize = 1 << 16;
 
@@ -405,6 +409,7 @@ pub(crate) enum Stateful {
         min: f64,
         max: f64,
         init: bool,
+        age: f64,
     },
     Rate(Ring),
     Count(Ring),
@@ -459,6 +464,7 @@ impl Stateful {
                 min: 0.0,
                 max: 0.0,
                 init: false,
+                age: 0.0,
             },
             "rate" => Stateful::Rate(Ring::new(window)),
             "count" => Stateful::Count(Ring::new(window)),
@@ -546,13 +552,15 @@ impl Stateful {
                 *prev_d = d;
                 out
             }
-            Stateful::Norm { min, max, init } => {
+            Stateful::Norm { min, max, init, age } => {
                 if !*init {
                     *init = true;
                     *min = x;
                     *max = x;
                     return 0.5;
                 }
+                *age += dt.max(0.0);
+                let confidence = (*age / NORM_WARMUP).clamp(0.0, 1.0);
                 // Decay the envelope toward x with the configured half-life, then
                 // expand it to include x.
                 let k = if dt > 0.0 {
@@ -570,11 +578,12 @@ impl Stateful {
                 }
                 let range = *max - *min;
                 let scale = 1.0 + min.abs().max(max.abs());
-                if range <= 1e-9 * scale {
+                let raw = if range <= 1e-9 * scale {
                     0.5
                 } else {
                     ((x - *min) / range).clamp(0.0, 1.0)
-                }
+                };
+                0.5 + (raw - 0.5) * confidence
             }
             Stateful::Rate(ring) => {
                 ring.ensure(dt);

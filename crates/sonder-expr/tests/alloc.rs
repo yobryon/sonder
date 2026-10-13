@@ -35,7 +35,7 @@ fn tick_is_allocation_free_after_warmup() {
         ("e", "derivative(b) + lag(b, 1s)"),
         ("f", "hold(event('car'), 2s)"),
         ("g", "walk(0.1, 1s) + random()"),
-        ("h", "onset(a, 0.8)"),
+        ("h", "onset(a, 1.5)"),
         ("i", "ema(x, 0.1) + hash(x)"),
         ("j", "if(a > b, clamp(c, 0, 1), lerp(0, 1, g))"),
     ]
@@ -66,7 +66,7 @@ fn tick_is_allocation_free_after_warmup() {
         let fired = p.tick(t, 0.02, 0.0, 0.0, 60.0);
         assert!(
             fired.is_empty(),
-            "`a` never reaches 0.8 with constant input"
+            "`a` never exceeds 1.0, so `onset(a, 1.5)` must not fire"
         );
     }
     let after = ALLOCS.load(Ordering::Relaxed);

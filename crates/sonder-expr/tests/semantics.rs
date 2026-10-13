@@ -249,9 +249,13 @@ fn norm_adaptive_from_first_sample() {
     let mut p = prog("norm(x)");
     let out = run(&mut p, &[5.0, 5.0, 5.0]);
     assert_eq!(out, vec![0.5, 0.5, 0.5], "flat input → 0.5, never NaN");
+    // `norm` fades in from 0.5 over NORM_WARMUP seconds; warm it up on flat input
+    // first so the adaptive range is fully trusted.
     let mut p = prog("norm(x)");
+    let warm = (sonder_expr::NORM_WARMUP / DT) as usize + 10;
+    run(&mut p, &vec![5.0; warm]);
     let out = run(&mut p, &[0.0, 10.0, 5.0, 10.0, 0.0, 20.0]);
-    assert_eq!(out[0], 0.5);
+    assert!(approx(out[0], 0.0), "new min → 0: {}", out[0]);
     assert!(approx(out[1], 1.0), "new max → 1: {}", out[1]);
     assert!((out[2] - 0.5).abs() < 0.01, "midpoint ≈ 0.5: {}", out[2]);
     assert!(approx(out[3], 1.0));
@@ -265,6 +269,8 @@ fn norm_envelope_decays_with_two_minute_half_life() {
     // Push max to 10 then feed 0 forever: after 120 s the max should have decayed
     // halfway toward 0, so 5 maps to ~1.0 and 2.5 maps to ~0.5.
     let mut p = prog("norm(x)");
+    let warm = (sonder_expr::NORM_WARMUP / DT) as usize + 10;
+    run(&mut p, &vec![0.0; warm]);
     run(&mut p, &[0.0, 10.0]);
     let n = (120.0 / DT) as usize;
     let out = run(&mut p, &vec![0.0; n]);

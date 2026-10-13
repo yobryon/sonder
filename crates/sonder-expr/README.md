@@ -174,3 +174,11 @@ on_event.edit.chance   = "if(attr_text('wiki') == 'enwiki', 1, 0.4)"
 - `ExprError { message, span }` implements `Display`; `render(src)` adds a caret line.
 
 Determinism: nothing reads the wall clock; same inputs and seed produce identical outputs.
+
+
+### Note on `norm` warm-up
+
+`norm(x)` fades in from a neutral 0.5 over the first 30 seconds (`NORM_WARMUP`). Without this a
+value that is simply rising from zero at startup would read as "maximum" for minutes, because it
+is always the running max of itself. The adaptive envelope still tracks from the first sample;
+only the output confidence ramps.

@@ -151,7 +151,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Cmd::List => {
-            println!("{:<18} {:<8} {:<7} {}", "SCENE", "LAYERS", "NET", "DESCRIPTION");
+            println!("{:<18} {:<8} {:<7} DESCRIPTION", "SCENE", "LAYERS", "NET");
             for (name, scene) in sonder_engine::builtin_scenes() {
                 let net = if scene_needs_network(&scene) { "yes" } else { "no" };
                 println!("{:<18} {:<8} {:<7} {}", name, scene.layers.len(), net, scene.description);
@@ -162,7 +162,7 @@ fn main() -> anyhow::Result<()> {
             let reg = sonder_engine::live::registry();
             match kind {
                 None => {
-                    println!("{:<26} {:<4} {}", "KIND", "NET", "SUMMARY");
+                    println!("{:<26} {:<4} SUMMARY", "KIND", "NET");
                     for info in reg.catalog() {
                         println!("{:<26} {:<4} {}", info.kind, if info.network { "yes" } else { "no" }, info.summary);
                     }

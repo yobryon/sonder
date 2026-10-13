@@ -61,7 +61,7 @@ pub use compile::{
 pub use error::ExprError;
 pub use event::{EventCtx, EventExpr};
 pub use grid::parse_grid;
-pub use node::{hash_num, hash_text, MAX_WINDOW_ENTRIES, NORM_HALF_LIFE};
+pub use node::{hash_num, hash_text, MAX_WINDOW_ENTRIES, NORM_HALF_LIFE, NORM_WARMUP};
 pub use pipeline::{Fired, LayerPipeline};
 
 /// Parse an expression without compiling it, returning only syntax errors.
