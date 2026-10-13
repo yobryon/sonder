@@ -87,6 +87,12 @@ pub struct Parser {
     state: State,
     max_frame: usize,
     boundary: Option<String>,
+    /// `\r\n--<boundary>`: a multipart delimiter can never occur inside a part body.
+    delimiter: Option<Vec<u8>>,
+    /// Incremental delimiter search over the frame being scanned: first hit (absolute
+    /// offset in `buf`) and where the unsearched region starts.
+    delim_hit: Option<usize>,
+    delim_from: usize,
     stats: Stats,
 }
 
@@ -115,15 +121,21 @@ impl Parser {
             state: State::Seek,
             max_frame: DEFAULT_MAX_FRAME,
             boundary: None,
+            delimiter: None,
+            delim_hit: None,
+            delim_from: 2,
             stats: Stats::default(),
         }
     }
 
-    /// Record the multipart boundary from a `Content-Type` header, if any. The
-    /// framer does not need it (it is SOI/EOI driven) but it is exposed for
-    /// diagnostics.
+    /// Record the multipart boundary from a `Content-Type` header, if any. Framing
+    /// is SOI/EOI driven and works without it, but a known boundary lets a frame
+    /// truncated inside a marker header be abandoned as soon as the next part
+    /// begins (a garbage 16-bit segment length would otherwise make the scanner
+    /// wait for up to 64 KB of further data before it can resync).
     pub fn with_content_type(mut self, content_type: Option<&str>) -> Self {
         self.boundary = content_type.and_then(boundary_from_content_type);
+        self.delimiter = self.boundary.as_ref().map(|b| format!("\r\n--{b}").into_bytes());
         self
     }
 
@@ -169,6 +181,8 @@ impl Parser {
                     let len = content_length(&self.buf[..pos]);
                     self.stats.skipped_bytes += pos as u64;
                     self.buf.advance(pos);
+                    self.delim_hit = None;
+                    self.delim_from = 2;
                     self.state = match len {
                         Some(n) if n >= 4 && n <= self.max_frame => State::Fixed { len: n },
                         _ => State::Scan { cursor: 2, entropy: false },
@@ -195,7 +209,14 @@ impl Parser {
                 }
                 State::Scan { cursor, entropy } => {
                     let (res, cursor, entropy) = scan(&self.buf, cursor, entropy);
+                    let delim = self.find_delimiter();
                     match res {
+                        // A frame that spans the next part's delimiter was truncated and
+                        // the scanner ran on into the following frame.
+                        ScanResult::Complete(end) if delim.is_some_and(|p| p < end) => {
+                            self.stats.resyncs += 1;
+                            self.resync();
+                        }
                         ScanResult::Complete(end) => {
                             let frame = self.buf.split_to(end).freeze();
                             self.stats.frames += 1;
@@ -209,6 +230,10 @@ impl Parser {
                         ScanResult::Incomplete => {
                             if self.buf.len() > self.max_frame {
                                 self.stats.dropped += 1;
+                                self.resync();
+                            } else if delim.is_some() {
+                                // The next multipart part has begun: this frame can never complete.
+                                self.stats.resyncs += 1;
                                 self.resync();
                             } else {
                                 self.state = State::Scan { cursor, entropy };
@@ -228,6 +253,22 @@ impl Parser {
             self.state = State::Scan { cursor: 2, entropy: false };
         }
         self.next_frame()
+    }
+
+    /// With a known boundary: absolute offset of the first multipart delimiter
+    /// after the SOI of the frame being scanned, if one is buffered. Searches only
+    /// bytes not examined before, so repeated calls while a frame trickles in stay
+    /// linear overall.
+    fn find_delimiter(&mut self) -> Option<usize> {
+        let d = self.delimiter.as_deref()?;
+        if self.delim_hit.is_none() && self.buf.len() >= self.delim_from + d.len() {
+            let hay = &self.buf[self.delim_from..];
+            let hit = hay.windows(d.len()).position(|w| w == d).map(|off| self.delim_from + off);
+            let next_from = self.buf.len() + 1 - d.len();
+            self.delim_hit = hit;
+            self.delim_from = next_from;
+        }
+        self.delim_hit
     }
 
     /// Skip the SOI at `buf[0]` and look for the next one.
@@ -610,6 +651,68 @@ mod tests {
         let (out, _) = parse_all(&jpeg, 17);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].len(), jpeg.len());
+    }
+
+    /// Pure garbage, lone SOI/EOI markers and every truncation point of a real
+    /// frame must neither panic nor loop forever, and the parser must recover.
+    #[test]
+    fn garbage_and_truncation_fuzz() {
+        let fr = frames();
+        let mut rng = testgen::Rng::new(99);
+        for round in 0..20 {
+            let mut p = Parser::new().with_max_frame(4096);
+            let n = 1 + (rng.next_u32() % 3000) as usize;
+            let junk: Vec<u8> = (0..n)
+                .map(|_| match rng.next_u32() % 5 {
+                    0 => 0xFF,
+                    1 => 0xD8,
+                    2 => 0xD9,
+                    _ => (rng.next_u32() & 0xFF) as u8,
+                })
+                .collect();
+            for c in junk.chunks(1 + round) {
+                p.push(c);
+                let mut guard = 0;
+                while p.next_frame().is_some() {
+                    guard += 1;
+                    assert!(guard < 10_000);
+                }
+            }
+            assert!(p.finish().map(|f| f.len() <= 4096).unwrap_or(true));
+            assert!(p.buffered() <= 4096 + KEEP_PREFIX);
+        }
+        // A multipart part cut at every possible offset, followed by one complete
+        // part: the complete frame must come out as soon as its bytes are in,
+        // without waiting for more data (a cut inside a marker header otherwise
+        // yields a garbage segment length that swallows the following frame).
+        let ct = "multipart/x-mixed-replace; boundary=cam";
+        for cut in 0..fr[0].len() {
+            let mut p = Parser::new().with_content_type(Some(ct));
+            let mut body = testgen::multipart(&fr[..1], "cam", false);
+            body.truncate(body.len() - fr[0].len() - 2 - "--cam--\r\n".len() + cut);
+            // The server still terminates the (short) part with the CRLF of the delimiter.
+            body.extend_from_slice(b"\r\n");
+            body.extend_from_slice(&testgen::multipart(&fr[1..2], "cam", false));
+            p.push(&body);
+            let mut got = Vec::new();
+            while let Some(f) = p.next_frame() {
+                got.push(f);
+            }
+            assert_eq!(got.len(), 1, "cut at {cut}");
+            assert_eq!(&got[0][..], &fr[1][..], "cut at {cut}");
+        }
+        // Without a boundary the same cut can only be recovered once more data
+        // (or end of input) arrives; it must still never panic or spin.
+        for cut in 0..fr[0].len() {
+            let mut p = Parser::new();
+            p.push(&fr[0][..cut]);
+            p.push(&fr[1]);
+            let mut guard = 0;
+            while p.next_frame().is_some() {
+                guard += 1;
+                assert!(guard < 10);
+            }
+        }
     }
 
     #[tokio::test]

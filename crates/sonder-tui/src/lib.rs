@@ -79,6 +79,12 @@ pub enum Action {
 }
 
 /// Map a key event to an [`Action`]. Only `Press` events count.
+///
+/// Solo is `Shift`+digit. Terminals report the *shifted character*, not the
+/// physical key, so this is matched against the US-layout row `!@#$%^&*(`.
+/// On other layouts (e.g. German `"` for Shift+2, French where digits
+/// themselves need Shift) the shifted characters differ and solo-by-digit is
+/// unavailable; use `↑/↓` + `s` instead, which works everywhere.
 pub fn map_key(key: &KeyEvent) -> Action {
     if key.kind != KeyEventKind::Press {
         return Action::None;
@@ -86,6 +92,8 @@ pub fn map_key(key: &KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         KeyCode::Char('c') if ctrl => Action::Quit,
+        // Empty path: the engine picks `<scene-slug>.toml` in the cwd.
+        KeyCode::Char('s') if ctrl => Action::Command(UserCommand::SaveScene { path: String::new() }),
         KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
         KeyCode::Char(' ') => Action::Command(UserCommand::TogglePause),
         KeyCode::Char('[') => Action::Command(UserCommand::NudgeTempo { delta: -2.0 }),
@@ -197,10 +205,6 @@ async fn event_loop(
     let mut current: Arc<EngineSnapshot> = snapshot.borrow_and_update().clone();
     state.ingest(&current);
     let web_url = opts.web_url.as_deref();
-    let send = |cmd: UserCommand| {
-        // Drop on a full queue rather than stall the UI.
-        let _ = commands.try_send(cmd);
-    };
 
     loop {
         tokio::select! {
@@ -208,19 +212,24 @@ async fn event_loop(
                 match ev {
                     Some(Ok(Event::Key(key))) => match map_key(&key) {
                         Action::Quit => {
-                            send(UserCommand::Quit);
+                            send_command(&commands, &mut state, UserCommand::Quit);
                             break;
                         }
-                        Action::Command(cmd) => send(cmd),
+                        Action::Command(cmd) => {
+                            let saving = matches!(cmd, UserCommand::SaveScene { .. });
+                            if send_command(&commands, &mut state, cmd) && saving {
+                                state.flash("saving scene…");
+                            }
+                        }
                         Action::MoveSelection(d) => state.move_selection(d, current.layers.len()),
                         Action::MuteSelected => {
                             if let Some(l) = current.layers.get(state.selected) {
-                                send(UserCommand::ToggleMute { layer: l.id });
+                                send_command(&commands, &mut state, UserCommand::ToggleMute { layer: l.id });
                             }
                         }
                         Action::SoloSelected => {
                             if let Some(l) = current.layers.get(state.selected) {
-                                send(UserCommand::ToggleSolo { layer: l.id });
+                                send_command(&commands, &mut state, UserCommand::ToggleSolo { layer: l.id });
                             }
                         }
                         Action::ToggleHelp => state.show_help = !state.show_help,
@@ -257,6 +266,23 @@ async fn event_loop(
         }
     }
     Ok(())
+}
+
+/// Send a command without blocking the UI. A full queue drops the command and
+/// says so in the footer instead of failing silently; a closed channel means the
+/// engine is gone and is reported once.
+fn send_command(commands: &mpsc::Sender<UserCommand>, state: &mut UiState, cmd: UserCommand) -> bool {
+    match commands.try_send(cmd) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            state.flash("engine busy; key ignored");
+            false
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            state.flash("engine stopped; command not sent");
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -333,5 +359,32 @@ mod tests {
         let mut release = press(KeyCode::Char('q'), KeyModifiers::NONE);
         release.kind = KeyEventKind::Release;
         assert_eq!(map_key(&release), Action::None);
+    }
+
+    #[test]
+    fn ctrl_s_saves_the_scene() {
+        assert_eq!(
+            map_key(&press(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+            Action::Command(UserCommand::SaveScene { path: String::new() })
+        );
+        // Plain `s` is still solo.
+        assert_eq!(map_key(&press(KeyCode::Char('s'), KeyModifiers::NONE)), Action::SoloSelected);
+        assert!(ui::KEY_LEGEND.contains("^s save"));
+    }
+
+    #[test]
+    fn dropped_commands_are_reported_in_the_footer() {
+        let (tx, mut rx) = mpsc::channel::<UserCommand>(1);
+        let mut state = UiState::new();
+        assert!(send_command(&tx, &mut state, UserCommand::TogglePause));
+        assert!(state.status.is_none());
+        // Queue full: dropped, but the user is told.
+        assert!(!send_command(&tx, &mut state, UserCommand::NextChord));
+        assert!(state.status.as_ref().is_some_and(|(m, _)| m.contains("busy")));
+        assert_eq!(rx.try_recv().unwrap(), UserCommand::TogglePause);
+        drop(rx);
+        state.status = None;
+        assert!(!send_command(&tx, &mut state, UserCommand::NextChord));
+        assert!(state.status.as_ref().is_some_and(|(m, _)| m.contains("stopped")));
     }
 }

@@ -1094,6 +1094,47 @@ mod tests {
         assert!(a.raw_blob_count <= 1);
     }
 
+    /// Degenerate inputs from the field: 1x1 frames, thresholds outside 0..1,
+    /// a 0 downscale recorded in the config, a frame-size change mid-stream and a
+    /// checkerboard with far more than u16::MAX components.
+    #[test]
+    fn extreme_inputs_do_not_panic() {
+        for thr in [-1.0f32, 0.0, 1.0, 7.5, f32::NAN] {
+            let mut tr = Tracker::new(TrackerConfig { threshold: thr, downscale: 0, min_blob_px: 0, confirm_frames: 0, ..Default::default() });
+            let a = tr.process(&[255], 1, 1, 0.0);
+            assert!(a.motion_energy.is_finite());
+            let a = tr.process(&[0], 1, 1, 0.1);
+            assert!(a.motion_energy.is_finite());
+            // Motion mode on the same tracker, after a size change.
+            let mut cfg = tr.config().clone();
+            cfg.mode = Mode::Motion;
+            tr.set_config(cfg);
+            let _ = tr.process(&[0; 4], 2, 2, 0.2);
+            let a = tr.process(&[255; 4], 2, 2, 0.3);
+            assert!(a.motion_energy.is_finite());
+        }
+        // 512x512 grid of isolated bright pixels (every other row and column):
+        // 65536 components, i.e. more labels than fit in a u16.
+        let (w, h) = (512u32, 512u32);
+        let board: Vec<u8> = (0..w * h).map(|i| if (i % w) % 2 == 0 && (i / w) % 2 == 0 { 255 } else { 0 }).collect();
+        let mut tr = Tracker::new(TrackerConfig { min_blob_px: 1, merge_dist: 0.0, confirm_frames: 1, adaptive_blend: 0.0, threshold: 0.5, line: None, ..Default::default() });
+        let a = tr.process(&board, w, h, 0.0);
+        assert!(a.raw_blob_count >= 64, "{}", a.raw_blob_count);
+        assert!(a.blobs.len() <= tr.config().max_blobs);
+        // Time going backwards and standing still.
+        let _ = tr.process(&board, w, h, -5.0);
+        let _ = tr.process(&board, w, h, -5.0);
+        // Exits only for confirmed tracks: nothing was ever confirmed here.
+        let mut tr = Tracker::new(TrackerConfig { confirm_frames: 3, min_blob_px: 1, adaptive_blend: 0.0, threshold: 0.5, line: None, ..Default::default() });
+        let (g, gw, gh) = mask_frame(&["....", ".##.", ".##.", "...."]);
+        let _ = tr.process(&g, gw, gh, 0.0);
+        let mut exits = 0;
+        for i in 1..10 {
+            exits += tr.process(&[0; 16], gw, gh, i as f64 * 0.1).exited.len();
+        }
+        assert_eq!(exits, 0);
+    }
+
     #[test]
     fn frame_320x240_processes_fast_enough() {
         let (w, h) = (320u32, 240u32);

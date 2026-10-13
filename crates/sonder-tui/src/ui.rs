@@ -40,7 +40,7 @@ const ROLL_MIDI: (f64, f64) = (36.0, 96.0);
 
 /// Static part of the footer legend.
 pub const KEY_LEGEND: &str =
-    "q quit · space pause · [ ] tempo · - = density · k/K transpose · n/N mode · c chord · m/s mute/solo · w web · ? help";
+    "q quit · space pause · [ ] tempo · - = density · k/K transpose · n/N mode · c chord · m/s mute/solo · ^s save · w web · ? help";
 
 fn block(title: &str) -> Block<'_> {
     Block::default()
@@ -822,6 +822,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, web_url: Option<&str>) {
         ("n / N", "next / previous mode"),
         ("c", "force chord change"),
         ("w", "open the web UI in a browser"),
+        ("Ctrl-S", "save the current scene to <scene>.toml"),
         ("?", "toggle this help"),
     ];
     let width = 56u16.min(area.width.saturating_sub(2));
@@ -1060,6 +1061,41 @@ mod tests {
         for (w, h) in [(20, 4), (10, 2), (80, 24), (79, 23), (200, 60)] {
             let _ = render(w, h, &snap, &mut state);
         }
+    }
+
+    /// Tiny terminals (and the help popup on them) must never panic.
+    #[test]
+    fn renders_at_tiny_sizes() {
+        let snap = fake_snapshot();
+        let mut state = UiState::new();
+        state.ingest(&snap);
+        for help in [false, true] {
+            state.show_help = help;
+            for (w, h) in [(1, 1), (10, 3), (40, 10), (20, 5), (80, 5), (21, 24), (120, 4)] {
+                let _ = render(w, h, &snap, &mut state);
+            }
+        }
+    }
+
+    /// The layer list can shrink between snapshots; drawing must index nothing stale.
+    #[test]
+    fn layers_shrinking_between_snapshots_does_not_panic() {
+        let full = fake_snapshot();
+        let mut state = UiState::new();
+        state.ingest(&full);
+        state.selected = 2;
+        let mut small = fake_snapshot();
+        small.layers.truncate(1);
+        state.ingest(&small);
+        let text = render(120, 40, &small, &mut state);
+        assert!(text.contains("traffic"), "{text}");
+        // Events referencing layers that no longer exist render with a placeholder.
+        assert!(text.contains("?"), "{text}");
+        // Draw with a snapshot the state has not ingested (resize path races).
+        let _ = render(120, 40, &full, &mut state);
+        let mut none = fake_snapshot();
+        none.layers.clear();
+        let _ = render(120, 40, &none, &mut state);
     }
 
     #[test]

@@ -476,9 +476,44 @@ async fn run(p: CameraParams, ctx: SourceCtx) {
     }
     drop(frame_tx);
     let _ = emitter.await;
-    // The worker ends once the frame channel closes; join on a blocking thread
-    // so a stuck decode cannot hang the runtime.
-    let _ = tokio::task::spawn_blocking(move || worker.join()).await;
+    // The worker ends on its own once the frame channel closes. It is a plain
+    // `std::thread`, deliberately not joined: joining through `spawn_blocking`
+    // would make `Runtime::drop` wait on a decode that may still be running.
+    drop(worker);
+}
+
+/// Read `r` on a detached `std::thread`, forwarding chunks as a `Stream`.
+///
+/// `tokio::io::stdin()` reads on the runtime's blocking pool, and a read that
+/// never returns (nobody closes our stdin) then blocks `Runtime::drop`, i.e.
+/// process exit. A detached thread blocked in `read` simply dies with the
+/// process; dropping the returned stream is enough to abandon it.
+fn detached_reader_stream<R: std::io::Read + Send + 'static>(
+    mut r: R,
+) -> impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+    let spawned = std::thread::Builder::new().name("sonder-vision-stdin".into()).spawn(move || {
+        let mut buf = vec![0u8; 64 << 10];
+        loop {
+            match r.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.blocking_send(Ok(Bytes::copy_from_slice(&buf[..n]))).is_err() {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e));
+                    break;
+                }
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        tracing::warn!("cannot start stdin reader thread: {e}");
+    }
+    tokio_stream::wrappers::ReceiverStream::new(rx)
 }
 
 async fn wait_shutdown(rx: &mut tokio::sync::watch::Receiver<bool>) {
@@ -499,7 +534,7 @@ async fn run_connection(
     attempt: &mut u32,
 ) -> Result<End, String> {
     let mut stream = if p.url == "-" {
-        FrameStream::from_reader(tokio::io::stdin(), None)
+        FrameStream::from_stream(detached_reader_stream(std::io::stdin()), None)
     } else {
         let req = ctx
             .http
@@ -662,6 +697,99 @@ mod tests {
             }
             _ => panic!("expected event"),
         }
+    }
+
+    /// A reader whose `read` never returns, like an idle stdin.
+    struct Forever;
+    impl std::io::Read for Forever {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            loop {
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+        }
+    }
+
+    /// Abandoning the stdin stream must not wait for the blocked read.
+    #[tokio::test]
+    async fn detached_reader_stream_can_be_dropped_while_blocked() {
+        let started = Instant::now();
+        let s = detached_reader_stream(Forever);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(s);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        // And it does forward data from a reader that produces some.
+        let data: Vec<u8> = (0..200_000u32).map(|i| i as u8).collect();
+        let s = detached_reader_stream(std::io::Cursor::new(data.clone()));
+        let got: Vec<u8> = s.map(|r| r.unwrap().to_vec()).concat().await;
+        assert_eq!(got, data);
+    }
+
+    /// The full source against a never-ending HTTP MJPEG stream must stop within
+    /// about a second of shutdown being signalled, and `run` must return.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stops_promptly_on_shutdown_with_endless_stream() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let frames = testgen::jpeg_sequence(4, 48, 32);
+        let server = tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let frames = frames.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    // Drain the request line/headers (best effort) then stream forever.
+                    let _ = tokio::time::timeout(Duration::from_millis(200), async {
+                        let mut tmp = [0u8; 4096];
+                        let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut tmp).await;
+                    })
+                    .await;
+                    let head = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=f\r\nConnection: close\r\n\r\n";
+                    if sock.write_all(head.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let mut i = 0usize;
+                    loop {
+                        buf.clear();
+                        buf.extend_from_slice(&testgen::multipart(&frames[i % frames.len()..i % frames.len() + 1], "f", true));
+                        buf.truncate(buf.len() - "--f--\r\n".len());
+                        if sock.write_all(&buf).await.is_err() {
+                            return;
+                        }
+                        i += 1;
+                        tokio::time::sleep(Duration::from_millis(40)).await;
+                    }
+                });
+            }
+        });
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+        let (stx, srx) = tokio::sync::watch::channel(false);
+        let ctx = SourceCtx {
+            id: "cam".into(),
+            tx,
+            clock: Arc::new(sonder_core::WallClock::new()),
+            http: reqwest::Client::new(),
+            shutdown: srx,
+            seed: 1,
+        };
+        let spec = SourceSpec::new(KIND).with("url", format!("http://{addr}/stream")).with("downscale", 1);
+        let src = Box::new(CameraSource::new(CameraParams::from_spec(&spec).unwrap()));
+        let task = tokio::spawn(src.run(ctx));
+        // Wait until frames are flowing.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut live = false;
+        while Instant::now() < deadline && !live {
+            if let Ok(Some(s)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                live = matches!(s.datum, Datum::Reading { .. } | Datum::Viz { .. });
+            }
+        }
+        assert!(live, "no frames received from the test stream");
+        let t0 = Instant::now();
+        stx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), task).await.expect("source must stop on shutdown").unwrap();
+        assert!(t0.elapsed() < Duration::from_millis(1500), "took {:?}", t0.elapsed());
+        server.abort();
     }
 
     /// End-to-end: a multipart body served from an in-process stream (via the
