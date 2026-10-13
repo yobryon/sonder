@@ -18,7 +18,13 @@ pub struct Lead {
 
 impl Default for Lead {
     fn default() -> Self {
-        Self { index: None, notes_left_in_phrase: 0, rest_until_beat: 0.0, current: None, land_on_chord_tone: false }
+        Self {
+            index: None,
+            notes_left_in_phrase: 0,
+            rest_until_beat: 0.0,
+            current: None,
+            land_on_chord_tone: false,
+        }
     }
 }
 
@@ -57,14 +63,23 @@ impl Generator for Lead {
                 continue;
             }
 
-            let lo_i = (lo..=hi).find_map(|m| h.scale.index_of_midi(m)).unwrap_or(0);
-            let hi_i = (lo..=hi).rev().find_map(|m| h.scale.index_of_midi(m)).unwrap_or(lo_i);
+            let lo_i = (lo..=hi)
+                .find_map(|m| h.scale.index_of_midi(m))
+                .unwrap_or(0);
+            let hi_i = (lo..=hi)
+                .rev()
+                .find_map(|m| h.scale.index_of_midi(m))
+                .unwrap_or(lo_i);
             let centre = (lo_i + hi_i) / 2;
             let mut idx = match self.index {
                 Some(i) => {
                     let mut step = ctx.rng.random_range(1..=max_step);
                     // Lean back toward the middle of the window.
-                    let up = if i > centre { ctx.rng.random::<f64>() < 0.35 } else { ctx.rng.random::<f64>() < 0.65 };
+                    let up = if i > centre {
+                        ctx.rng.random::<f64>() < 0.35
+                    } else {
+                        ctx.rng.random::<f64>() < 0.65
+                    };
                     if !up {
                         step = -step;
                     }
@@ -82,16 +97,30 @@ impl Generator for Lead {
             self.notes_left_in_phrase -= 1;
 
             let last_of_phrase = self.notes_left_in_phrase == 0;
-            let beats_long = if last_of_phrase { sub * 3.0 } else if ctx.rng.random::<f64>() < 0.2 { sub * 1.9 } else { sub * 0.95 };
+            let beats_long = if last_of_phrase {
+                sub * 3.0
+            } else if ctx.rng.random::<f64>() < 0.2 {
+                sub * 1.9
+            } else {
+                sub * 0.95
+            };
             if last_of_phrase {
                 self.rest_until_beat = g + beats_long + 1.0 + ctx.rng.random::<f64>() * 2.0;
             }
             if let Some(prev) = self.current.take() {
                 ctx.sink.release(prev);
             }
-            let vel = 0.4 + 0.4 * energy + if ctx.transport.in_bar(g).fract() == 0.0 { 0.08 } else { 0.0 };
+            let vel = 0.4
+                + 0.4 * energy
+                + if ctx.transport.in_bar(g).fract() == 0.0 {
+                    0.08
+                } else {
+                    0.0
+                };
             let dur = beats_long * ctx.transport.seconds_per_beat();
-            self.current = ctx.sink.play(midi as f64, vel, 0.5, Some(dur), ctx.transport.delay_to(g));
+            self.current =
+                ctx.sink
+                    .play(midi as f64, vel, 0.5, Some(dur), ctx.transport.delay_to(g));
         }
     }
 

@@ -43,7 +43,10 @@ pub struct Params<'a> {
 
 impl<'a> Params<'a> {
     pub fn new(map: &'a BTreeMap<String, f64>, density_offset: f64) -> Self {
-        Self { map, density_offset }
+        Self {
+            map,
+            density_offset,
+        }
     }
     /// A raw param if the scene mapped it (and it is finite).
     pub fn get(&self, key: &str) -> Option<f64> {
@@ -66,13 +69,13 @@ impl<'a> Params<'a> {
 /// A role's home midi window, shifted by the `register` param (±1 octave).
 pub fn register_window(role: Role, register: f64) -> (i32, i32) {
     let (lo, hi) = match role {
-        Role::Pad => (48, 72),     // C3–C5
-        Role::Drone => (26, 43),   // D1–G2
-        Role::Bass => (24, 48),    // C1–C3
-        Role::Lead => (60, 84),    // C4–C6
-        Role::Arp => (48, 72),     // C3–C5
-        Role::Pluck => (60, 84),   // C4–C6
-        Role::Bells => (72, 96),   // C5–C7
+        Role::Pad => (48, 72),   // C3–C5
+        Role::Drone => (26, 43), // D1–G2
+        Role::Bass => (24, 48),  // C1–C3
+        Role::Lead => (60, 84),  // C4–C6
+        Role::Arp => (48, 72),   // C3–C5
+        Role::Pluck => (60, 84), // C4–C6
+        Role::Bells => (72, 96), // C5–C7
         Role::Perc => (36, 60),
         Role::Texture => (36, 48), // C2–C3
     };

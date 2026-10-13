@@ -25,8 +25,8 @@ use std::collections::BTreeMap;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use sonder_core::{
-    map_keys, EngineSnapshot, LayerConfig, LayerEvent, LayerId, LayerParam, LayerSnapshot, NoteSnapshot, Role, Scene,
-    Seconds, SynthCommand, TransportPos, UserCommand,
+    map_keys, EngineSnapshot, LayerConfig, LayerEvent, LayerId, LayerParam, LayerSnapshot,
+    NoteSnapshot, Role, Scene, Seconds, SynthCommand, TransportPos, UserCommand,
 };
 
 pub use conductor::{Harmony, HarmonyChange};
@@ -47,11 +47,24 @@ pub enum ComposeError {
     #[error("conductor.mode `{0}` is not a known mode")]
     UnknownMode(String),
     #[error("layer `{layer}`: on_event.{event}.{key}: {message}")]
-    EventExpr { layer: String, event: String, key: String, message: String },
+    EventExpr {
+        layer: String,
+        event: String,
+        key: String,
+        message: String,
+    },
     #[error("layer `{layer}`: on_event.{event}.drum `{drum}` is not a drum (kick|snare|hat|click|noise|tom|rim)")]
-    UnknownDrum { layer: String, event: String, drum: String },
+    UnknownDrum {
+        layer: String,
+        event: String,
+        drum: String,
+    },
     #[error("layer `{layer}`: on_event.{event}.snap `{snap}` must be chord|scale|none")]
-    UnknownSnap { layer: String, event: String, snap: String },
+    UnknownSnap {
+        layer: String,
+        event: String,
+        snap: String,
+    },
 }
 
 /// One layer's resolved inputs for a tick.
@@ -172,12 +185,19 @@ impl Composer {
 
     /// One control tick. `now` is engine time, `dt` the seconds since the last tick.
     pub fn tick(&mut self, now: Seconds, dt: f64, input: &ComposerInput<'_>) -> ComposerOutput {
-        let mut out = ComposerOutput { commands: std::mem::take(&mut self.queued), notes: Vec::new() };
+        let mut out = ComposerOutput {
+            commands: std::mem::take(&mut self.queued),
+            notes: Vec::new(),
+        };
         self.last_now = now;
         if self.paused {
             return out;
         }
-        let dt = if dt.is_finite() && dt > 0.0 { dt.min(1.0) } else { 0.0 };
+        let dt = if dt.is_finite() && dt > 0.0 {
+            dt.min(1.0)
+        } else {
+            0.0
+        };
         let empty = LayerInput::default();
 
         // 1. Mood: who is saying what.
@@ -187,12 +207,20 @@ impl Composer {
             .filter(|l| !l.muted)
             .map(|l| {
                 let inp = input.layers.get(l.id.0 as usize).unwrap_or(&empty);
-                MoodSource { name: &l.cfg.name, weight: l.cfg.mood_weight, params: &inp.params, signals: &inp.signals }
+                MoodSource {
+                    name: &l.cfg.name,
+                    weight: l.cfg.mood_weight,
+                    params: &inp.params,
+                    signals: &inp.signals,
+                }
             })
             .collect();
         let any_solo = self.layers.iter().any(|l| l.soloed);
         let sources: Vec<MoodSource<'_>> = if any_solo {
-            sources.into_iter().filter(|s| self.layers.iter().any(|l| l.cfg.name == s.name && l.soloed)).collect()
+            sources
+                .into_iter()
+                .filter(|s| self.layers.iter().any(|l| l.cfg.name == s.name && l.soloed))
+                .collect()
         } else {
             sources
         };
@@ -201,7 +229,8 @@ impl Composer {
 
         // 2. Clock.
         if let Some(bpm) = self.transport.tick(dt, mood.energy) {
-            out.commands.push(SynthCommand::SetTempo { bpm: bpm as f32 });
+            out.commands
+                .push(SynthCommand::SetTempo { bpm: bpm as f32 });
         }
 
         // 3. Harmony.
@@ -215,19 +244,28 @@ impl Composer {
             if muted {
                 if !layer.muted_sent {
                     self.book.silence_layer(layer.id);
-                    out.commands.push(SynthCommand::AllNotesOff { layer: layer.id });
-                    layer.params.send(layer.id, LayerParam::Mute(true), &mut out.commands);
+                    out.commands
+                        .push(SynthCommand::AllNotesOff { layer: layer.id });
+                    layer
+                        .params
+                        .send(layer.id, LayerParam::Mute(true), &mut out.commands);
                     layer.generator.reset();
                     layer.muted_sent = true;
                 }
                 continue;
             }
             if layer.muted_sent {
-                layer.params.send(layer.id, LayerParam::Mute(false), &mut out.commands);
+                layer
+                    .params
+                    .send(layer.id, LayerParam::Mute(false), &mut out.commands);
                 layer.muted_sent = false;
             }
 
-            let events: Vec<&LayerEvent> = input.events.iter().filter(|e| e.layer == layer.id).collect();
+            let events: Vec<&LayerEvent> = input
+                .events
+                .iter()
+                .filter(|e| e.layer == layer.id)
+                .collect();
             let params = Params::new(&inp.params, self.density_offset);
             {
                 let sink = NoteSink::new(
@@ -260,7 +298,10 @@ impl Composer {
             if let Some(d) = layer.last_params.get_mut(map_keys::DENSITY) {
                 *d = (*d + self.density_offset).clamp(0.0, 1.0);
             } else if self.density_offset != 0.0 {
-                layer.last_params.insert(map_keys::DENSITY.to_string(), self.density_offset.clamp(0.0, 1.0));
+                layer.last_params.insert(
+                    map_keys::DENSITY.to_string(),
+                    self.density_offset.clamp(0.0, 1.0),
+                );
             }
         }
 
@@ -270,33 +311,57 @@ impl Composer {
     }
 
     /// Mixer-ish params every role shares. Only changed values are sent.
-    fn send_common_params(layer: &mut Layer, params: &Params<'_>, brightness: f64, out: &mut Vec<SynthCommand>) {
+    fn send_common_params(
+        layer: &mut Layer,
+        params: &Params<'_>,
+        brightness: f64,
+        out: &mut Vec<SynthCommand>,
+    ) {
         let id = layer.id;
-        let gain = params.get(map_keys::VOLUME).unwrap_or(1.0).clamp(0.0, 1.0) as f32 * layer.cfg.gain;
+        let gain =
+            params.get(map_keys::VOLUME).unwrap_or(1.0).clamp(0.0, 1.0) as f32 * layer.cfg.gain;
         layer.params.send(id, LayerParam::Gain(gain), out);
         if let Some(p) = params.get(map_keys::PAN) {
-            layer.params.send(id, LayerParam::Pan(p.clamp(0.0, 1.0) as f32), out);
+            layer
+                .params
+                .send(id, LayerParam::Pan(p.clamp(0.0, 1.0) as f32), out);
         }
         match params.get(map_keys::CUTOFF) {
-            Some(c) => layer.params.send(id, LayerParam::CutoffOctaves(((c.clamp(0.0, 1.0) - 0.5) * 4.0) as f32), out),
+            Some(c) => layer.params.send(
+                id,
+                LayerParam::CutoffOctaves(((c.clamp(0.0, 1.0) - 0.5) * 4.0) as f32),
+                out,
+            ),
             // Sustaining roles breathe with the global brightness.
             None if matches!(layer.cfg.role, Role::Pad | Role::Drone | Role::Bells) => {
-                layer.params.send(id, LayerParam::CutoffOctaves(((brightness - 0.5) * 2.0) as f32), out)
+                layer.params.send(
+                    id,
+                    LayerParam::CutoffOctaves(((brightness - 0.5) * 2.0) as f32),
+                    out,
+                )
             }
             None => {}
         }
         if let Some(r) = params.get(map_keys::RESONANCE) {
-            layer.params.send(id, LayerParam::Resonance(r.clamp(0.0, 1.0) as f32), out);
+            layer
+                .params
+                .send(id, LayerParam::Resonance(r.clamp(0.0, 1.0) as f32), out);
         }
         if let Some(r) = params.get(map_keys::REVERB) {
-            layer.params.send(id, LayerParam::ReverbSend(r.clamp(0.0, 1.0) as f32), out);
+            layer
+                .params
+                .send(id, LayerParam::ReverbSend(r.clamp(0.0, 1.0) as f32), out);
         }
         if let Some(d) = params.get(map_keys::DELAY) {
-            layer.params.send(id, LayerParam::DelaySend(d.clamp(0.0, 1.0) as f32), out);
+            layer
+                .params
+                .send(id, LayerParam::DelaySend(d.clamp(0.0, 1.0) as f32), out);
         }
         if layer.cfg.role != Role::Texture {
             if let Some(t) = params.get(map_keys::TEXTURE) {
-                layer.params.send(id, LayerParam::Texture(t.clamp(0.0, 1.0) as f32), out);
+                layer
+                    .params
+                    .send(id, LayerParam::Texture(t.clamp(0.0, 1.0) as f32), out);
             }
         }
     }
@@ -368,7 +433,8 @@ impl Composer {
         self.conductor.fill(&mut snap.harmony);
         snap.conductor_note = self.conductor.note(self.transport.bpm());
         if snap.layers.len() < self.layers.len() {
-            snap.layers.resize_with(self.layers.len(), LayerSnapshot::default);
+            snap.layers
+                .resize_with(self.layers.len(), LayerSnapshot::default);
         }
         for l in &self.layers {
             let s = &mut snap.layers[l.id.0 as usize];
@@ -419,7 +485,11 @@ mod tests {
             ("perc", Role::Perc),
             ("texture", Role::Texture),
         ] {
-            s.layers.push(LayerConfig { name: name.into(), role, ..Default::default() });
+            s.layers.push(LayerConfig {
+                name: name.into(),
+                role,
+                ..Default::default()
+            });
         }
         s
     }
@@ -428,19 +498,34 @@ mod tests {
         let mut c = Composer::new(scene, seed).unwrap();
         let mut all = Vec::new();
         let n = (seconds / 0.02) as usize;
-        let mut inputs: Vec<LayerInput> = scene.layers.iter().map(|_| LayerInput::default()).collect();
+        let mut inputs: Vec<LayerInput> =
+            scene.layers.iter().map(|_| LayerInput::default()).collect();
         for i in 0..n {
             let now = i as f64 * 0.02;
             let e = 0.5 + 0.5 * (now * 0.3).sin();
             inputs[0].params.insert(map_keys::ENERGY.into(), e);
-            inputs[0].params.insert(map_keys::BRIGHTNESS.into(), 1.0 - e);
+            inputs[0]
+                .params
+                .insert(map_keys::BRIGHTNESS.into(), 1.0 - e);
             inputs[3].params.insert(map_keys::DENSITY.into(), e);
             let mut events = Vec::new();
             if i % 7 == 0 {
                 let mut attrs = BTreeMap::new();
                 attrs.insert("lane".into(), Value::Num((i % 4) as f64));
-                events.push(LayerEvent { layer: LayerId(5), name: "car".into(), at: now, intensity: e, attrs });
-                events.push(LayerEvent { layer: LayerId(7), name: "hit".into(), at: now, intensity: e, attrs: BTreeMap::new() });
+                events.push(LayerEvent {
+                    layer: LayerId(5),
+                    name: "car".into(),
+                    at: now,
+                    intensity: e,
+                    attrs,
+                });
+                events.push(LayerEvent {
+                    layer: LayerId(7),
+                    name: "hit".into(),
+                    at: now,
+                    intensity: e,
+                    attrs: BTreeMap::new(),
+                });
             }
             if i == 500 {
                 c.handle(&UserCommand::NextMode { backwards: false });
@@ -453,7 +538,14 @@ mod tests {
             if i == 950 {
                 c.handle(&UserCommand::TogglePause);
             }
-            let out = c.tick(now, 0.02, &ComposerInput { layers: &inputs, events: &events });
+            let out = c.tick(
+                now,
+                0.02,
+                &ComposerInput {
+                    layers: &inputs,
+                    events: &events,
+                },
+            );
             all.extend(out.commands);
         }
         all
@@ -476,7 +568,11 @@ mod tests {
         let s = scene();
         let a = run(&s, 7, 20.0);
         let mut s2 = s.clone();
-        s2.layers.push(LayerConfig { name: "extra".into(), role: Role::Arp, ..Default::default() });
+        s2.layers.push(LayerConfig {
+            name: "extra".into(),
+            role: Role::Arp,
+            ..Default::default()
+        });
         let b = run(&s2, 7, 20.0);
         let strip = |v: &[SynthCommand]| -> Vec<SynthCommand> {
             v.iter()
@@ -496,7 +592,12 @@ mod tests {
         let shape = |v: Vec<SynthCommand>| -> Vec<String> {
             v.into_iter()
                 .map(|c| match c {
-                    SynthCommand::NoteOn { layer, pitch_hz, velocity, .. } => format!("on {layer} {pitch_hz:.3} {velocity:.3}"),
+                    SynthCommand::NoteOn {
+                        layer,
+                        pitch_hz,
+                        velocity,
+                        ..
+                    } => format!("on {layer} {pitch_hz:.3} {velocity:.3}"),
                     SynthCommand::NoteOff { layer, .. } => format!("off {layer}"),
                     SynthCommand::Drum { layer, drum, .. } => format!("drum {layer} {drum:?}"),
                     other => format!("{other:?}"),
@@ -511,22 +612,38 @@ mod tests {
         let s = scene();
         let mut c = Composer::new(&s, 1).unwrap();
         let inputs: Vec<LayerInput> = s.layers.iter().map(|_| LayerInput::default()).collect();
-        let input = ComposerInput { layers: &inputs, events: &[] };
+        let input = ComposerInput {
+            layers: &inputs,
+            events: &[],
+        };
         c.tick(0.0, 0.02, &input);
         assert!(!c.layer_muted(LayerId(0)));
         c.handle(&UserCommand::ToggleSolo { layer: LayerId(2) });
         assert!(c.layer_muted(LayerId(0)) && !c.layer_muted(LayerId(2)));
         let out = c.tick(0.02, 0.02, &input);
-        let offs = out.commands.iter().filter(|c| matches!(c, SynthCommand::AllNotesOff { .. })).count();
+        let offs = out
+            .commands
+            .iter()
+            .filter(|c| matches!(c, SynthCommand::AllNotesOff { .. }))
+            .count();
         assert_eq!(offs, 8, "every non-soloed layer is silenced once");
         let out = c.tick(0.04, 0.02, &input);
-        assert!(!out.commands.iter().any(|c| matches!(c, SynthCommand::AllNotesOff { .. })));
+        assert!(!out
+            .commands
+            .iter()
+            .any(|c| matches!(c, SynthCommand::AllNotesOff { .. })));
         c.handle(&UserCommand::ToggleSolo { layer: LayerId(2) });
         assert!(!c.layer_muted(LayerId(0)));
         c.handle(&UserCommand::TogglePause);
         assert!(c.is_paused());
         let out = c.tick(0.06, 0.02, &input);
-        assert_eq!(out.commands.iter().filter(|c| matches!(c, SynthCommand::AllNotesOff { .. })).count(), 9);
+        assert_eq!(
+            out.commands
+                .iter()
+                .filter(|c| matches!(c, SynthCommand::AllNotesOff { .. }))
+                .count(),
+            9
+        );
         assert!(out.notes.is_empty());
         let pos = c.transport();
         let out = c.tick(1.0, 0.94, &input);
@@ -544,9 +661,15 @@ mod tests {
     fn bad_scenes_fail_loudly() {
         let mut s = scene();
         s.conductor.mode = "zorblax".into();
-        assert!(matches!(Composer::new(&s, 0), Err(ComposeError::UnknownMode(_))));
+        assert!(matches!(
+            Composer::new(&s, 0),
+            Err(ComposeError::UnknownMode(_))
+        ));
         let mut s = scene();
         s.conductor.key = "H".into();
-        assert!(matches!(Composer::new(&s, 0), Err(ComposeError::UnknownKey(_))));
+        assert!(matches!(
+            Composer::new(&s, 0),
+            Err(ComposeError::UnknownKey(_))
+        ));
     }
 }

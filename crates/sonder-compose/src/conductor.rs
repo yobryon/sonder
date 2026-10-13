@@ -4,8 +4,12 @@ use std::collections::BTreeMap;
 
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use sonder_core::{map_keys, parse_pitch_class, ConductorConfig, Drift, HarmonySnapshot, Mood, Progression};
-use sonder_theory::{diatonic_chord, mode_by_name, modes_by_brightness, pitch_class_name, progression, Chord, Scale};
+use sonder_core::{
+    map_keys, parse_pitch_class, ConductorConfig, Drift, HarmonySnapshot, Mood, Progression,
+};
+use sonder_theory::{
+    diatonic_chord, mode_by_name, modes_by_brightness, pitch_class_name, progression, Chord, Scale,
+};
 
 use crate::ComposeError;
 
@@ -76,12 +80,18 @@ pub struct Conductor {
 
 impl Conductor {
     pub fn new(cfg: &ConductorConfig, seed: u64) -> Result<Self, ComposeError> {
-        let tonic = parse_pitch_class(&cfg.key).ok_or_else(|| ComposeError::UnknownKey(cfg.key.clone()))?;
-        let mode = mode_by_name(&cfg.mode).ok_or_else(|| ComposeError::UnknownMode(cfg.mode.clone()))?;
+        let tonic =
+            parse_pitch_class(&cfg.key).ok_or_else(|| ComposeError::UnknownKey(cfg.key.clone()))?;
+        let mode =
+            mode_by_name(&cfg.mode).ok_or_else(|| ComposeError::UnknownMode(cfg.mode.clone()))?;
         let home_mode = mode.name;
         let scale = Scale::new(tonic, mode);
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
-        let baseline = Mood { energy: cfg.mood_baseline[0], tension: cfg.mood_baseline[1], brightness: cfg.mood_baseline[2] };
+        let baseline = Mood {
+            energy: cfg.mood_baseline[0],
+            tension: cfg.mood_baseline[1],
+            brightness: cfg.mood_baseline[2],
+        };
         let chord = diatonic_chord(&scale, 0, Self::extensions_for(baseline.tension));
         let bpb = cfg.beats_per_bar.max(1) as f64;
         let chord_beats = (cfg.bars_per_chord.max(0.25)) * bpb;
@@ -90,7 +100,11 @@ impl Conductor {
             chord,
             scale_pcs: Vec::new(),
             chord_pcs: Vec::new(),
-            change: HarmonyChange { chord: true, tonic: true, mode: true },
+            change: HarmonyChange {
+                chord: true,
+                tonic: true,
+                mode: true,
+            },
             beats_to_change: chord_beats,
         };
         harmony.refresh();
@@ -149,7 +163,10 @@ impl Conductor {
             if s.weight <= 0.0 {
                 continue;
             }
-            for (i, key) in [map_keys::ENERGY, map_keys::TENSION, map_keys::BRIGHTNESS].iter().enumerate() {
+            for (i, key) in [map_keys::ENERGY, map_keys::TENSION, map_keys::BRIGHTNESS]
+                .iter()
+                .enumerate()
+            {
                 if let Some(v) = s.params.get(*key).copied().filter(|v| v.is_finite()) {
                     let v = v.clamp(0.0, 1.0);
                     sum[i] += v * s.weight;
@@ -171,9 +188,21 @@ impl Conductor {
             }
         }
         let target = Mood {
-            energy: if wsum[0] > 0.0 { sum[0] / wsum[0] } else { self.cfg.mood_baseline[0] },
-            tension: if wsum[1] > 0.0 { sum[1] / wsum[1] } else { self.cfg.mood_baseline[1] },
-            brightness: if wsum[2] > 0.0 { sum[2] / wsum[2] } else { self.cfg.mood_baseline[2] },
+            energy: if wsum[0] > 0.0 {
+                sum[0] / wsum[0]
+            } else {
+                self.cfg.mood_baseline[0]
+            },
+            tension: if wsum[1] > 0.0 {
+                sum[1] / wsum[1]
+            } else {
+                self.cfg.mood_baseline[1]
+            },
+            brightness: if wsum[2] > 0.0 {
+                sum[2] / wsum[2]
+            } else {
+                self.cfg.mood_baseline[2]
+            },
         };
         self.energy_driver = best_driver.map(|(_, n)| n).unwrap_or_default();
         let tau = self.cfg.mood_smoothing.max(0.05);
@@ -207,7 +236,11 @@ impl Conductor {
             self.next_change_beat = next;
         }
         if change.any() {
-            self.harmony.chord = diatonic_chord(&self.harmony.scale, self.chord_degree, Self::extensions_for(self.mood.tension));
+            self.harmony.chord = diatonic_chord(
+                &self.harmony.scale,
+                self.chord_degree,
+                Self::extensions_for(self.mood.tension),
+            );
             self.harmony.refresh();
         }
         self.harmony.change = change;
@@ -220,8 +253,12 @@ impl Conductor {
         let n = self.harmony.scale.len() as u8;
         self.chord_degree = match self.cfg.progression {
             Progression::Static => self.chord_degree,
-            Progression::Functional => progression::functional_next(self.chord_degree, tension, &mut self.rng) % n.max(1),
-            Progression::Modal => progression::modal_next(self.chord_degree, tension, &mut self.rng) % n.max(1),
+            Progression::Functional => {
+                progression::functional_next(self.chord_degree, tension, &mut self.rng) % n.max(1)
+            }
+            Progression::Modal => {
+                progression::modal_next(self.chord_degree, tension, &mut self.rng) % n.max(1)
+            }
         };
     }
 
@@ -238,7 +275,9 @@ impl Conductor {
     }
 
     fn current_mode_index(&self) -> Option<usize> {
-        modes_by_brightness().iter().position(|&m| m == self.harmony.scale.mode.name)
+        modes_by_brightness()
+            .iter()
+            .position(|&m| m == self.harmony.scale.mode.name)
     }
 
     /// Returns true if the mode or tonic changed. Sets `harmony.change` bits.
@@ -252,11 +291,14 @@ impl Conductor {
         if bars_since < self.mode_cooldown_bars {
             return false;
         }
-        let (Some(desired), Some(current)) = (self.desired_mode_index(), self.current_mode_index()) else {
+        let (Some(desired), Some(current)) = (self.desired_mode_index(), self.current_mode_index())
+        else {
             return false;
         };
         if desired != current {
-            if let Some(next) = progression::modal_shift(self.harmony.scale.mode.name, desired > current) {
+            if let Some(next) =
+                progression::modal_shift(self.harmony.scale.mode.name, desired > current)
+            {
                 if let Some(mode) = mode_by_name(next) {
                     self.harmony.scale.mode = mode;
                     self.harmony.change.mode = true;
@@ -292,7 +334,11 @@ impl Conductor {
     pub fn step_mode(&mut self, backwards: bool) {
         let order = modes_by_brightness();
         let idx = self.current_mode_index().unwrap_or(3);
-        let next = if backwards { (idx + order.len() - 1) % order.len() } else { (idx + 1) % order.len() };
+        let next = if backwards {
+            (idx + order.len() - 1) % order.len()
+        } else {
+            (idx + 1) % order.len()
+        };
         if let Some(mode) = mode_by_name(order[next]) {
             self.home_mode = mode.name;
             self.harmony.scale.mode = mode;
@@ -324,9 +370,17 @@ impl Conductor {
                 "→"
             }
         };
-        let driver = if self.energy_driver.is_empty() { String::new() } else { format!(" ({})", self.energy_driver) };
+        let driver = if self.energy_driver.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", self.energy_driver)
+        };
         let bars = self.chord_beats / self.cfg.beats_per_bar.max(1) as f64;
-        let bars_s = if (bars - bars.round()).abs() < 1e-9 { format!("{}", bars as i64) } else { format!("{bars:.1}") };
+        let bars_s = if (bars - bars.round()).abs() < 1e-9 {
+            format!("{}", bars as i64)
+        } else {
+            format!("{bars:.1}")
+        };
         let mut s = format!(
             "energy {:.2} {}{} → tempo {:.0}; tension {:.2} → {} for {} bar{}",
             self.mood.energy,
@@ -344,11 +398,16 @@ impl Conductor {
             _ => match (self.desired_mode_index(), self.current_mode_index()) {
                 (Some(d), Some(c)) if d != c => {
                     let bpb = self.cfg.beats_per_bar.max(1) as f64;
-                    let bars_since = (self.harmony_beats_estimate() - self.last_mode_change_beat) / bpb;
+                    let bars_since =
+                        (self.harmony_beats_estimate() - self.last_mode_change_beat) / bpb;
                     let left = (self.mode_cooldown_bars - bars_since).max(0.0).ceil();
                     let dir = if d > c { "rising" } else { "falling" };
                     let target = modes_by_brightness()[if d > c { c + 1 } else { c - 1 }];
-                    s.push_str(&format!("; brightness {dir} → {target} in ~{left:.0} bars"));
+                    if left < 1.0 {
+                        s.push_str(&format!("; brightness {dir} → {target} at the next chord"));
+                    } else {
+                        s.push_str(&format!("; brightness {dir} → {target} in ~{left:.0} bars"));
+                    }
                 }
                 _ => s.push_str(&format!(
                     "; brightness {:.2} {} → {}",
@@ -395,7 +454,11 @@ mod tests {
         assert!((c.harmony.beats_to_change - 3.9).abs() < 1e-9);
         c.next_chord();
         assert!(c.tick(4.2).chord);
-        assert!(c.harmony.chord_pcs.iter().all(|pc| c.harmony.scale_pcs.contains(pc)));
+        assert!(c
+            .harmony
+            .chord_pcs
+            .iter()
+            .all(|pc| c.harmony.scale_pcs.contains(pc)));
     }
 
     #[test]
@@ -404,7 +467,15 @@ mod tests {
         let bright = BTreeMap::from([(map_keys::BRIGHTNESS.to_string(), 1.0)]);
         let sig = BTreeMap::new();
         for i in 0..5000 {
-            c.update_mood(&[MoodSource { name: "a", weight: 1.0, params: &bright, signals: &sig }], 0.02);
+            c.update_mood(
+                &[MoodSource {
+                    name: "a",
+                    weight: 1.0,
+                    params: &bright,
+                    signals: &sig,
+                }],
+                0.02,
+            );
             c.tick(i as f64 * 0.02 * 2.0);
         }
         assert_eq!(c.harmony.scale.mode.name, "lydian");
@@ -421,14 +492,26 @@ mod tests {
         let mut seen = vec![c.harmony.scale.mode.name];
         let mut beats = 0.0;
         for _ in 0..20000 {
-            c.update_mood(&[MoodSource { name: "a", weight: 1.0, params: &dark, signals: &sig }], 0.02);
+            c.update_mood(
+                &[MoodSource {
+                    name: "a",
+                    weight: 1.0,
+                    params: &dark,
+                    signals: &sig,
+                }],
+                0.02,
+            );
             beats += 0.02 * 2.0;
             let ch = c.tick(beats);
             if ch.mode {
                 seen.push(c.harmony.scale.mode.name);
             }
         }
-        assert_eq!(seen, vec!["ionian", "mixolydian", "dorian"], "two steps darker, one at a time");
+        assert_eq!(
+            seen,
+            vec!["ionian", "mixolydian", "dorian"],
+            "two steps darker, one at a time"
+        );
     }
 
     #[test]
@@ -441,14 +524,27 @@ mod tests {
         for _ in 0..2000 {
             c.update_mood(
                 &[
-                    MoodSource { name: "loud", weight: 3.0, params: &a, signals: &sig_a },
-                    MoodSource { name: "quiet", weight: 1.0, params: &b, signals: &sig },
+                    MoodSource {
+                        name: "loud",
+                        weight: 3.0,
+                        params: &a,
+                        signals: &sig_a,
+                    },
+                    MoodSource {
+                        name: "quiet",
+                        weight: 1.0,
+                        params: &b,
+                        signals: &sig,
+                    },
                 ],
                 0.02,
             );
         }
         assert!((c.mood().energy - 0.75).abs() < 0.01);
-        assert!((c.mood().tension - 0.3).abs() < 1e-6, "baseline when nobody contributes");
+        assert!(
+            (c.mood().tension - 0.3).abs() < 1e-6,
+            "baseline when nobody contributes"
+        );
         assert!(c.note(70.0).contains("(loud.density)"), "{}", c.note(70.0));
     }
 

@@ -41,7 +41,11 @@ impl Voicing {
 
     /// Total absolute motion in semitones between two voicings of equal size.
     pub fn motion_to(&self, other: &Voicing) -> i32 {
-        self.0.iter().zip(&other.0).map(|(a, b)| (a - b).abs()).sum()
+        self.0
+            .iter()
+            .zip(&other.0)
+            .map(|(a, b)| (a - b).abs())
+            .sum()
     }
 }
 
@@ -139,12 +143,28 @@ pub fn voice_lead(from: &Voicing, to_pcs: &[u8], lo: i32, hi: i32, n: usize) -> 
             }
         }
     }
-    let mut s = Search { n, k, cost: &cost, best_total: i32::MAX, best: Vec::new(), current: Vec::new(), used: vec![0; k] };
+    let mut s = Search {
+        n,
+        k,
+        cost: &cost,
+        best_total: i32::MAX,
+        best: Vec::new(),
+        current: Vec::new(),
+        used: vec![0; k],
+    };
     s.go(0, 0);
-    let assignment = if s.best.len() == n { s.best } else { (0..n).map(|v| v % k).collect() };
+    let assignment = if s.best.len() == n {
+        s.best
+    } else {
+        (0..n).map(|v| v % k).collect()
+    };
 
     // Realise notes; avoid two voices landing on the same midi note.
-    let mut notes: Vec<i32> = assignment.iter().enumerate().map(|(v, &p)| best_note[v][p]).collect();
+    let mut notes: Vec<i32> = assignment
+        .iter()
+        .enumerate()
+        .map(|(v, &p)| best_note[v][p])
+        .collect();
     for v in 0..n {
         let pc = pcs[assignment[v]];
         let mut tries = 0;

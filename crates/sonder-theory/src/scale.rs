@@ -4,10 +4,18 @@ use crate::mode::Mode;
 
 /// Spell a pitch class with sharps or flats.
 pub fn pitch_class_name(pc: u8, flats: bool) -> &'static str {
-    const SHARPS: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-    const FLATS: [&str; 12] = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
+    const SHARPS: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    const FLATS: [&str; 12] = [
+        "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B",
+    ];
     let i = (pc % 12) as usize;
-    if flats { FLATS[i] } else { SHARPS[i] }
+    if flats {
+        FLATS[i]
+    } else {
+        SHARPS[i]
+    }
 }
 
 /// A concrete scale: a tonic pitch class and a [`Mode`].
@@ -20,7 +28,10 @@ pub struct Scale {
 
 impl Scale {
     pub fn new(tonic: u8, mode: Mode) -> Self {
-        Self { tonic: tonic % 12, mode }
+        Self {
+            tonic: tonic % 12,
+            mode,
+        }
     }
 
     /// Number of degrees in the scale.
@@ -59,7 +70,11 @@ impl Scale {
 
     /// Pitch classes ascending from the tonic (the tonic comes first).
     pub fn pitch_classes(&self) -> Vec<u8> {
-        self.mode.steps.iter().map(|s| (self.tonic + s) % 12).collect()
+        self.mode
+            .steps
+            .iter()
+            .map(|s| (self.tonic + s) % 12)
+            .collect()
     }
 
     /// Pitch class of a (possibly out-of-range) degree.
@@ -116,7 +131,11 @@ impl Scale {
 
     /// "D lydian"
     pub fn name(&self) -> String {
-        format!("{} {}", pitch_class_name(self.tonic, self.prefers_flats()), self.mode.name)
+        format!(
+            "{} {}",
+            pitch_class_name(self.tonic, self.prefers_flats()),
+            self.mode.name
+        )
     }
 }
 
@@ -133,7 +152,10 @@ mod tests {
     fn pitch_classes_from_tonic() {
         assert_eq!(d_lydian().pitch_classes(), vec![2, 4, 6, 8, 9, 11, 1]);
         assert_eq!(d_lydian().name(), "D lydian");
-        assert_eq!(Scale::new(10, mode_by_name("major").unwrap()).name(), "Bb ionian");
+        assert_eq!(
+            Scale::new(10, mode_by_name("major").unwrap()).name(),
+            "Bb ionian"
+        );
     }
 
     #[test]

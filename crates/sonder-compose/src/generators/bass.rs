@@ -14,7 +14,14 @@ pub struct Bass {
 }
 
 impl Bass {
-    fn hit(&mut self, ctx: &mut GenCtx<'_>, midi: i32, velocity: f64, beats_long: f64, at_beat: f64) {
+    fn hit(
+        &mut self,
+        ctx: &mut GenCtx<'_>,
+        midi: i32,
+        velocity: f64,
+        beats_long: f64,
+        at_beat: f64,
+    ) {
         if let Some(prev) = self.current.take() {
             ctx.sink.release(prev);
         }
@@ -34,7 +41,10 @@ impl Generator for Bass {
         let energy = ctx.mood.energy;
         let (lo, hi) = register_window(Role::Bass, ctx.params.register());
         let root_pc = h.root_pc();
-        let root = Quantizer::in_register(&[root_pc], 0.45, lo, hi);
+        // Roots live in the upper-middle of the window (A1–G#2 by default): a
+        // bass line, not a sub rumble.
+        let root =
+            Quantizer::nearest_in(&[root_pc], lo as f64 + (hi - lo) as f64 * 0.58).clamp(lo, hi);
         let fifth = Quantizer::nearest_in(&h.scale_pcs, root as f64 + 7.0);
         let octave = if root + 12 <= hi { root + 12 } else { root };
         let bpb = ctx.transport.beats_per_bar() as f64;
@@ -61,14 +71,23 @@ impl Generator for Bass {
                 // Pickup into the downbeat: approach the root from the scale note below.
                 if (p - (bpb - 0.5)).abs() < 1e-6 {
                     let below = Quantizer::nearest_in(&h.scale_pcs, root as f64 - 1.5);
-                    let approach = if below == root { Quantizer::nearest_in(&h.scale_pcs, root as f64 - 3.0) } else { below };
+                    let approach = if below == root {
+                        Quantizer::nearest_in(&h.scale_pcs, root as f64 - 3.0)
+                    } else {
+                        below
+                    };
                     self.hit(ctx, approach, base_vel * 0.7, 0.45, g);
                 } else if density > 0.75 && ctx.rng.random::<f64>() < 0.6 {
                     // Syncopation: offbeat octave / passing tones.
                     let third = Quantizer::nearest_in(&h.scale_pcs, root as f64 + 3.5);
-                    let pick = if ctx.rng.random::<f64>() < 0.5 { octave } else { third };
+                    let pick = if ctx.rng.random::<f64>() < 0.5 {
+                        octave
+                    } else {
+                        third
+                    };
                     self.hit(ctx, pick, base_vel * 0.65, 0.4, g);
-                } else if (p - (mid - 0.5)).abs() < 1e-6 && ctx.rng.random::<f64>() < density * 0.5 {
+                } else if (p - (mid - 0.5)).abs() < 1e-6 && ctx.rng.random::<f64>() < density * 0.5
+                {
                     // Passing tone walking root → fifth.
                     let third = Quantizer::nearest_in(&h.scale_pcs, root as f64 + 3.5);
                     self.hit(ctx, third, base_vel * 0.6, 0.45, g);

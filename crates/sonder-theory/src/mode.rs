@@ -38,18 +38,48 @@ struct ModeDef {
 }
 
 const MODES: &[ModeDef] = &[
-    ModeDef { name: "lydian", aliases: &[], steps: &[0, 2, 4, 6, 7, 9, 11], brightness: 3 },
-    ModeDef { name: "ionian", aliases: &["major", "maj"], steps: &[0, 2, 4, 5, 7, 9, 11], brightness: 2 },
-    ModeDef { name: "mixolydian", aliases: &["dominant"], steps: &[0, 2, 4, 5, 7, 9, 10], brightness: 1 },
-    ModeDef { name: "dorian", aliases: &[], steps: &[0, 2, 3, 5, 7, 9, 10], brightness: 0 },
+    ModeDef {
+        name: "lydian",
+        aliases: &[],
+        steps: &[0, 2, 4, 6, 7, 9, 11],
+        brightness: 3,
+    },
+    ModeDef {
+        name: "ionian",
+        aliases: &["major", "maj"],
+        steps: &[0, 2, 4, 5, 7, 9, 11],
+        brightness: 2,
+    },
+    ModeDef {
+        name: "mixolydian",
+        aliases: &["dominant"],
+        steps: &[0, 2, 4, 5, 7, 9, 10],
+        brightness: 1,
+    },
+    ModeDef {
+        name: "dorian",
+        aliases: &[],
+        steps: &[0, 2, 3, 5, 7, 9, 10],
+        brightness: 0,
+    },
     ModeDef {
         name: "aeolian",
         aliases: &["minor", "min", "natural_minor"],
         steps: &[0, 2, 3, 5, 7, 8, 10],
         brightness: -1,
     },
-    ModeDef { name: "phrygian", aliases: &[], steps: &[0, 1, 3, 5, 7, 8, 10], brightness: -2 },
-    ModeDef { name: "locrian", aliases: &[], steps: &[0, 1, 3, 5, 6, 8, 10], brightness: -3 },
+    ModeDef {
+        name: "phrygian",
+        aliases: &[],
+        steps: &[0, 1, 3, 5, 7, 8, 10],
+        brightness: -2,
+    },
+    ModeDef {
+        name: "locrian",
+        aliases: &[],
+        steps: &[0, 1, 3, 5, 6, 8, 10],
+        brightness: -3,
+    },
     ModeDef {
         name: "major_pentatonic",
         aliases: &["pentatonic", "pentatonic_major"],
@@ -62,12 +92,42 @@ const MODES: &[ModeDef] = &[
         steps: &[0, 3, 5, 7, 10],
         brightness: -1,
     },
-    ModeDef { name: "whole_tone", aliases: &["wholetone"], steps: &[0, 2, 4, 6, 8, 10], brightness: 3 },
-    ModeDef { name: "harmonic_minor", aliases: &[], steps: &[0, 2, 3, 5, 7, 8, 11], brightness: -1 },
-    ModeDef { name: "melodic_minor", aliases: &["jazz_minor"], steps: &[0, 2, 3, 5, 7, 9, 11], brightness: 0 },
-    ModeDef { name: "blues", aliases: &["blues_minor"], steps: &[0, 3, 5, 6, 7, 10], brightness: -1 },
-    ModeDef { name: "hirajoshi", aliases: &[], steps: &[0, 2, 3, 7, 8], brightness: -2 },
-    ModeDef { name: "in_sen", aliases: &["insen"], steps: &[0, 1, 5, 7, 10], brightness: -2 },
+    ModeDef {
+        name: "whole_tone",
+        aliases: &["wholetone"],
+        steps: &[0, 2, 4, 6, 8, 10],
+        brightness: 3,
+    },
+    ModeDef {
+        name: "harmonic_minor",
+        aliases: &[],
+        steps: &[0, 2, 3, 5, 7, 8, 11],
+        brightness: -1,
+    },
+    ModeDef {
+        name: "melodic_minor",
+        aliases: &["jazz_minor"],
+        steps: &[0, 2, 3, 5, 7, 9, 11],
+        brightness: 0,
+    },
+    ModeDef {
+        name: "blues",
+        aliases: &["blues_minor"],
+        steps: &[0, 3, 5, 6, 7, 10],
+        brightness: -1,
+    },
+    ModeDef {
+        name: "hirajoshi",
+        aliases: &[],
+        steps: &[0, 2, 3, 7, 8],
+        brightness: -2,
+    },
+    ModeDef {
+        name: "in_sen",
+        aliases: &["insen"],
+        steps: &[0, 1, 5, 7, 10],
+        brightness: -2,
+    },
     ModeDef {
         name: "chromatic",
         aliases: &[],
@@ -77,8 +137,15 @@ const MODES: &[ModeDef] = &[
 ];
 
 /// The seven diatonic modes, darkest first.
-const DIATONIC_BY_BRIGHTNESS: &[&str] =
-    &["locrian", "phrygian", "aeolian", "dorian", "mixolydian", "ionian", "lydian"];
+const DIATONIC_BY_BRIGHTNESS: &[&str] = &[
+    "locrian",
+    "phrygian",
+    "aeolian",
+    "dorian",
+    "mixolydian",
+    "ionian",
+    "lydian",
+];
 
 /// Normalize user spelling: case-insensitive, `-`/space → `_`.
 fn normalize(s: &str) -> String {
@@ -91,7 +158,11 @@ pub fn mode_by_name(s: &str) -> Option<Mode> {
     MODES
         .iter()
         .find(|m| m.name == key || m.aliases.contains(&key.as_str()))
-        .map(|m| Mode { name: m.name, steps: m.steps.to_vec(), brightness: m.brightness })
+        .map(|m| Mode {
+            name: m.name,
+            steps: m.steps.to_vec(),
+            brightness: m.brightness,
+        })
 }
 
 /// The seven diatonic modes ordered darkest → brightest:
@@ -108,13 +179,19 @@ mod tests {
     fn aliases_resolve() {
         assert_eq!(mode_by_name("major").unwrap().name, "ionian");
         assert_eq!(mode_by_name("Minor").unwrap().name, "aeolian");
-        assert_eq!(mode_by_name("minor-pentatonic").unwrap().steps, vec![0, 3, 5, 7, 10]);
+        assert_eq!(
+            mode_by_name("minor-pentatonic").unwrap().steps,
+            vec![0, 3, 5, 7, 10]
+        );
         assert!(mode_by_name("klingon").is_none());
     }
 
     #[test]
     fn brightness_is_monotonic_over_diatonic_modes() {
-        let ranks: Vec<i8> = modes_by_brightness().iter().map(|n| mode_by_name(n).unwrap().brightness).collect();
+        let ranks: Vec<i8> = modes_by_brightness()
+            .iter()
+            .map(|n| mode_by_name(n).unwrap().brightness)
+            .collect();
         assert_eq!(ranks, vec![-3, -2, -1, 0, 1, 2, 3]);
     }
 

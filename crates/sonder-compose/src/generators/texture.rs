@@ -15,9 +15,29 @@ impl Generator for Texture {
     fn tick(&mut self, ctx: &mut GenCtx<'_>) {
         let h = ctx.harmony;
         let (lo, hi) = register_window(Role::Texture, ctx.params.register());
-        let texture = ctx.params.get(map_keys::TEXTURE).unwrap_or(0.3 + 0.4 * ctx.mood.energy).clamp(0.0, 1.0);
-        let want = if texture > 0.5 { 2 } else { 1 };
-        let alive = !self.notes.is_empty() && self.notes.iter().all(|(id, _)| ctx.sink.is_live(*id));
+        let texture = ctx
+            .params
+            .get(map_keys::TEXTURE)
+            .unwrap_or(0.3 + 0.4 * ctx.mood.energy)
+            .clamp(0.0, 1.0);
+        let want = match self.notes.len() {
+            2 => {
+                if texture > 0.45 {
+                    2
+                } else {
+                    1
+                }
+            }
+            _ => {
+                if texture > 0.55 {
+                    2
+                } else {
+                    1
+                }
+            }
+        };
+        let alive =
+            !self.notes.is_empty() && self.notes.iter().all(|(id, _)| ctx.sink.is_live(*id));
         if self.tonic != Some(h.scale.tonic) || !alive || self.notes.len() != want {
             for (id, _) in self.notes.drain(..) {
                 ctx.sink.release(id);

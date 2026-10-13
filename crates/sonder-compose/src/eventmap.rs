@@ -79,15 +79,22 @@ pub struct Mapping {
 }
 
 impl Mapping {
-    fn compile(layer: &str, event: &str, table: &BTreeMap<String, String>, signals: &[String]) -> Result<Self, ComposeError> {
+    fn compile(
+        layer: &str,
+        event: &str,
+        table: &BTreeMap<String, String>,
+        signals: &[String],
+    ) -> Result<Self, ComposeError> {
         let expr = |key: &str| -> Result<Option<EventExpr>, ComposeError> {
             match table.get(key) {
                 None => Ok(None),
-                Some(src) => EventExpr::compile(src, signals).map(Some).map_err(|e| ComposeError::EventExpr {
-                    layer: layer.to_string(),
-                    event: event.to_string(),
-                    key: key.to_string(),
-                    message: e.to_string(),
+                Some(src) => EventExpr::compile(src, signals).map(Some).map_err(|e| {
+                    ComposeError::EventExpr {
+                        layer: layer.to_string(),
+                        event: event.to_string(),
+                        key: key.to_string(),
+                        message: e.to_string(),
+                    }
                 }),
             }
         };
@@ -128,14 +135,30 @@ impl Mapping {
         })
     }
 
-    fn eval(&self, ev: &LayerEvent, signals: &BTreeMap<String, f64>, time: Seconds, beat: f64) -> Trigger {
-        let ctx = EventCtx { intensity: ev.intensity, attrs: &ev.attrs, signals, time, beat };
+    fn eval(
+        &self,
+        ev: &LayerEvent,
+        signals: &BTreeMap<String, f64>,
+        time: Seconds,
+        beat: f64,
+    ) -> Trigger {
+        let ctx = EventCtx {
+            intensity: ev.intensity,
+            attrs: &ev.attrs,
+            signals,
+            time,
+            beat,
+        };
         let mut t = Trigger::default_for(ev);
         let ev01 = |e: &Option<EventExpr>, fallback: f64| -> f64 {
             match e {
                 Some(x) => {
                     let v = x.eval(&ctx);
-                    if v.is_finite() { v.clamp(0.0, 1.0) } else { fallback }
+                    if v.is_finite() {
+                        v.clamp(0.0, 1.0)
+                    } else {
+                        fallback
+                    }
                 }
                 None => fallback,
             }
@@ -186,7 +209,13 @@ impl LayerMappings {
 
     /// Resolve an event to a trigger: named mapping, else wildcard, else the
     /// role default.
-    pub fn trigger(&self, ev: &LayerEvent, signals: &BTreeMap<String, f64>, time: Seconds, beat: f64) -> Trigger {
+    pub fn trigger(
+        &self,
+        ev: &LayerEvent,
+        signals: &BTreeMap<String, f64>,
+        time: Seconds,
+        beat: f64,
+    ) -> Trigger {
         let m = self.by_name.get(&ev.name).or(self.wildcard.as_ref());
         match m {
             Some(m) => m.eval(ev, signals, time, beat),
@@ -211,12 +240,22 @@ mod tests {
     fn ev(name: &str, intensity: f64) -> LayerEvent {
         let mut attrs = BTreeMap::new();
         attrs.insert("lane".to_string(), Value::Num(2.0));
-        LayerEvent { layer: LayerId(0), name: name.into(), at: 1.0, intensity, attrs }
+        LayerEvent {
+            layer: LayerId(0),
+            name: name.into(),
+            at: 1.0,
+            intensity,
+            attrs,
+        }
     }
 
     #[test]
     fn specific_beats_wildcard_beats_default() {
-        let mut cfg = LayerConfig { name: "l".into(), role: Role::Pluck, ..Default::default() };
+        let mut cfg = LayerConfig {
+            name: "l".into(),
+            role: Role::Pluck,
+            ..Default::default()
+        };
         let mut car = BTreeMap::new();
         car.insert("pitch".to_string(), "attr('lane') / 4".to_string());
         car.insert("quantize".to_string(), "1/16".to_string());
@@ -243,12 +282,21 @@ mod tests {
 
     #[test]
     fn errors_name_the_offending_key() {
-        let mut cfg = LayerConfig { name: "l".into(), ..Default::default() };
+        let mut cfg = LayerConfig {
+            name: "l".into(),
+            ..Default::default()
+        };
         let mut bad = BTreeMap::new();
         bad.insert("drum".to_string(), "cowbell".to_string());
         cfg.on_event.insert("hit".into(), bad);
-        assert!(matches!(LayerMappings::compile(&cfg), Err(ComposeError::UnknownDrum { .. })));
-        let mut cfg = LayerConfig { name: "l".into(), ..Default::default() };
+        assert!(matches!(
+            LayerMappings::compile(&cfg),
+            Err(ComposeError::UnknownDrum { .. })
+        ));
+        let mut cfg = LayerConfig {
+            name: "l".into(),
+            ..Default::default()
+        };
         let mut bad = BTreeMap::new();
         bad.insert("pitch".to_string(), "nope(".to_string());
         cfg.on_event.insert("hit".into(), bad);

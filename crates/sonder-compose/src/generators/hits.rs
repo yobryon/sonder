@@ -27,20 +27,32 @@ impl Generator for Hits {
         let chance_scale = ctx.params.density(1.0);
         for ev in ctx.events {
             let t = ctx.mappings.trigger(ev, ctx.signals, ctx.now, beats);
-            let p = t.chance * if chance_scale < 1.0 { 0.5 + 0.5 * chance_scale } else { 1.0 };
+            let p = t.chance
+                * if chance_scale < 1.0 {
+                    0.5 + 0.5 * chance_scale
+                } else {
+                    1.0
+                };
             if p < 1.0 && ctx.rng.random::<f64>() >= p {
                 continue;
             }
             let midi = match t.snap {
-                Snap::Chord if !h.chord_pcs.is_empty() => Quantizer::in_register(&h.chord_pcs, t.pitch, lo, hi) as f64,
-                Snap::Chord | Snap::Scale => Quantizer::in_register(&h.scale_pcs, t.pitch, lo, hi) as f64,
+                Snap::Chord if !h.chord_pcs.is_empty() => {
+                    Quantizer::in_register(&h.chord_pcs, t.pitch, lo, hi) as f64
+                }
+                Snap::Chord | Snap::Scale => {
+                    Quantizer::in_register(&h.scale_pcs, t.pitch, lo, hi) as f64
+                }
                 Snap::None => lo as f64 + (hi - lo) as f64 * t.pitch,
             };
             let delay = match t.quantize {
                 Some(grid) => ctx.transport.delay_to(Transport::next_grid(beats, grid)),
                 None => 0.0,
             };
-            let length = t.length_beats.unwrap_or_else(|| default_length_beats(self.role)) * spb;
+            let length = t
+                .length_beats
+                .unwrap_or_else(|| default_length_beats(self.role))
+                * spb;
             ctx.sink.play(midi, t.velocity, t.pan, Some(length), delay);
         }
     }

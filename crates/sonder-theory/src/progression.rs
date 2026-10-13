@@ -79,7 +79,11 @@ pub fn modal_shift(mode_name: &str, brighter: bool) -> Option<&'static str> {
     let canonical = mode_by_name(mode_name)?.name;
     let order = modes_by_brightness();
     let i = order.iter().position(|&m| m == canonical)?;
-    if brighter { order.get(i + 1).copied() } else { i.checked_sub(1).map(|j| order[j]) }
+    if brighter {
+        order.get(i + 1).copied()
+    } else {
+        i.checked_sub(1).map(|j| order[j])
+    }
 }
 
 #[cfg(test)]
@@ -108,19 +112,30 @@ mod tests {
     fn dominant_resolves_to_tonic_mostly() {
         let mut rng = ChaCha8Rng::seed_from_u64(1);
         let n = 2000;
-        let to_tonic = (0..n).filter(|_| functional_next(4, 0.0, &mut rng) == 0).count();
+        let to_tonic = (0..n)
+            .filter(|_| functional_next(4, 0.0, &mut rng) == 0)
+            .count();
         assert!(to_tonic > n / 3, "V→I {to_tonic}/{n}");
         let mut rng = ChaCha8Rng::seed_from_u64(1);
-        let to_tonic_tense = (0..n).filter(|_| functional_next(4, 1.0, &mut rng) == 0).count();
-        assert!(to_tonic_tense < to_tonic, "tension should make V→I less inevitable");
+        let to_tonic_tense = (0..n)
+            .filter(|_| functional_next(4, 1.0, &mut rng) == 0)
+            .count();
+        assert!(
+            to_tonic_tense < to_tonic,
+            "tension should make V→I less inevitable"
+        );
     }
 
     #[test]
     fn tension_favours_dominant_and_leading_tone() {
         let mut rng = ChaCha8Rng::seed_from_u64(7);
         let n = 3000;
-        let calm = (0..n).filter(|_| matches!(functional_next(0, 0.0, &mut rng), 4 | 6)).count();
-        let tense = (0..n).filter(|_| matches!(functional_next(0, 1.0, &mut rng), 4 | 6)).count();
+        let calm = (0..n)
+            .filter(|_| matches!(functional_next(0, 0.0, &mut rng), 4 | 6))
+            .count();
+        let tense = (0..n)
+            .filter(|_| matches!(functional_next(0, 1.0, &mut rng), 4 | 6))
+            .count();
         assert!(tense > calm);
         for d in 0..7 {
             assert!(modal_next(d, 0.5, &mut rng) < 7);

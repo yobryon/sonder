@@ -28,7 +28,11 @@ impl Arp {
             2 => Pattern::UpDown,
             _ => Pattern::Random,
         };
-        Self { pattern, pos: 0, descending: false }
+        Self {
+            pattern,
+            pos: 0,
+            descending: false,
+        }
     }
 
     fn next_index(&mut self, len: usize, ctx: &mut GenCtx<'_>) -> usize {
@@ -95,11 +99,16 @@ impl Generator for Arp {
         for g in ctx.transport.grid_points(sub) {
             let i = self.next_index(notes.len(), ctx);
             let midi = notes[i];
-            let accent = if ctx.transport.in_bar(g).fract() == 0.0 { 0.1 } else { 0.0 };
+            let accent = if ctx.transport.in_bar(g).fract() == 0.0 {
+                0.1
+            } else {
+                0.0
+            };
             let vel = 0.4 + 0.35 * energy + accent;
             let pan = 0.35 + 0.3 * (i as f64 / notes.len().max(2) as f64);
             let dur = sub * 0.8 * ctx.transport.seconds_per_beat();
-            ctx.sink.play(midi as f64, vel, pan, Some(dur), ctx.transport.delay_to(g));
+            ctx.sink
+                .play(midi as f64, vel, pan, Some(dur), ctx.transport.delay_to(g));
         }
     }
 }

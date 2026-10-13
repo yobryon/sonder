@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BinaryHeap};
 
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
-use sonder_core::{midi_to_hz, Drum, LayerId, LayerParam, NoteId, NoteSnapshot, Seconds, SynthCommand};
+use sonder_core::{
+    midi_to_hz, Drum, LayerId, LayerParam, NoteId, NoteSnapshot, Seconds, SynthCommand,
+};
 
 /// Max timing jitter at humanize = 1, in seconds.
 const JITTER_S: f64 = 0.015;
@@ -23,7 +25,10 @@ struct When {
 
 impl When {
     fn new(t: Seconds, seq: u64) -> Self {
-        Self { t: t.max(0.0).to_bits(), seq }
+        Self {
+            t: t.max(0.0).to_bits(),
+            seq,
+        }
     }
     fn time(&self) -> Seconds {
         f64::from_bits(self.t)
@@ -32,8 +37,21 @@ impl When {
 
 #[derive(Debug, Clone)]
 enum Trigger {
-    NoteOn { layer: LayerId, note: NoteId, midi: f64, velocity: f32, pan: f32, duration: Option<f64> },
-    Drum { layer: LayerId, drum: Drum, velocity: f32, pan: f32, tone: f32 },
+    NoteOn {
+        layer: LayerId,
+        note: NoteId,
+        midi: f64,
+        velocity: f32,
+        pan: f32,
+        duration: Option<f64>,
+    },
+    Drum {
+        layer: LayerId,
+        drum: Drum,
+        velocity: f32,
+        pan: f32,
+        tone: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -55,7 +73,10 @@ pub struct NoteBook {
 
 impl NoteBook {
     pub fn new(layers: usize) -> Self {
-        Self { active_count: vec![0; layers], ..Default::default() }
+        Self {
+            active_count: vec![0; layers],
+            ..Default::default()
+        }
     }
 
     fn alloc(&mut self) -> NoteId {
@@ -70,25 +91,68 @@ impl NoteBook {
 
     /// Sounding notes on a layer.
     pub fn active_count(&self, layer: LayerId) -> u16 {
-        self.active_count.get(layer.0 as usize).copied().unwrap_or(0)
+        self.active_count
+            .get(layer.0 as usize)
+            .copied()
+            .unwrap_or(0)
     }
 
-    fn start(&mut self, now: Seconds, trig: Trigger, out: &mut Vec<SynthCommand>, notes: &mut Vec<NoteSnapshot>) {
+    fn start(
+        &mut self,
+        now: Seconds,
+        trig: Trigger,
+        out: &mut Vec<SynthCommand>,
+        notes: &mut Vec<NoteSnapshot>,
+    ) {
         match trig {
-            Trigger::NoteOn { layer, note, midi, velocity, pan, duration } => {
+            Trigger::NoteOn {
+                layer,
+                note,
+                midi,
+                velocity,
+                pan,
+                duration,
+            } => {
                 self.active.insert(note, Active { layer });
                 if let Some(c) = self.active_count.get_mut(layer.0 as usize) {
                     *c = c.saturating_add(1);
                 }
                 if let Some(d) = duration {
                     let seq = self.seq();
-                    self.offs.push(Reverse((When::new(now + d.max(0.0), seq), note.0)));
+                    self.offs
+                        .push(Reverse((When::new(now + d.max(0.0), seq), note.0)));
                 }
-                out.push(SynthCommand::NoteOn { layer, note, pitch_hz: midi_to_hz(midi) as f32, velocity, pan });
-                notes.push(NoteSnapshot { at: now, layer, midi: midi as f32, velocity, pan, duration, active: true });
+                out.push(SynthCommand::NoteOn {
+                    layer,
+                    note,
+                    pitch_hz: midi_to_hz(midi) as f32,
+                    velocity,
+                    pan,
+                });
+                notes.push(NoteSnapshot {
+                    at: now,
+                    layer,
+                    midi: midi as f32,
+                    velocity,
+                    pan,
+                    duration,
+                    active: true,
+                });
             }
-            Trigger::Drum { layer, drum, velocity, pan, tone } => {
-                out.push(SynthCommand::Drum { layer, drum, velocity, pan, tone });
+            Trigger::Drum {
+                layer,
+                drum,
+                velocity,
+                pan,
+                tone,
+            } => {
+                out.push(SynthCommand::Drum {
+                    layer,
+                    drum,
+                    velocity,
+                    pan,
+                    tone,
+                });
             }
         }
     }
@@ -100,10 +164,14 @@ impl NoteBook {
             if let Some(c) = self.active_count.get_mut(a.layer.0 as usize) {
                 *c = c.saturating_sub(1);
             }
-            out.push(SynthCommand::NoteOff { layer: a.layer, note });
+            out.push(SynthCommand::NoteOff {
+                layer: a.layer,
+                note,
+            });
             return;
         }
-        self.pending.retain(|(_, t)| !matches!(t, Trigger::NoteOn { note: n, .. } if *n == note));
+        self.pending
+            .retain(|(_, t)| !matches!(t, Trigger::NoteOn { note: n, .. } if *n == note));
     }
 
     /// Forget everything on a layer (the caller sends `AllNotesOff`).
@@ -128,14 +196,26 @@ impl NoteBook {
     /// Is this note sounding or about to?
     pub fn is_live(&self, note: NoteId) -> bool {
         self.active.contains_key(&note)
-            || self.pending.iter().any(|(_, t)| matches!(t, Trigger::NoteOn { note: n, .. } if *n == note))
+            || self
+                .pending
+                .iter()
+                .any(|(_, t)| matches!(t, Trigger::NoteOn { note: n, .. } if *n == note))
     }
 
     /// Emit everything due at `now`: deferred triggers first, then releases.
-    pub fn flush(&mut self, now: Seconds, out: &mut Vec<SynthCommand>, notes: &mut Vec<NoteSnapshot>) {
+    pub fn flush(
+        &mut self,
+        now: Seconds,
+        out: &mut Vec<SynthCommand>,
+        notes: &mut Vec<NoteSnapshot>,
+    ) {
         if !self.pending.is_empty() {
             self.pending.sort_by_key(|(w, _)| *w);
-            let due = self.pending.iter().take_while(|(w, _)| w.time() <= now + 1e-9).count();
+            let due = self
+                .pending
+                .iter()
+                .take_while(|(w, _)| w.time() <= now + 1e-9)
+                .count();
             let fire: Vec<(When, Trigger)> = self.pending.drain(..due).collect();
             for (w, t) in fire {
                 self.start(w.time().min(now), t, out, notes);
@@ -236,7 +316,17 @@ impl<'a> NoteSink<'a> {
         now: Seconds,
         humanize: f64,
     ) -> Self {
-        Self { book, params, out, notes, jitter, layer, now, humanize, budget: TRIGGERS_PER_TICK }
+        Self {
+            book,
+            params,
+            out,
+            notes,
+            jitter,
+            layer,
+            now,
+            humanize,
+            budget: TRIGGERS_PER_TICK,
+        }
     }
 
     /// Humanized (delay, velocity): timing only ever drifts late.
@@ -246,7 +336,10 @@ impl<'a> NoteSink<'a> {
         }
         let tj = (self.jitter.random::<f64>() * 2.0 - 1.0) * JITTER_S * self.humanize;
         let vj = (self.jitter.random::<f64>() * 2.0 - 1.0) * VEL_JITTER * self.humanize;
-        ((delay + tj).max(0.0), (velocity * (1.0 + vj)).clamp(0.0, 1.0) as f32)
+        (
+            (delay + tj).max(0.0),
+            (velocity * (1.0 + vj)).clamp(0.0, 1.0) as f32,
+        )
     }
 
     fn schedule(&mut self, delay: f64, trig: Trigger) {
@@ -254,22 +347,45 @@ impl<'a> NoteSink<'a> {
             self.book.start(self.now, trig, self.out, self.notes);
         } else {
             let seq = self.book.seq();
-            self.book.pending.push((When::new(self.now + delay, seq), trig));
+            self.book
+                .pending
+                .push((When::new(self.now + delay, seq), trig));
         }
     }
 
     /// Start a note at `midi` (may be fractional) after `delay` seconds, for
     /// `duration` seconds (None = until [`NoteSink::release`]). Returns None
     /// when this tick's trigger budget is spent.
-    pub fn play(&mut self, midi: f64, velocity: f64, pan: f64, duration: Option<f64>, delay: f64) -> Option<NoteId> {
+    pub fn play(
+        &mut self,
+        midi: f64,
+        velocity: f64,
+        pan: f64,
+        duration: Option<f64>,
+        delay: f64,
+    ) -> Option<NoteId> {
         if self.budget == 0 || !midi.is_finite() {
             return None;
         }
         self.budget -= 1;
         let (delay, velocity) = self.humanize(delay, velocity);
         let note = self.book.alloc();
-        let pan = if pan.is_finite() { pan.clamp(0.0, 1.0) as f32 } else { 0.5 };
-        self.schedule(delay, Trigger::NoteOn { layer: self.layer, note, midi, velocity, pan, duration });
+        let pan = if pan.is_finite() {
+            pan.clamp(0.0, 1.0) as f32
+        } else {
+            0.5
+        };
+        self.schedule(
+            delay,
+            Trigger::NoteOn {
+                layer: self.layer,
+                note,
+                midi,
+                velocity,
+                pan,
+                duration,
+            },
+        );
         Some(note)
     }
 
@@ -280,9 +396,26 @@ impl<'a> NoteSink<'a> {
         }
         self.budget -= 1;
         let (delay, velocity) = self.humanize(delay, velocity);
-        let pan = if pan.is_finite() { pan.clamp(0.0, 1.0) as f32 } else { 0.5 };
-        let tone = if tone.is_finite() { tone.clamp(0.0, 1.0) as f32 } else { 0.5 };
-        self.schedule(delay, Trigger::Drum { layer: self.layer, drum, velocity, pan, tone });
+        let pan = if pan.is_finite() {
+            pan.clamp(0.0, 1.0) as f32
+        } else {
+            0.5
+        };
+        let tone = if tone.is_finite() {
+            tone.clamp(0.0, 1.0) as f32
+        } else {
+            0.5
+        };
+        self.schedule(
+            delay,
+            Trigger::Drum {
+                layer: self.layer,
+                drum,
+                velocity,
+                pan,
+                tone,
+            },
+        );
     }
 
     /// Release a held note now.
@@ -293,7 +426,11 @@ impl<'a> NoteSink<'a> {
     /// Glide a sounding note to a new pitch.
     pub fn glide(&mut self, note: NoteId, midi: f64) {
         if self.book.active.contains_key(&note) && midi.is_finite() {
-            self.out.push(SynthCommand::NotePitch { layer: self.layer, note, pitch_hz: midi_to_hz(midi) as f32 });
+            self.out.push(SynthCommand::NotePitch {
+                layer: self.layer,
+                note,
+                pitch_hz: midi_to_hz(midi) as f32,
+            });
         }
     }
 
@@ -317,15 +454,36 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
 
-    fn sink_env() -> (NoteBook, ParamCache, Vec<SynthCommand>, Vec<NoteSnapshot>, ChaCha8Rng) {
-        (NoteBook::new(2), ParamCache::default(), Vec::new(), Vec::new(), ChaCha8Rng::seed_from_u64(1))
+    fn sink_env() -> (
+        NoteBook,
+        ParamCache,
+        Vec<SynthCommand>,
+        Vec<NoteSnapshot>,
+        ChaCha8Rng,
+    ) {
+        (
+            NoteBook::new(2),
+            ParamCache::default(),
+            Vec::new(),
+            Vec::new(),
+            ChaCha8Rng::seed_from_u64(1),
+        )
     }
 
     #[test]
     fn note_lifecycle_with_planned_release() {
         let (mut book, mut pc, mut out, mut notes, mut rng) = sink_env();
         let id = {
-            let mut s = NoteSink::new(&mut book, &mut pc, &mut out, &mut notes, &mut rng, LayerId(1), 0.0, 0.0);
+            let mut s = NoteSink::new(
+                &mut book,
+                &mut pc,
+                &mut out,
+                &mut notes,
+                &mut rng,
+                LayerId(1),
+                0.0,
+                0.0,
+            );
             s.play(60.0, 0.8, 0.5, Some(0.5), 0.0).unwrap()
         };
         assert!(matches!(out[0], SynthCommand::NoteOn { note, .. } if note == id));
@@ -345,8 +503,20 @@ mod tests {
     fn deferred_trigger_fires_later_and_cancels_cleanly() {
         let (mut book, mut pc, mut out, mut notes, mut rng) = sink_env();
         let (a, b) = {
-            let mut s = NoteSink::new(&mut book, &mut pc, &mut out, &mut notes, &mut rng, LayerId(0), 1.0, 0.0);
-            (s.play(60.0, 0.8, 0.5, None, 0.1).unwrap(), s.play(62.0, 0.8, 0.5, None, 0.2).unwrap())
+            let mut s = NoteSink::new(
+                &mut book,
+                &mut pc,
+                &mut out,
+                &mut notes,
+                &mut rng,
+                LayerId(0),
+                1.0,
+                0.0,
+            );
+            (
+                s.play(60.0, 0.8, 0.5, None, 0.1).unwrap(),
+                s.play(62.0, 0.8, 0.5, None, 0.2).unwrap(),
+            )
         };
         assert!(out.is_empty());
         book.release(b, &mut out); // cancelled before it started: no NoteOff
@@ -363,13 +533,27 @@ mod tests {
     #[test]
     fn budget_and_param_dedupe() {
         let (mut book, mut pc, mut out, mut notes, mut rng) = sink_env();
-        let mut s = NoteSink::new(&mut book, &mut pc, &mut out, &mut notes, &mut rng, LayerId(0), 0.0, 0.0);
-        let played = (0..100).filter(|_| s.play(60.0, 0.5, 0.5, Some(1.0), 0.0).is_some()).count();
+        let mut s = NoteSink::new(
+            &mut book,
+            &mut pc,
+            &mut out,
+            &mut notes,
+            &mut rng,
+            LayerId(0),
+            0.0,
+            0.0,
+        );
+        let played = (0..100)
+            .filter(|_| s.play(60.0, 0.5, 0.5, Some(1.0), 0.0).is_some())
+            .count();
         assert_eq!(played, TRIGGERS_PER_TICK);
         s.param(LayerParam::Gain(0.5));
         s.param(LayerParam::Gain(0.502));
         s.param(LayerParam::Gain(0.6));
-        let sends = out.iter().filter(|c| matches!(c, SynthCommand::SetLayerParam { .. })).count();
+        let sends = out
+            .iter()
+            .filter(|c| matches!(c, SynthCommand::SetLayerParam { .. }))
+            .count();
         assert_eq!(sends, 2);
     }
 
@@ -378,7 +562,16 @@ mod tests {
         let run = || {
             let (mut book, mut pc, mut out, mut notes, mut rng) = sink_env();
             {
-                let mut s = NoteSink::new(&mut book, &mut pc, &mut out, &mut notes, &mut rng, LayerId(0), 0.0, 1.0);
+                let mut s = NoteSink::new(
+                    &mut book,
+                    &mut pc,
+                    &mut out,
+                    &mut notes,
+                    &mut rng,
+                    LayerId(0),
+                    0.0,
+                    1.0,
+                );
                 for _ in 0..10 {
                     s.play(60.0, 0.5, 0.5, Some(1.0), 0.0);
                 }
@@ -389,6 +582,8 @@ mod tests {
         let a = run();
         assert_eq!(a, run());
         assert_eq!(a.len(), 10);
-        assert!(a.iter().all(|(t, v)| *t >= 0.0 && *t <= 0.02 && (*v - 0.5).abs() <= 0.051));
+        assert!(a
+            .iter()
+            .all(|(t, v)| *t >= 0.0 && *t <= 0.02 && (*v - 0.5).abs() <= 0.051));
     }
 }

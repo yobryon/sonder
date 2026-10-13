@@ -32,7 +32,9 @@ impl Quantizer {
 
     /// All midi notes in `lo..=hi` whose pitch class is in `pcs`, ascending.
     pub fn notes_in_window(pcs: &[u8], lo: i32, hi: i32) -> Vec<i32> {
-        (lo..=hi).filter(|m| pcs.iter().any(|&pc| (pc as i32 % 12) == m.rem_euclid(12))).collect()
+        (lo..=hi)
+            .filter(|m| pcs.iter().any(|&pc| (pc as i32 % 12) == m.rem_euclid(12)))
+            .collect()
     }
 
     /// Pick the `pos01`-th member of the set inside the midi window `lo..=hi`
@@ -40,7 +42,11 @@ impl Quantizer {
     /// the nearest member to the interpolated position.
     pub fn in_register(pcs: &[u8], pos01: f64, lo: i32, hi: i32) -> i32 {
         let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
-        let pos = if pos01.is_finite() { pos01.clamp(0.0, 1.0) } else { 0.5 };
+        let pos = if pos01.is_finite() {
+            pos01.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
         let notes = Self::notes_in_window(pcs, lo, hi);
         if notes.is_empty() {
             let target = lo as f64 + (hi - lo) as f64 * pos;

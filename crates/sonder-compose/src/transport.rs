@@ -71,7 +71,8 @@ impl Transport {
     /// Add to the user tempo offset (bpm); the result stays within the range.
     pub fn nudge(&mut self, delta: f64) {
         let (lo, hi) = self.range;
-        self.user_offset = (self.user_offset + delta).clamp(lo - self.scene_tempo, hi - self.scene_tempo);
+        self.user_offset =
+            (self.user_offset + delta).clamp(lo - self.scene_tempo, hi - self.scene_tempo);
         // Jump immediately: a user nudge should be heard now, not in a minute.
         self.bpm = (self.bpm + delta).clamp(lo, hi);
     }
@@ -135,7 +136,13 @@ impl Transport {
         if grid <= 0.0 {
             return out;
         }
-        let mut g = Self::next_grid(self.prev_beats + 1e-9, grid);
+        // The opening downbeat is a grid point too: on the first moving tick
+        // start at beat 0 inclusive.
+        let mut g = if self.prev_beats <= 0.0 && self.beats > 0.0 {
+            0.0
+        } else {
+            Self::next_grid(self.prev_beats + 1e-9, grid)
+        };
         while g <= self.beats + 1e-9 && out.len() < 64 {
             out.push(g);
             g += grid;
@@ -146,7 +153,11 @@ impl Transport {
     /// Swing: offbeat eighths are pushed late by up to a third of an eighth.
     pub fn swing_offset(&self, beat: f64) -> f64 {
         let frac = beat - beat.floor();
-        if (frac - 0.5).abs() < 1e-6 { self.swing * (1.0 / 6.0) } else { 0.0 }
+        if (frac - 0.5).abs() < 1e-6 {
+            self.swing * (1.0 / 6.0)
+        } else {
+            0.0
+        }
     }
 
     /// Seconds from now until `target_beat` (swing applied), never negative.
@@ -170,7 +181,12 @@ mod tests {
     use super::*;
 
     fn cfg() -> ConductorConfig {
-        ConductorConfig { tempo: 60.0, tempo_range: [40.0, 80.0], beats_per_bar: 4, ..Default::default() }
+        ConductorConfig {
+            tempo: 60.0,
+            tempo_range: [40.0, 80.0],
+            beats_per_bar: 4,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -201,8 +217,8 @@ mod tests {
         assert!((Transport::next_grid(1.01, 0.25) - 1.25).abs() < 1e-9);
         assert!((Transport::next_grid(1.0, 0.25) - 1.0).abs() < 1e-9);
         let mut t = Transport::new(&cfg());
-        t.tick(1.0, 0.5); // 0 → 1 beat
-        assert_eq!(t.grid_points(0.5), vec![0.5, 1.0]);
+        t.tick(1.0, 0.5); // 0 → 1 beat, including the downbeat itself
+        assert_eq!(t.grid_points(0.5), vec![0.0, 0.5, 1.0]);
         t.tick(0.02, 0.5);
         assert!(t.grid_points(0.5).is_empty());
     }

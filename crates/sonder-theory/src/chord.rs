@@ -56,15 +56,26 @@ impl Chord {
     /// Intervals (semitones above root, 0..12) of every tone.
     fn intervals(&self, scale: &Scale) -> Vec<u8> {
         let root = self.root_pc(scale) as i32;
-        self.pitch_classes(scale).iter().map(|&pc| (pc as i32 - root).rem_euclid(12) as u8).collect()
+        self.pitch_classes(scale)
+            .iter()
+            .map(|&pc| (pc as i32 - root).rem_euclid(12) as u8)
+            .collect()
     }
 
     fn quality(iv: &[u8]) -> Quality {
         let has = |x: u8| iv.contains(&x);
         if has(4) {
-            if has(8) && !has(7) { Quality::Augmented } else { Quality::Major }
+            if has(8) && !has(7) {
+                Quality::Augmented
+            } else {
+                Quality::Major
+            }
         } else if has(3) {
-            if has(6) && !has(7) { Quality::Diminished } else { Quality::Minor }
+            if has(6) && !has(7) {
+                Quality::Diminished
+            } else {
+                Quality::Minor
+            }
         } else if has(5) {
             Quality::Sus4
         } else if has(2) {
@@ -80,7 +91,15 @@ impl Chord {
         let iv = self.intervals(scale);
         let q = Self::quality(&iv);
         let has = |x: u8| iv.contains(&x);
-        let seventh = if has(11) { Some(11) } else if has(10) { Some(10) } else if has(9) && q == Quality::Diminished { Some(9) } else { None };
+        let seventh = if has(11) {
+            Some(11)
+        } else if has(10) {
+            Some(10)
+        } else if has(9) && q == Quality::Diminished {
+            Some(9)
+        } else {
+            None
+        };
         let ninth = has(2) && q != Quality::Sus2;
 
         let mut s = String::from(root);
@@ -112,14 +131,18 @@ impl Chord {
     /// Roman numeral: upper-case for major/augmented, lower-case for
     /// minor/diminished, with `°`/`+`/`7`/`9` suffixes ("ii", "V7", "viiø", "Imaj7").
     pub fn roman(&self, scale: &Scale) -> String {
-        const NUMERALS: [&str; 12] = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"];
+        const NUMERALS: [&str; 12] = [
+            "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII",
+        ];
         let deg = (self.root_degree as usize) % scale.len().max(1);
         let numeral = NUMERALS[deg.min(11)];
         let iv = self.intervals(scale);
         let q = Self::quality(&iv);
         let has = |x: u8| iv.contains(&x);
         let mut s = match q {
-            Quality::Major | Quality::Augmented | Quality::Sus4 | Quality::Sus2 | Quality::Open => numeral.to_string(),
+            Quality::Major | Quality::Augmented | Quality::Sus4 | Quality::Sus2 | Quality::Open => {
+                numeral.to_string()
+            }
             Quality::Minor | Quality::Diminished => numeral.to_ascii_lowercase(),
         };
         match q {
@@ -133,7 +156,11 @@ impl Chord {
         } else if has(11) && q == Quality::Major {
             "maj7"
         } else if has(10) || has(11) || (has(9) && q == Quality::Diminished) {
-            if q == Quality::Diminished && has(10) { "" } else { "7" }
+            if q == Quality::Diminished && has(10) {
+                ""
+            } else {
+                "7"
+            }
         } else {
             ""
         };
@@ -163,10 +190,17 @@ mod tests {
     #[test]
     fn names_in_d_major() {
         let d = scale(2, "major");
-        let names: Vec<String> = (0..7).map(|deg| diatonic_chord(&d, deg, 0).name(&d)).collect();
+        let names: Vec<String> = (0..7)
+            .map(|deg| diatonic_chord(&d, deg, 0).name(&d))
+            .collect();
         assert_eq!(names, vec!["D", "Em", "F#m", "G", "A", "Bm", "C#°"]);
-        let sevenths: Vec<String> = (0..7).map(|deg| diatonic_chord(&d, deg, 1).name(&d)).collect();
-        assert_eq!(sevenths, vec!["Dmaj7", "Em7", "F#m7", "Gmaj7", "A7", "Bm7", "C#ø"]);
+        let sevenths: Vec<String> = (0..7)
+            .map(|deg| diatonic_chord(&d, deg, 1).name(&d))
+            .collect();
+        assert_eq!(
+            sevenths,
+            vec!["Dmaj7", "Em7", "F#m7", "Gmaj7", "A7", "Bm7", "C#ø"]
+        );
         assert_eq!(diatonic_chord(&d, 0, 2).name(&d), "Dmaj9");
         assert_eq!(diatonic_chord(&d, 4, 2).name(&d), "A9");
         assert_eq!(diatonic_chord(&d, 1, 2).name(&d), "Em9");
@@ -180,13 +214,18 @@ mod tests {
         assert_eq!(diatonic_chord(&hm, 2, 0).name(&hm), "Eb+");
         assert_eq!(diatonic_chord(&hm, 6, 1).name(&hm), "B°7");
         assert_eq!(diatonic_chord(&hm, 0, 1).name(&hm), "Cm(maj7)");
-        assert_eq!(Chord::new(0, vec![0, 3, 4]).name(&scale(0, "major")), "Csus4");
+        assert_eq!(
+            Chord::new(0, vec![0, 3, 4]).name(&scale(0, "major")),
+            "Csus4"
+        );
     }
 
     #[test]
     fn romans() {
         let c = scale(0, "major");
-        let r: Vec<String> = (0..7).map(|deg| diatonic_chord(&c, deg, 0).roman(&c)).collect();
+        let r: Vec<String> = (0..7)
+            .map(|deg| diatonic_chord(&c, deg, 0).roman(&c))
+            .collect();
         assert_eq!(r, vec!["I", "ii", "iii", "IV", "V", "vi", "vii°"]);
         assert_eq!(diatonic_chord(&c, 4, 1).roman(&c), "V7");
         assert_eq!(diatonic_chord(&c, 6, 1).roman(&c), "viiø");

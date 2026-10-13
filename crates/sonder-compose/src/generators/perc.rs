@@ -50,7 +50,9 @@ impl Generator for Perc {
             if t.chance < 1.0 && ctx.rng.random::<f64>() >= t.chance {
                 continue;
             }
-            let drum = t.drum.unwrap_or_else(|| Self::drum_for(&ev.name, ev.intensity));
+            let drum = t
+                .drum
+                .unwrap_or_else(|| Self::drum_for(&ev.name, ev.intensity));
             let delay = match t.quantize {
                 Some(grid) => ctx.transport.delay_to(Transport::next_grid(beats, grid)),
                 None => 0.0,
@@ -72,16 +74,23 @@ impl Generator for Perc {
             let step = ((p * 4.0).round() as usize) % steps;
             let delay = ctx.transport.delay_to(g);
             if kicks[step] {
-                ctx.sink.drum(Drum::Kick, 0.6 + 0.3 * energy, 0.5, tone, delay);
+                ctx.sink
+                    .drum(Drum::Kick, 0.6 + 0.3 * energy, 0.5, tone, delay);
             }
             let in_beat = p - p.floor();
             if (in_beat - 0.5).abs() < 1e-6 {
-                ctx.sink.drum(Drum::Hat, 0.25 + 0.35 * energy, 0.55, tone, delay);
-            } else if density > 0.6 && (in_beat - 0.25).abs() < 1e-6 && ctx.rng.random::<f64>() < (density - 0.6) * 1.5 {
-                ctx.sink.drum(Drum::Hat, 0.15 + 0.25 * energy, 0.45, tone, delay);
+                ctx.sink
+                    .drum(Drum::Hat, 0.25 + 0.35 * energy, 0.55, tone, delay);
+            } else if density > 0.6
+                && (in_beat - 0.25).abs() < 1e-6
+                && ctx.rng.random::<f64>() < (density - 0.6) * 1.5
+            {
+                ctx.sink
+                    .drum(Drum::Hat, 0.15 + 0.25 * energy, 0.45, tone, delay);
             }
             if density > 0.5 && (p - (bpb / 2.0).floor()).abs() < 1e-6 && bpb >= 2.0 {
-                ctx.sink.drum(Drum::Snare, 0.4 + 0.3 * energy, 0.5, tone, delay);
+                ctx.sink
+                    .drum(Drum::Snare, 0.4 + 0.3 * energy, 0.5, tone, delay);
             }
         }
     }
