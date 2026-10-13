@@ -76,7 +76,27 @@ cargo build --release
 
 Native audio uses `cpal` (ALSA on Linux: `apt install libasound2-dev`). Without a sound
 device, `sonder play` falls back to a silent realtime clock and you listen in the
-browser (`--web`, default on) or pipe PCM: `sonder play night-freeway --pcm-stdout | ffplay -f s16le -ar 48000 -ch_layout stereo -`.
+browser (`--web`, default on at http://127.0.0.1:7777/) or pipe PCM:
+`sonder play night-freeway --pcm-stdout | ffplay -f s16le -ar 48000 -ch_layout stereo -`.
+
+MIDI out: `sonder midi-ports`, then `sonder play <scene> --midi <port>` (or `--midi virtual`
+to create a port a DAW can connect to). Melodic layers get one channel each; percussion
+layers play GM drums on channel 10.
+
+## Commands
+
+| | |
+|---|---|
+| `sonder play [scene]` | live, with the terminal UI and web UI (`--open` opens a browser) |
+| `sonder serve [scene]` | headless: web UI only |
+| `sonder render <scene> --seconds N --out f.wav` | deterministic offline render |
+| `sonder list` / `sonder show <scene>` | built-in scenes / print one to tweak |
+| `sonder sources [kind]` / `sonder instruments` | what you can point it at / what it can sound like |
+| `sonder probe <url> [-o scene.toml]` | poll a JSON endpoint and write a starter scene |
+| `sonder validate <scene>` | check a scene without running it |
+
+Keys (TUI and web): `1-9` mute · `Shift+1-9` solo · `space` pause · `[ ]` tempo · `- =` density ·
+`k/K` transpose · `n/N` (TUI) or `m/M` (web) mode · `c` next chord · `w` open web UI · `Ctrl+S` save scene · `q` quit.
 
 ## License
 

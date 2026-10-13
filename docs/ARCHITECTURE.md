@@ -244,3 +244,41 @@ pub fn validate(scene: &Scene) -> Result<(), Vec<String>>;   // structure + expr
 sonder_web::serve(addr: SocketAddr, handle: WebHandle { snapshot, commands, audio_tap: Option<AudioTap>, sample_rate }) -> anyhow::Result<()>   // GET / (embedded index.html, vanilla JS), GET /api/snapshot, WS /ws (JSON snapshots at 20 Hz; client → UserCommand JSON), WS /audio (binary: i16 interleaved stereo frames, first message JSON {sample_rate, channels})
 sonder_tui::run(snapshot, commands) -> anyhow::Result<()>   // returns on `q`
 ```
+
+---
+
+## As built — deviations and additions
+
+Recorded after implementation so the contract above and the code agree.
+
+- **sonder-expr**: signals are evaluated in *dependency* order (topological; `BTreeMap` loses
+  TOML order), so a signal may reference any other; cycles are compile errors. Stateful
+  builtins (`field`, `event`, `smooth`, `norm`, `random`, `walk`, …) are **rejected inside
+  `on_event` expressions** — those are pure functions of `intensity`, `attr(..)`, `time`,
+  `beat` and the layer's signal names. `norm` fades in from 0.5 over `NORM_WARMUP` (30 s).
+  Extra builtins: `attr(k, default)`, `attr_text`, `change(x, eps)`, `log2/log10/fract/sign/
+  tan/tanh/wrap`, `h`/`min` unit suffixes, `#` comments, event glob prefixes (`"blob*"`).
+- **sonder-compose**: energy→tempo targets the scene tempo at energy 0.5 and the range
+  bounds at 0/1 (not a straight lerp). Mode drift is anchored to the scene's mode as "home"
+  (±2 accidentals, ±3 for `Fast`). `NextMode` wraps. Mute also sends `LayerParam::Mute`.
+- **sonder-dsp**: additions beyond the contract — `Wave::Wavetable` with `Osc::table`
+  (`organ|vox|glass|metal|pulse3|sine8`, mip-mapped), per-instrument `Instrument::chorus`
+  (`depth|rate_hz|mix|voices`, bypassed at depth 0), `take_recycled_effects()` (the
+  `SetEffects` box is recycled like instruments). 27 presets. No sampled drums anywhere.
+- **sonder-audio**: `SynthController::take_tap()` hands the tap to the engine (the pair
+  constructor does not return it separately); `native_default_sample_rate()` lets the engine
+  build the synth at the device's rate.
+- **sonder-engine**: adds `sink::CommandSink` (observers of the command stream) and `midi::
+  MidiOut` (feature `midi`, default on; `--midi <port>` / `--midi virtual`, `sonder
+  midi-ports`). Offline render runs sources + control + synth in lockstep inside a
+  `start_paused` tokio runtime driving a `VirtualClock`; renders of offline scenes are
+  bit-identical for a seed (tested). Live mode falls back from native audio to a silent
+  real-time clock so the web UI still carries sound.
+- **sonder-sources**: the SWPC solar-wind URLs in the design were dead; the adapter uses
+  `products/geospace/propagated-solar-wind-1-hour.json` with the RTSW feeds as fallback.
+  `synthetic.random-walk` is an alias of `synthetic.walk`.
+- **sonder-vision**: the MJPEG framer is boundary-agnostic (walks JPEG segment structure),
+  so multipart, raw concatenated JPEG and corrupted streams share one path. Motion mode
+  defaults to threshold 0.25.
+- **sonder-tui**: `m`/`s` mute/solo the selected layer; mode cycling is `n`/`N`; `Ctrl+S`
+  saves the current scene.
