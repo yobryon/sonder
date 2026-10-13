@@ -37,18 +37,66 @@ pub fn info() -> SourceInfo {
         kind: KIND,
         summary: "MJPEG camera over HTTP or stdin: motion energy, bright/moving blob tracking, crossing events",
         params: vec![
-            ParamInfo { name: "url", summary: "http(s)://… MJPEG stream, or \"-\" to read stdin (e.g. ffmpeg -f mjpeg -)", default: None },
-            ParamInfo { name: "mode", summary: "\"bright\" (headlights at night) or \"motion\" (frame difference)", default: Some("bright") },
-            ParamInfo { name: "threshold", summary: "0..1 brightness (bright) or frame-difference (motion) threshold", default: Some("0.6 bright / 0.25 motion") },
-            ParamInfo { name: "line", summary: "normalized y of the crossing line; false/null disables", default: Some("0.5") },
-            ParamInfo { name: "min_blob", summary: "minimum blob area in (downscaled) pixels", default: Some("4") },
-            ParamInfo { name: "downscale", summary: "integer decode downscale factor (1..=16)", default: Some("4") },
-            ParamInfo { name: "fps_cap", summary: "maximum frames per second to analyse", default: Some("15") },
-            ParamInfo { name: "reconnect", summary: "reconnect with backoff when the stream drops", default: Some("true") },
-            ParamInfo { name: "lanes", summary: "x is quantized into this many lanes for the `lane` attr", default: Some("4") },
-            ParamInfo { name: "merge_dist", summary: "merge blobs closer than this many pixels (headlight pairs)", default: Some("6") },
-            ParamInfo { name: "max_blobs", summary: "keep at most this many blobs per frame", default: Some("64") },
-            ParamInfo { name: "background_alpha", summary: "motion mode: background learning rate per frame", default: Some("0.02") },
+            ParamInfo {
+                name: "url",
+                summary: "http(s)://… MJPEG stream, or \"-\" to read stdin (e.g. ffmpeg -f mjpeg -)",
+                default: None,
+            },
+            ParamInfo {
+                name: "mode",
+                summary: "\"bright\" (headlights at night) or \"motion\" (frame difference)",
+                default: Some("bright"),
+            },
+            ParamInfo {
+                name: "threshold",
+                summary: "0..1 brightness (bright) or frame-difference (motion) threshold",
+                default: Some("0.6 bright / 0.25 motion"),
+            },
+            ParamInfo {
+                name: "line",
+                summary: "normalized y of the crossing line; false/null disables",
+                default: Some("0.5"),
+            },
+            ParamInfo {
+                name: "min_blob",
+                summary: "minimum blob area in (downscaled) pixels",
+                default: Some("4"),
+            },
+            ParamInfo {
+                name: "downscale",
+                summary: "integer decode downscale factor (1..=16)",
+                default: Some("4"),
+            },
+            ParamInfo {
+                name: "fps_cap",
+                summary: "maximum frames per second to analyse",
+                default: Some("15"),
+            },
+            ParamInfo {
+                name: "reconnect",
+                summary: "reconnect with backoff when the stream drops",
+                default: Some("true"),
+            },
+            ParamInfo {
+                name: "lanes",
+                summary: "x is quantized into this many lanes for the `lane` attr",
+                default: Some("4"),
+            },
+            ParamInfo {
+                name: "merge_dist",
+                summary: "merge blobs closer than this many pixels (headlight pairs)",
+                default: Some("6"),
+            },
+            ParamInfo {
+                name: "max_blobs",
+                summary: "keep at most this many blobs per frame",
+                default: Some("64"),
+            },
+            ParamInfo {
+                name: "background_alpha",
+                summary: "motion mode: background learning rate per frame",
+                default: Some("0.02"),
+            },
         ],
         channels: vec!["motion", "blobs", "mean_speed", "mean_brightness", "fps"],
         events: vec!["blob", "crossing"],
@@ -85,14 +133,21 @@ pub struct CameraParams {
 }
 
 fn invalid(spec: &SourceSpec, param: &'static str, message: impl Into<String>) -> SourceError {
-    SourceError::InvalidParam { kind: spec.kind.clone(), param, message: message.into() }
+    SourceError::InvalidParam {
+        kind: spec.kind.clone(),
+        param,
+        message: message.into(),
+    }
 }
 
 fn f64_param(spec: &SourceSpec, name: &'static str, range: std::ops::RangeInclusive<f64>, default: f64) -> Result<f64, SourceError> {
     match spec.params.get(name) {
         None | Some(serde_json::Value::Null) => Ok(default),
         Some(v) => {
-            let n = v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(|| invalid(spec, name, "expected a number"))?;
+            let n = v
+                .as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+                .ok_or_else(|| invalid(spec, name, "expected a number"))?;
             if !n.is_finite() || !range.contains(&n) {
                 return Err(invalid(spec, name, format!("{n} out of range {}..={}", range.start(), range.end())));
             }
@@ -148,8 +203,26 @@ impl CameraParams {
         let merge_dist = f64_param(spec, "merge_dist", 0.0..=1000.0, 6.0)? as f32;
         let max_blobs = f64_param(spec, "max_blobs", 1.0..=1024.0, 64.0)? as usize;
         let background_alpha = f64_param(spec, "background_alpha", 0.0..=1.0, 0.02)? as f32;
-        let tracker = TrackerConfig { threshold, min_blob_px, max_blobs, downscale, mode, line, background_alpha, merge_dist, ..Default::default() };
-        Ok(Self { url, tracker, fps_cap, reconnect, lanes, readings_hz: 4.0, viz_hz: 10.0 })
+        let tracker = TrackerConfig {
+            threshold,
+            min_blob_px,
+            max_blobs,
+            downscale,
+            mode,
+            line,
+            background_alpha,
+            merge_dist,
+            ..Default::default()
+        };
+        Ok(Self {
+            url,
+            tracker,
+            fps_cap,
+            reconnect,
+            lanes,
+            readings_hz: 4.0,
+            viz_hz: 10.0,
+        })
     }
 }
 
@@ -387,7 +460,13 @@ async fn run(p: CameraParams, ctx: SourceCtx) {
         attempt = attempt.saturating_add(1);
         let base = (2f64.powi(attempt.min(10) as i32 - 1)).min(MAX_BACKOFF);
         let delay = base * (0.75 + 0.5 * jitter.next());
-        if !status(&ctx, SourceState::Reconnecting, format!("reconnecting in {delay:.0}s (attempt {attempt})")).await {
+        if !status(
+            &ctx,
+            SourceState::Reconnecting,
+            format!("reconnecting in {delay:.0}s (attempt {attempt})"),
+        )
+        .await
+        {
             break;
         }
         tokio::select! {
@@ -422,7 +501,11 @@ async fn run_connection(
     let mut stream = if p.url == "-" {
         FrameStream::from_reader(tokio::io::stdin(), None)
     } else {
-        let req = ctx.http.get(&p.url).header(reqwest::header::ACCEPT, "multipart/x-mixed-replace, image/jpeg, */*").send();
+        let req = ctx
+            .http
+            .get(&p.url)
+            .header(reqwest::header::ACCEPT, "multipart/x-mixed-replace, image/jpeg, */*")
+            .send();
         let resp = tokio::select! {
             r = tokio::time::timeout(CONNECT_TIMEOUT, req) => match r {
                 Ok(Ok(resp)) => resp,
@@ -434,7 +517,11 @@ async fn run_connection(
         if !resp.status().is_success() {
             return Err(format!("HTTP {}", resp.status()));
         }
-        let ct = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
+        let ct = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
         tracing::debug!(source = %ctx.id, content_type = ?ct, "camera.mjpeg connected");
         FrameStream::from_stream(resp.bytes_stream(), ct.as_deref())
     };
@@ -457,7 +544,11 @@ async fn run_connection(
                 if received == 1 {
                     *attempt = 0;
                     let st = stream.parser().stats();
-                    let how = if st.fast_path > 0 { "multipart (content-length)" } else { "scanning" };
+                    let how = if st.fast_path > 0 {
+                        "multipart (content-length)"
+                    } else {
+                        "scanning"
+                    };
                     if !status(ctx, SourceState::Live, format!("receiving frames ({how})")).await {
                         return Ok(End::EngineGone);
                     }
@@ -514,7 +605,10 @@ mod tests {
         assert!(!p.reconnect);
         assert_eq!(p.lanes, 6);
 
-        assert!(matches!(CameraParams::from_spec(&SourceSpec::new(KIND)), Err(SourceError::MissingParam { .. })));
+        assert!(matches!(
+            CameraParams::from_spec(&SourceSpec::new(KIND)),
+            Err(SourceError::MissingParam { .. })
+        ));
         assert!(CameraParams::from_spec(&SourceSpec::new(KIND).with("url", "rtsp://x")).is_err());
         assert!(CameraParams::from_spec(&SourceSpec::new(KIND).with("url", "-").with("threshold", 3.0)).is_err());
         assert!(CameraParams::from_spec(&SourceSpec::new(KIND).with("url", "-").with("mode", "psychic")).is_err());
@@ -545,7 +639,17 @@ mod tests {
             shutdown: srx,
             seed: 1,
         };
-        let b = crate::tracker::Blob { id: 7, x: 0.8, y: 0.9, area: 0.005, brightness: 0.9, speed: 0.3, dir: 1.0, age_s: 2.5, ..Default::default() };
+        let b = crate::tracker::Blob {
+            id: 7,
+            x: 0.8,
+            y: 0.9,
+            area: 0.005,
+            brightness: 0.9,
+            speed: 0.3,
+            dir: 1.0,
+            age_s: 2.5,
+            ..Default::default()
+        };
         let s = blob_event(&ctx, 1.0, "blob", &b, 4);
         match s.datum {
             Datum::Event { name, intensity, attrs } => {
@@ -569,14 +673,30 @@ mod tests {
         let mut jpegs = Vec::new();
         for i in 0..40 {
             let y = -6.0 + i as f32 * 4.0;
-            let discs = if y < 130.0 { vec![testgen::Disc { x: 100.0, y, r: 5.0, brightness: 235 }] } else { vec![] };
+            let discs = if y < 130.0 {
+                vec![testgen::Disc {
+                    x: 100.0,
+                    y,
+                    r: 5.0,
+                    brightness: 235,
+                }]
+            } else {
+                vec![]
+            };
             let frame = testgen::render(w, h, 18, 8, &discs, i as u64 + 1);
             jpegs.push(testgen::encode_jpeg(&frame, w, h, 85).unwrap());
         }
         let clock = Arc::new(sonder_core::VirtualClock::new());
         let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
         let (_stx, srx) = tokio::sync::watch::channel(false);
-        let ctx = SourceCtx { id: "cam".into(), tx, clock: clock.clone(), http: reqwest::Client::new(), shutdown: srx, seed: 1 };
+        let ctx = SourceCtx {
+            id: "cam".into(),
+            tx,
+            clock: clock.clone(),
+            http: reqwest::Client::new(),
+            shutdown: srx,
+            seed: 1,
+        };
         let spec = SourceSpec::new(KIND).with("url", "-").with("downscale", 1).with("line", 0.5);
         let p = CameraParams::from_spec(&spec).unwrap();
 

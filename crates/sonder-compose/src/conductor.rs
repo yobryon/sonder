@@ -455,12 +455,12 @@ mod tests {
     #[test]
     fn user_mode_and_transpose() {
         let mut c = Conductor::new(&cfg(Drift::Slow, Progression::Modal), 1).unwrap();
-        c.step_mode(false);
+        c.step_mode(true); // darker
         let ch = c.tick(0.5);
         assert!(ch.mode && !ch.chord);
         assert_eq!(c.harmony.scale.mode.name, "ionian");
-        c.step_mode(true);
-        c.step_mode(true);
+        c.step_mode(false); // brighter: lydian
+        c.step_mode(false); // brighter still: wraps to locrian
         c.tick(0.6);
         assert_eq!(c.harmony.scale.mode.name, "locrian", "wraps around");
         c.transpose(-2);

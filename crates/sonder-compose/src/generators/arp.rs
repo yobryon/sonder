@@ -35,7 +35,7 @@ impl Arp {
         if len == 0 {
             return 0;
         }
-        let i = match self.pattern {
+        match self.pattern {
             Pattern::Up => {
                 let i = self.pos % len;
                 self.pos = (self.pos + 1) % len;
@@ -68,8 +68,7 @@ impl Arp {
                 }
             }
             Pattern::Random => ctx.rng.random_range(0..len),
-        };
-        i
+        }
     }
 }
 

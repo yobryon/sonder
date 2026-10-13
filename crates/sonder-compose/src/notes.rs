@@ -36,12 +36,6 @@ enum Trigger {
     Drum { layer: LayerId, drum: Drum, velocity: f32, pan: f32, tone: f32 },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Pending {
-    when: When,
-    layer: LayerId,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct Active {
     layer: LayerId,
@@ -77,11 +71,6 @@ impl NoteBook {
     /// Sounding notes on a layer.
     pub fn active_count(&self, layer: LayerId) -> u16 {
         self.active_count.get(layer.0 as usize).copied().unwrap_or(0)
-    }
-
-    /// Total sounding notes.
-    pub fn active_total(&self) -> usize {
-        self.active.len()
     }
 
     fn start(&mut self, now: Seconds, trig: Trigger, out: &mut Vec<SynthCommand>, notes: &mut Vec<NoteSnapshot>) {

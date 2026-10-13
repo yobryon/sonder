@@ -82,8 +82,7 @@ pub fn encode_jpeg(gray: &[u8], w: u32, h: u32, quality: u8) -> Result<Vec<u8>, 
         ))
     })?;
     let mut buf = Cursor::new(Vec::new());
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality)
-        .write_image(img.as_raw(), w, h, image::ExtendedColorType::L8)?;
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality).write_image(img.as_raw(), w, h, image::ExtendedColorType::L8)?;
     Ok(buf.into_inner())
 }
 
@@ -108,7 +107,19 @@ pub fn multipart(frames: &[Vec<u8>], boundary: &str, with_length: bool) -> Vec<u
 pub fn jpeg_sequence(n: usize, w: u32, h: u32) -> Vec<Vec<u8>> {
     (0..n)
         .map(|i| {
-            let frame = render(w, h, 20, 6, &[Disc { x: w as f32 / 2.0, y: i as f32 * 4.0, r: 4.0, brightness: 230 }], i as u64 + 1);
+            let frame = render(
+                w,
+                h,
+                20,
+                6,
+                &[Disc {
+                    x: w as f32 / 2.0,
+                    y: i as f32 * 4.0,
+                    r: 4.0,
+                    brightness: 230,
+                }],
+                i as u64 + 1,
+            );
             encode_jpeg(&frame, w, h, 85).unwrap_or_default()
         })
         .collect()

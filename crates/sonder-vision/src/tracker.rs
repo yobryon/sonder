@@ -193,7 +193,16 @@ struct Acc {
 impl Acc {
     #[inline]
     fn new(x: u32, y: u32, b: u8) -> Self {
-        Self { n: 1, sx: x as u64, sy: y as u64, sb: b as u64, minx: x, miny: y, maxx: x, maxy: y }
+        Self {
+            n: 1,
+            sx: x as u64,
+            sy: y as u64,
+            sb: b as u64,
+            minx: x,
+            miny: y,
+            maxx: x,
+            maxy: y,
+        }
     }
     #[inline]
     fn add(&mut self, x: u32, y: u32, b: u8) {
@@ -306,7 +315,13 @@ impl Track {
             speed: (self.vx * self.vx + self.vy * self.vy).sqrt(),
             age_s: age,
             distance: self.distance,
-            dir: if dy > 1e-4 { 1.0 } else if dy < -1e-4 { -1.0 } else { 0.0 },
+            dir: if dy > 1e-4 {
+                1.0
+            } else if dy < -1e-4 {
+                -1.0
+            } else {
+                0.0
+            },
         }
     }
     fn exit_blob(&self) -> Blob {
@@ -424,7 +439,9 @@ impl Tracker {
         self.frames += 1;
 
         // 1. statistics
-        let (sum, sumsq) = gray.iter().fold((0u64, 0u64), |(s, q), &v| (s + v as u64, q + (v as u64) * (v as u64)));
+        let (sum, sumsq) = gray
+            .iter()
+            .fold((0u64, 0u64), |(s, q), &v| (s + v as u64, q + (v as u64) * (v as u64)));
         let mean = sum as f32 / n as f32;
         let var = (sumsq as f32 / n as f32 - mean * mean).max(0.0);
         let std = var.sqrt();
@@ -604,7 +621,8 @@ impl Tracker {
                 self.dets.push(Det::from_acc(a));
             }
         }
-        self.dets.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
+        self.dets
+            .sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
         // Bound the merge work for pathological frames.
         let pre_cap = (self.cfg.max_blobs * 4).max(64);
         if self.dets.len() > pre_cap {
@@ -633,7 +651,8 @@ impl Tracker {
             }
             self.merged.push(m);
         }
-        self.merged.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
+        self.merged
+            .sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
     }
 
     fn associate(&mut self, t: Seconds, out: &mut FrameAnalysis) {
@@ -654,7 +673,11 @@ impl Tracker {
         // Candidate pairs within the gate.
         self.pairs.clear();
         for (ti, tr) in self.tracks.iter().enumerate() {
-            let (px, py) = if predict { (tr.x + tr.vx * dt, tr.y + tr.vy * dt) } else { (tr.x, tr.y) };
+            let (px, py) = if predict {
+                (tr.x + tr.vx * dt, tr.y + tr.vy * dt)
+            } else {
+                (tr.x, tr.y)
+            };
             let tdiag = (tr.w * tr.w + tr.h * tr.h).sqrt();
             for (di, d) in self.merged.iter().enumerate() {
                 let dx = d.cx / fw - px;
@@ -669,7 +692,8 @@ impl Tracker {
                 }
             }
         }
-        self.pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        self.pairs
+            .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
         let va = self.cfg.velocity_alpha.clamp(0.0, 1.0);
         let line = self.cfg.line.filter(|l| l.is_finite());
@@ -815,14 +839,7 @@ mod tests {
 
     #[test]
     fn labels_hand_drawn_components() {
-        let (g, w, h) = mask_frame(&[
-            "##......#.",
-            "##.....#..",
-            "......#...",
-            "...##.....",
-            "...##..###",
-            ".......###",
-        ]);
+        let (g, w, h) = mask_frame(&["##......#.", "##.....#..", "......#...", "...##.....", "...##..###", ".......###"]);
         let mut tr = Tracker::new(cfg_no_adaptive());
         let a = tr.process(&g, w, h, 0.0);
         // 8-connectivity: diagonal line is one component -> 4 blobs total.
@@ -860,7 +877,10 @@ mod tests {
         let (w, h) = (160u32, 120u32);
         let fps = 20.0f32;
         let speed_px = 2.0f32; // px per frame downward
-        let mut tr = Tracker::new(TrackerConfig { line: Some(0.5), ..Default::default() });
+        let mut tr = Tracker::new(TrackerConfig {
+            line: Some(0.5),
+            ..Default::default()
+        });
         let mut entered = 0;
         let mut exits = Vec::new();
         let mut crossings = 0;
@@ -868,9 +888,24 @@ mod tests {
         for f in 0..60 {
             let y = -10.0 + f as f32 * speed_px;
             let discs = [
-                Disc { x: 30.0, y, r: 4.0, brightness: 230 },
-                Disc { x: 80.0, y: y + 5.0, r: 4.0, brightness: 220 },
-                Disc { x: 130.0, y: y - 5.0, r: 4.0, brightness: 240 },
+                Disc {
+                    x: 30.0,
+                    y,
+                    r: 4.0,
+                    brightness: 230,
+                },
+                Disc {
+                    x: 80.0,
+                    y: y + 5.0,
+                    r: 4.0,
+                    brightness: 220,
+                },
+                Disc {
+                    x: 130.0,
+                    y: y - 5.0,
+                    r: 4.0,
+                    brightness: 240,
+                },
             ];
             let frame = testgen::render(w, h, 18, 10, &discs, f as u64 + 1);
             let a = tr.process(&frame, w, h, f as f64 / fps as f64);
@@ -893,7 +928,12 @@ mod tests {
         let expected_speed = speed_px * fps / h as f32; // frame fractions per second
         for e in &exits {
             assert_eq!(e.dir, 1.0, "moving down");
-            assert!((e.speed - expected_speed).abs() < expected_speed * 0.15, "speed {} vs {}", e.speed, expected_speed);
+            assert!(
+                (e.speed - expected_speed).abs() < expected_speed * 0.15,
+                "speed {} vs {}",
+                e.speed,
+                expected_speed
+            );
             assert!(e.age_s > 2.0, "duration {}", e.age_s);
             assert!(e.y > 0.8, "exit near the bottom: {}", e.y);
             assert!(e.vy > 0.0);
@@ -904,35 +944,82 @@ mod tests {
     fn headlight_pairs_merge_into_one_car() {
         let (w, h) = (160u32, 120u32);
         let discs = [
-            Disc { x: 60.0, y: 60.0, r: 2.5, brightness: 250 },
-            Disc { x: 68.0, y: 60.0, r: 2.5, brightness: 250 },
+            Disc {
+                x: 60.0,
+                y: 60.0,
+                r: 2.5,
+                brightness: 250,
+            },
+            Disc {
+                x: 68.0,
+                y: 60.0,
+                r: 2.5,
+                brightness: 250,
+            },
             // a second car far away
-            Disc { x: 120.0, y: 30.0, r: 2.5, brightness: 250 },
-            Disc { x: 128.0, y: 30.0, r: 2.5, brightness: 250 },
+            Disc {
+                x: 120.0,
+                y: 30.0,
+                r: 2.5,
+                brightness: 250,
+            },
+            Disc {
+                x: 128.0,
+                y: 30.0,
+                r: 2.5,
+                brightness: 250,
+            },
         ];
         let frame = testgen::render(w, h, 15, 6, &discs, 7);
-        let mut tr = Tracker::new(TrackerConfig { merge_dist: 6.0, confirm_frames: 1, line: None, ..Default::default() });
+        let mut tr = Tracker::new(TrackerConfig {
+            merge_dist: 6.0,
+            confirm_frames: 1,
+            line: None,
+            ..Default::default()
+        });
         let a = tr.process(&frame, w, h, 0.0);
         assert_eq!(a.blobs.len(), 2, "{:?}", a.blobs);
         let car = a.blobs.iter().find(|b| b.y > 0.4).unwrap();
         assert!((car.x - 64.0 / 160.0).abs() < 0.01);
         assert!(car.w > 10.0 / 160.0);
         // Without merging we see four.
-        let mut tr2 = Tracker::new(TrackerConfig { merge_dist: 0.0, confirm_frames: 1, line: None, ..Default::default() });
+        let mut tr2 = Tracker::new(TrackerConfig {
+            merge_dist: 0.0,
+            confirm_frames: 1,
+            line: None,
+            ..Default::default()
+        });
         assert_eq!(tr2.process(&frame, w, h, 0.0).blobs.len(), 4);
     }
 
     #[test]
     fn line_crossings_count_both_directions() {
         let (w, h) = (80u32, 60u32);
-        let mut tr = Tracker::new(TrackerConfig { line: Some(0.5), confirm_frames: 1, ..Default::default() });
+        let mut tr = Tracker::new(TrackerConfig {
+            line: Some(0.5),
+            confirm_frames: 1,
+            ..Default::default()
+        });
         let mut down = 0;
         let mut up = 0;
         // one disc goes down, another goes up
         for f in 0..30 {
             let yd = 5.0 + f as f32 * 1.5;
             let yu = 55.0 - f as f32 * 1.5;
-            let discs = [Disc { x: 20.0, y: yd, r: 3.0, brightness: 240 }, Disc { x: 60.0, y: yu, r: 3.0, brightness: 240 }];
+            let discs = [
+                Disc {
+                    x: 20.0,
+                    y: yd,
+                    r: 3.0,
+                    brightness: 240,
+                },
+                Disc {
+                    x: 60.0,
+                    y: yu,
+                    r: 3.0,
+                    brightness: 240,
+                },
+            ];
             let frame = testgen::render(w, h, 10, 4, &discs, f as u64 + 3);
             let a = tr.process(&frame, w, h, f as f64 * 0.05);
             for c in &a.crossings {
@@ -949,9 +1036,21 @@ mod tests {
     #[test]
     fn motion_mode_sees_moving_disc_and_ignores_static_bright_region() {
         let (w, h) = (120u32, 90u32);
-        let cfg = TrackerConfig { mode: Mode::Motion, threshold: 0.25, min_blob_px: 4, confirm_frames: 1, line: None, ..Default::default() };
+        let cfg = TrackerConfig {
+            mode: Mode::Motion,
+            threshold: 0.25,
+            min_blob_px: 4,
+            confirm_frames: 1,
+            line: None,
+            ..Default::default()
+        };
         let mut tr = Tracker::new(cfg);
-        let lamp = Disc { x: 100.0, y: 15.0, r: 6.0, brightness: 255 };
+        let lamp = Disc {
+            x: 100.0,
+            y: 15.0,
+            r: 6.0,
+            brightness: 255,
+        };
         // settle the background with the static lamp only
         for f in 0..5 {
             let frame = testgen::render(w, h, 80, 8, &[lamp], 100 + f);
@@ -964,7 +1063,12 @@ mod tests {
         let mut seen = 0;
         let mut max_blobs = 0;
         for f in 5..30 {
-            let mover = Disc { x: 10.0 + (f - 5) as f32 * 4.0, y: 60.0, r: 5.0, brightness: 170 };
+            let mover = Disc {
+                x: 10.0 + (f - 5) as f32 * 4.0,
+                y: 60.0,
+                r: 5.0,
+                brightness: 170,
+            };
             let frame = testgen::render(w, h, 80, 8, &[lamp, mover], 100 + f);
             let a = tr.process(&frame, w, h, f as f64 * 0.1);
             max_blobs = max_blobs.max(a.blobs.len());
@@ -997,8 +1101,14 @@ mod tests {
         let mut times = Vec::new();
         let mut out = FrameAnalysis::default();
         for f in 0..30 {
-            let discs: Vec<Disc> =
-                (0..12).map(|i| Disc { x: 20.0 + i as f32 * 25.0, y: (f * 3 + i * 17) as f32 % 240.0, r: 5.0, brightness: 230 }).collect();
+            let discs: Vec<Disc> = (0..12)
+                .map(|i| Disc {
+                    x: 20.0 + i as f32 * 25.0,
+                    y: (f * 3 + i * 17) as f32 % 240.0,
+                    r: 5.0,
+                    brightness: 230,
+                })
+                .collect();
             let frame = testgen::render(w, h, 20, 30, &discs, f as u64 + 1);
             let start = std::time::Instant::now();
             tr.process_into(&frame, w, h, f as f64 / 15.0, &mut out);
@@ -1010,11 +1120,21 @@ mod tests {
         assert!(median < std::time::Duration::from_millis(20), "median {median:?}");
 
         // Motion mode on the same frames (background diff + update).
-        let mut tr = Tracker::new(TrackerConfig { mode: Mode::Motion, threshold: 0.25, ..Default::default() });
+        let mut tr = Tracker::new(TrackerConfig {
+            mode: Mode::Motion,
+            threshold: 0.25,
+            ..Default::default()
+        });
         let mut times = Vec::new();
         for f in 0..30 {
-            let discs: Vec<Disc> =
-                (0..12).map(|i| Disc { x: 20.0 + i as f32 * 25.0, y: (f * 3 + i * 17) as f32 % 240.0, r: 5.0, brightness: 230 }).collect();
+            let discs: Vec<Disc> = (0..12)
+                .map(|i| Disc {
+                    x: 20.0 + i as f32 * 25.0,
+                    y: (f * 3 + i * 17) as f32 % 240.0,
+                    r: 5.0,
+                    brightness: 230,
+                })
+                .collect();
             let frame = testgen::render(w, h, 20, 30, &discs, f as u64 + 1);
             let start = std::time::Instant::now();
             tr.process_into(&frame, w, h, f as f64 / 15.0, &mut out);

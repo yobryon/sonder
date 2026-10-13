@@ -110,7 +110,13 @@ impl Default for Parser {
 
 impl Parser {
     pub fn new() -> Self {
-        Self { buf: BytesMut::with_capacity(64 << 10), state: State::Seek, max_frame: DEFAULT_MAX_FRAME, boundary: None, stats: Stats::default() }
+        Self {
+            buf: BytesMut::with_capacity(64 << 10),
+            state: State::Seek,
+            max_frame: DEFAULT_MAX_FRAME,
+            boundary: None,
+            stats: Stats::default(),
+        }
     }
 
     /// Record the multipart boundary from a `Content-Type` header, if any. The
@@ -246,7 +252,12 @@ fn content_length(prefix: &[u8]) -> Option<usize> {
     while i + KEY.len() <= prefix.len() {
         if prefix[i..i + KEY.len()].eq_ignore_ascii_case(KEY) {
             let rest = &prefix[i + KEY.len()..];
-            let digits: String = rest.iter().skip_while(|b| **b == b' ' || **b == b'\t').take_while(|b| b.is_ascii_digit()).map(|&b| b as char).collect();
+            let digits: String = rest
+                .iter()
+                .skip_while(|b| **b == b' ' || **b == b'\t')
+                .take_while(|b| b.is_ascii_digit())
+                .map(|&b| b as char)
+                .collect();
             if let Ok(n) = digits.parse::<usize>() {
                 best = Some(n);
             }
@@ -338,7 +349,10 @@ pub struct FrameStream {
 
 impl fmt::Debug for FrameStream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FrameStream").field("parser", &self.parser).field("done", &self.done).finish()
+        f.debug_struct("FrameStream")
+            .field("parser", &self.parser)
+            .field("done", &self.done)
+            .finish()
     }
 }
 
@@ -351,7 +365,11 @@ impl FrameStream {
         E: fmt::Display,
     {
         let mapped = stream.map(|r| r.map_err(|e| VisionError::Stream(e.to_string())));
-        Self { inner: Inner::Stream(Box::pin(mapped)), parser: Parser::new().with_content_type(content_type), done: false }
+        Self {
+            inner: Inner::Stream(Box::pin(mapped)),
+            parser: Parser::new().with_content_type(content_type),
+            done: false,
+        }
     }
 
     /// Wrap an `AsyncRead` such as `tokio::io::stdin()`.
@@ -359,7 +377,11 @@ impl FrameStream {
     where
         R: AsyncRead + Send + 'static,
     {
-        Self { inner: Inner::Reader(Box::pin(reader), vec![0u8; 64 << 10]), parser: Parser::new().with_content_type(content_type), done: false }
+        Self {
+            inner: Inner::Reader(Box::pin(reader), vec![0u8; 64 << 10]),
+            parser: Parser::new().with_content_type(content_type),
+            done: false,
+        }
     }
 
     /// Set the largest frame accepted.
@@ -442,8 +464,14 @@ mod tests {
 
     #[test]
     fn boundary_parsing() {
-        assert_eq!(boundary_from_content_type("multipart/x-mixed-replace; boundary=myboundary").as_deref(), Some("myboundary"));
-        assert_eq!(boundary_from_content_type("multipart/x-mixed-replace;boundary=\"--abc\""), Some("abc".into()));
+        assert_eq!(
+            boundary_from_content_type("multipart/x-mixed-replace; boundary=myboundary").as_deref(),
+            Some("myboundary")
+        );
+        assert_eq!(
+            boundary_from_content_type("multipart/x-mixed-replace;boundary=\"--abc\""),
+            Some("abc".into())
+        );
         assert_eq!(boundary_from_content_type("image/jpeg"), None);
     }
 
@@ -604,8 +632,7 @@ mod tests {
         assert_eq!(got.len(), fr.len());
 
         // an erroring stream surfaces the error then ends
-        let chunks: Vec<Result<Bytes, std::io::Error>> =
-            vec![Ok(Bytes::copy_from_slice(&fr[0])), Err(std::io::Error::other("boom"))];
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::copy_from_slice(&fr[0])), Err(std::io::Error::other("boom"))];
         let s = FrameStream::from_stream(futures::stream::iter(chunks), None);
         let got: Vec<_> = s.collect().await;
         assert_eq!(got.len(), 2);

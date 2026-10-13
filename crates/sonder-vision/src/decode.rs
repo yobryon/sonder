@@ -68,7 +68,9 @@ impl Decoder {
         };
         let total = dec.total_bytes();
         if total > usize::MAX as u64 || total != (w as u64) * (h as u64) * channels as u64 {
-            return Err(VisionError::Decode(format!("inconsistent decoded size {total} for {w}x{h}x{channels}")));
+            return Err(VisionError::Decode(format!(
+                "inconsistent decoded size {total} for {w}x{h}x{channels}"
+            )));
         }
         self.scratch.clear();
         self.scratch.resize(total as usize, 0);
@@ -196,14 +198,29 @@ mod tests {
             }
             assert_eq!(*o as u32, (s + 4) / 9);
         }
-        assert!(matches!(downscale_luma(&src, w, h, 3, 0, &mut out), Err(VisionError::BadDownscale(0))));
+        assert!(matches!(
+            downscale_luma(&src, w, h, 3, 0, &mut out),
+            Err(VisionError::BadDownscale(0))
+        ));
         assert!(downscale_luma(&src, w, h, 3, 8, &mut out).is_err());
     }
 
     #[test]
     fn decode_gray_roundtrip_matches_source_within_jpeg_error() {
         let (w, h) = (64u32, 48u32);
-        let frame = testgen::render(w, h, 20, 0, &[testgen::Disc { x: 32.0, y: 24.0, r: 10.0, brightness: 240 }], 1);
+        let frame = testgen::render(
+            w,
+            h,
+            20,
+            0,
+            &[testgen::Disc {
+                x: 32.0,
+                y: 24.0,
+                r: 10.0,
+                brightness: 240,
+            }],
+            1,
+        );
         let jpeg = testgen::encode_jpeg(&frame, w, h, 95).unwrap();
         let (g, ow, oh) = decode_gray(&jpeg, 1).unwrap();
         assert_eq!((ow, oh), (w, h));
