@@ -70,6 +70,9 @@ impl Trigger {
 }
 
 /// One compiled `on_event.<name>` table.
+/// Upper bound on the `quantize` grid, in beats.
+pub const MAX_QUANTIZE_BEATS: f64 = 16.0;
+
 #[derive(Debug)]
 pub struct Mapping {
     pitch: Option<EventExpr>,
@@ -104,12 +107,16 @@ impl Mapping {
         };
         let quantize = match table.get(event_keys::QUANTIZE) {
             None => None,
-            Some(g) => parse_grid(g).map_err(|e| ComposeError::EventExpr {
-                layer: layer.to_string(),
-                event: event.to_string(),
-                key: event_keys::QUANTIZE.to_string(),
-                message: e.to_string(),
-            })?,
+            Some(g) => parse_grid(g)
+                .map_err(|e| ComposeError::EventExpr {
+                    layer: layer.to_string(),
+                    event: event.to_string(),
+                    key: event_keys::QUANTIZE.to_string(),
+                    message: e.to_string(),
+                })?
+                // A grid longer than a few bars would hold deferred triggers for ages;
+                // nothing musical lives there, and a flooding source could pile them up.
+                .map(|beats| beats.min(MAX_QUANTIZE_BEATS)),
         };
         let drum = match table.get(event_keys::DRUM) {
             None => None,

@@ -56,12 +56,21 @@ pub struct EngineHandle {
 }
 
 impl EngineHandle {
-    /// Ask everything to stop.
+    /// Ask everything to stop. `done` resolves once the control thread, the audio
+    /// stream and any command sinks (MIDI) have been shut down.
     pub fn shutdown(&self) {
         let _ = self.shutdown.send(true);
     }
     pub fn subscribe_audio(&self) -> Option<WebAudio> {
         self.audio.as_ref().map(|a| a.subscribe())
+    }
+}
+
+impl Drop for EngineHandle {
+    /// Dropping the last handle stops the engine; otherwise the control thread and the
+    /// audio stream would keep running (and playing) with nobody able to reach them.
+    fn drop(&mut self) {
+        let _ = self.shutdown.send(true);
     }
 }
 
@@ -81,6 +90,9 @@ pub fn apply_overrides(scene: &mut Scene, overrides: &[(String, SourceSpec)]) ->
             scene.layers.iter().position(|l| &l.name == layer_name)
         };
         let Some(i) = target else {
+            if layer_name.is_empty() {
+                anyhow::bail!("no layer in scene `{}` has a source to override; pass --layer <name>", scene.name);
+            }
             anyhow::bail!("no layer `{layer_name}` to override the source of");
         };
         scene.layers[i].source = LayerSource::Spec(spec.clone());
@@ -188,7 +200,14 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
                     next = now;
                 }
             };
-            drop(source_tasks);
+            // Shutdown order: sources (they also saw the watch flip), then the control
+            // loop with its sinks (MIDI sends its note-offs on drop), then the audio
+            // stream (joins the backend thread). Only then is the engine `done`.
+            for t in source_tasks {
+                t.abort();
+            }
+            drop(control);
+            drop(_stream);
             let _ = done_tx.send(result);
         })
         .context("spawning control thread")?;
@@ -250,4 +269,40 @@ fn slug(s: &str) -> String {
         }
     }
     out.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn null_opts() -> EngineOptions {
+        EngineOptions { backend: AudioBackendChoice::Null, seed: Some(7), ..EngineOptions::default() }
+    }
+
+    /// Resolves once the control thread has exited (it owns the snapshot sender).
+    async fn control_thread_exited(mut rx: crate::SnapshotRx) {
+        while rx.changed().await.is_ok() {}
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn quit_resolves_done_and_stops_the_control_thread() {
+        let scene = crate::load_scene("night-freeway").unwrap();
+        let mut handle = start(scene, null_opts()).await.unwrap();
+        let rx = handle.snapshot.clone();
+        handle.commands.send(UserCommand::Quit).await.unwrap();
+        let res = tokio::time::timeout(Duration::from_secs(5), &mut handle.done).await.expect("done never resolved");
+        res.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), control_thread_exited(rx)).await.expect("control thread still running");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_the_handle_stops_the_engine() {
+        let scene = crate::load_scene("night-freeway").unwrap();
+        let handle = start(scene, null_opts()).await.unwrap();
+        let rx = handle.snapshot.clone();
+        drop(handle);
+        tokio::time::timeout(Duration::from_secs(5), control_thread_exited(rx))
+            .await
+            .expect("engine kept running after its handle was dropped");
+    }
 }

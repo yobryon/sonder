@@ -118,11 +118,14 @@ impl Source for WikiSource {
             let mut window = RateWindow::default();
             let mut net_bytes = 0.0_f64;
             let mut last_id: Option<String> = None;
+            let mut rng = util::rng_from_seed(util::instance_seed(em.ctx.seed, em.ctx.id.as_str(), None));
+            let mut attempt = 0u32;
             loop {
                 if em.is_shutdown() {
                     return;
                 }
                 em.status_force(SourceState::Connecting, "connecting").await;
+                let started = std::time::Instant::now();
                 let res = stream_once(&mut em, &cfg, &mut window, &mut net_bytes, &mut last_id).await;
                 if em.is_shutdown() {
                     return;
@@ -131,8 +134,12 @@ impl Source for WikiSource {
                     Ok(()) => "stream ended".to_string(),
                     Err(m) => m,
                 };
-                let mut rng = util::rng_from_seed(util::instance_seed(em.ctx.seed, em.ctx.id.as_str(), None));
-                let d = util::retry_delay(1, &mut rng);
+                // A connection that lived a while counts as a success for backoff.
+                if started.elapsed() > Duration::from_secs(60) {
+                    attempt = 0;
+                }
+                let d = util::retry_delay(attempt, &mut rng);
+                attempt = attempt.saturating_add(1);
                 em.status_force(SourceState::Reconnecting, format!("{msg}; reconnect in {:.0}s", d.as_secs_f64())).await;
                 if !em.sleep(d).await {
                     return;
@@ -158,7 +165,15 @@ async fn stream_once(
     if let Some(id) = last_id.as_deref() {
         req = req.header("Last-Event-ID", id);
     }
-    let resp = req.send().await.map_err(|e| util::short_err(&e))?;
+    // Header wait is time-bounded and interruptible by shutdown.
+    let resp = tokio::select! {
+        r = tokio::time::timeout(Duration::from_secs(20), req.send()) => match r {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => return Err(util::short_err(&e)),
+            Err(_) => return Err("connect timeout".into()),
+        },
+        _ = em.ctx.wait_shutdown() => return Ok(()),
+    };
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
@@ -174,6 +189,7 @@ async fn stream_once(
         let chunk = tokio::select! {
             c = body.next() => c,
             _ = tokio::time::sleep(Duration::from_secs(2)) => { timed_out = true; None }
+            _ = em.ctx.wait_shutdown() => return Ok(()),
         };
         match chunk {
             Some(Ok(bytes)) => {

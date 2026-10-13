@@ -26,7 +26,7 @@ const state = {
   tick: 0,
   hist: new Map(),        // layerId -> Map(signal -> {buf, i, n})
   events: [],             // deduped, oldest first, with .wall (Date.now at receipt)
-  seenEvents: new Set(),
+  seenEvents: new Map(),  // dedupe key -> how many events with that key we've ingested
   notes: new Map(),       // key -> NoteSnapshot (latest copy)
   rings: [],              // transient flashes on the stage {x,y,layer,t0,intensity}
   pings: [],              // map pings {x,y,layer,t0,intensity}
@@ -76,6 +76,34 @@ function eventPosition(e, snap) {
   return { x: 0.96, y: (Math.max(0, idx) + 0.5) / n };
 }
 
+const eventKey = (e) => `${e.at}|${e.layer}|${e.name}`;
+const noteKey = (n) => `${n.at}|${n.layer}|${n.midi}`;
+
+// Count events per dedupe key.
+function countEvents(events) {
+  const m = new Map();
+  for (const e of events) { const k = eventKey(e); m.set(k, (m.get(k) || 0) + 1); }
+  return m;
+}
+
+// Events in `events` (a snapshot's recent-events window) not yet ingested, in
+// order. Events share `at` within an engine tick, so the key is not unique: we
+// compare per-key counts against `seen` (updated in place) instead of a set, so
+// two cars leaving in the same tick both show up.
+function newEvents(events, seen) {
+  const out = [];
+  const here = new Map();
+  for (const e of events) {
+    const k = eventKey(e);
+    const c = (here.get(k) || 0) + 1;
+    here.set(k, c);
+    if (c <= (seen.get(k) || 0)) continue;
+    seen.set(k, c);
+    out.push(e);
+  }
+  return out;
+}
+
 function ingest(snap) {
   state.snap = snap;
   state.recvAt = performance.now();
@@ -97,10 +125,7 @@ function ingest(snap) {
   }
 
   const wall = Date.now();
-  for (const e of snap.events || []) {
-    const key = `${e.at}|${e.layer}|${e.name}`;
-    if (state.seenEvents.has(key)) continue;
-    state.seenEvents.add(key);
+  for (const e of newEvents(snap.events || [], state.seenEvents)) {
     state.events.push({ ...e, wall });
     state.tickerDirty = true;
     const p = eventPosition(e, snap);
@@ -109,11 +134,17 @@ function ingest(snap) {
     if (e.attrs && typeof e.attrs.lat01 === 'number') state.pings.push(ring);
   }
   if (state.events.length > 200) state.events.splice(0, state.events.length - 200);
-  if (state.seenEvents.size > 4000) {
-    state.seenEvents = new Set(state.events.map((e) => `${e.at}|${e.layer}|${e.name}`));
-  }
+  if (state.seenEvents.size > 4000) state.seenEvents = countEvents(state.events);
 
-  for (const n of snap.notes || []) state.notes.set(`${n.at}|${n.layer}|${n.midi}`, n);
+  const inSnap = new Set();
+  for (const n of snap.notes || []) {
+    const k = noteKey(n);
+    inSnap.add(k);
+    state.notes.set(k, n);
+  }
+  // A note that left the snapshot window while we still had it as active has
+  // ended (or the engine restarted); otherwise it would be drawn forever.
+  for (const n of state.notes.values()) if (n.active && !inSnap.has(noteKey(n))) n.active = false;
   const horizon = snap.time - 20;
   for (const [k, n] of state.notes) if (n.at < horizon && !n.active) state.notes.delete(k);
 
@@ -720,9 +751,11 @@ function openAudioSocket() {
       if (h.error) { setText($('#buf'), h.error); $('#buf').className = 'buf mono bad'; return; }
       audio.srcRate = h.sample_rate || audio.srcRate;
       audio.channels = h.channels || 2;
+      if (!audio.node) return;
       audio.node.port.postMessage({ type: 'config', srcRate: audio.srcRate, targetMs: 200, maxMs: 500 });
       return;
     }
+    if (!audio.node) return; // stopped while frames were still in flight
     const i16 = new Int16Array(ev.data);
     const f32 = new Float32Array(i16.length);
     let pl = 0, pr = 0;

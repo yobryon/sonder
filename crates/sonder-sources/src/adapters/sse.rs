@@ -13,6 +13,9 @@ use crate::sse::SseParser;
 use crate::util::{self, Emitter, USER_AGENT};
 use crate::{Source, SourceCtx, SourceError, SourceFuture};
 
+/// Upper bound on waiting for the response headers.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
 struct SseSource {
     url: String,
     headers: Vec<(String, String)>,
@@ -68,7 +71,17 @@ impl SseSource {
         if let Some(id) = last_id.as_deref() {
             req = req.header("Last-Event-ID", id);
         }
-        let resp = req.send().await.map_err(|e| util::short_err(&e))?;
+        // Waiting for response headers must be both time-bounded and
+        // interruptible: a server that accepts the TCP connection and never
+        // answers would otherwise hang shutdown.
+        let resp = tokio::select! {
+            r = tokio::time::timeout(CONNECT_TIMEOUT, req.send()) => match r {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => return Err(util::short_err(&e)),
+                Err(_) => return Err("connect timeout".into()),
+            },
+            _ = em.ctx.wait_shutdown() => return Ok(()),
+        };
         if !resp.status().is_success() {
             return Err(format!("HTTP {}", resp.status()));
         }
@@ -91,6 +104,7 @@ impl SseSource {
                     }
                     continue;
                 }
+                _ = em.ctx.wait_shutdown() => return Ok(()),
             };
             match chunk {
                 Some(Ok(bytes)) => {
@@ -160,5 +174,38 @@ mod tests {
         let spec = SourceSpec::new("sse").with("url", "https://stream.example/x").with("filter", "type==edit").with("sse_event", "message");
         assert!(factory(&spec).is_ok());
         assert!(factory(&SourceSpec::new("sse")).is_err());
+    }
+
+    /// A server that accepts the connection but never sends headers must not
+    /// keep the source alive past shutdown.
+    #[tokio::test]
+    async fn shutdown_interrupts_hanging_connect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hold = tokio::spawn(async move {
+            let mut socks = Vec::new();
+            loop {
+                if let Ok((s, _)) = listener.accept().await {
+                    socks.push(s);
+                }
+            }
+        });
+        let spec = SourceSpec::new("sse").with("url", format!("http://{addr}/stream"));
+        let src = factory(&spec).unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+        let (stx, srx) = tokio::sync::watch::channel(false);
+        let ctx = SourceCtx {
+            id: sonder_core::SourceId::new("s"),
+            tx,
+            clock: std::sync::Arc::new(sonder_core::WallClock::new()),
+            http: reqwest::Client::new(),
+            shutdown: srx,
+            seed: 1,
+        };
+        let task = tokio::spawn(src.run(ctx));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        stx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), task).await.expect("source must stop on shutdown").unwrap();
+        hold.abort();
     }
 }

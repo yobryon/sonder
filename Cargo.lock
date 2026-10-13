@@ -3110,6 +3110,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sonder-core",
+ "sonder-expr",
  "sysinfo",
  "thiserror 2.0.21",
  "tokio",

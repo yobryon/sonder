@@ -428,3 +428,25 @@ fn odd_buffer_lengths_are_handled() {
     synth.render(&mut b);
     assert!(b.iter().all(|s| s.is_finite()));
 }
+
+#[test]
+fn non_finite_adsr_values_do_not_leave_voices_stuck() {
+    // TOML accepts `nan`/`inf`; a NaN sustain used to keep the envelope in Decay (and
+    // then Release) forever, and an infinite release never reached the end threshold.
+    for amp_env in [
+        Adsr { sustain: f32::NAN, ..Adsr::default() },
+        Adsr { release: f32::INFINITY, ..Adsr::default() },
+        Adsr { attack: f32::NAN, decay: f32::INFINITY, ..Adsr::default() },
+    ] {
+        let mut synth = Synth::new(SR, 1);
+        synth.handle(SynthCommand::SetEffects(Box::new(no_effects())));
+        set_instrument(&mut synth, 0, Instrument { amp_env, ..dry_sine() });
+        note_on(&mut synth, 0, 1, 440.0, 0.8);
+        let out = render_seconds(&mut synth, 0.5);
+        assert!(out.iter().all(|s| s.is_finite()), "{amp_env:?}: non-finite output");
+        assert_eq!(synth.active_voices(), 1);
+        note_off(&mut synth, 0, 1);
+        render_seconds(&mut synth, 2.0);
+        assert_eq!(synth.active_voices(), 0, "{amp_env:?}: voice never finished its release");
+    }
+}

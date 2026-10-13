@@ -24,6 +24,15 @@ pub struct Envelope {
     sustain: f32,
 }
 
+#[inline]
+fn finite_or(x: f32, default: f32) -> f32 {
+    if x.is_finite() {
+        x
+    } else {
+        default
+    }
+}
+
 /// Level below which a releasing envelope is considered finished (−84 dB).
 const END_THRESHOLD: f32 = 6e-5;
 /// Attack overshoots toward this target so it reaches 1.0 in finite time.
@@ -32,15 +41,18 @@ const ATTACK_TARGET: f32 = 1.3;
 impl Envelope {
     /// Configure from an [`Adsr`] at `sample_rate`.
     pub fn configure(&mut self, a: &Adsr, sample_rate: f32) {
-        let att = a.attack.max(0.001);
-        let dec = a.decay.max(0.002);
-        let rel = a.release.max(0.003);
+        // Non-finite times/levels (TOML allows `nan`/`inf`) would leave the envelope in a
+        // stage it can never leave (a voice stuck forever); fall back to the defaults.
+        let d = Adsr::default();
+        let att = finite_or(a.attack, d.attack).max(0.001);
+        let dec = finite_or(a.decay, d.decay).max(0.002);
+        let rel = finite_or(a.release, d.release).max(0.003);
         // Attack: reach 1.0 (target 1.3) in `att` seconds: 1 - exp(-n·c) = 1/1.3.
         self.attack_coef = 1.0 - (-(1.0 / (att * sample_rate)) * 1.47).exp();
         // Decay/release: ~−60 dB in the given time (time constant = t/6.9).
         self.decay_coef = 1.0 - (-(6.9 / (dec * sample_rate))).exp();
         self.release_coef = 1.0 - (-(6.9 / (rel * sample_rate))).exp();
-        self.sustain = a.sustain.clamp(0.0, 1.0);
+        self.sustain = finite_or(a.sustain, d.sustain).clamp(0.0, 1.0);
     }
 
     pub fn trigger(&mut self) {

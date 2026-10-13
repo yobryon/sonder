@@ -262,15 +262,37 @@ impl Scene {
                     }
                 }
             }
-            if !(0.0..=4.0).contains(&l.gain) {
+            if !l.gain.is_finite() || !(0.0..=4.0).contains(&l.gain) {
                 errs.push(format!("{ctx}: gain {} out of range 0..4", l.gain));
+            }
+            if !l.mood_weight.is_finite() || l.mood_weight < 0.0 {
+                errs.push(format!("{ctx}: mood_weight {} must be finite and ≥ 0", l.mood_weight));
             }
         }
         if crate::music::parse_pitch_class(&self.conductor.key).is_none() {
             errs.push(format!("conductor.key `{}` is not a pitch class", self.conductor.key));
         }
-        if self.conductor.tempo <= 0.0 {
+        let c = &self.conductor;
+        if !(c.tempo.is_finite() && c.tempo > 0.0) {
             errs.push("conductor.tempo must be positive".into());
+        }
+        let [lo, hi] = c.tempo_range;
+        if !(lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo) {
+            errs.push(format!("conductor.tempo_range {:?} must be finite with 0 < lo ≤ hi", c.tempo_range));
+        }
+        if c.mood_baseline.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+            errs.push(format!("conductor.mood_baseline {:?} must be within 0..1", c.mood_baseline));
+        }
+        for (name, v) in [("swing", c.swing), ("humanize", c.humanize)] {
+            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                errs.push(format!("conductor.{name} {v} must be within 0..1"));
+            }
+        }
+        if !(c.bars_per_chord.is_finite() && c.bars_per_chord > 0.0) {
+            errs.push("conductor.bars_per_chord must be positive".into());
+        }
+        if !(c.mood_smoothing.is_finite() && c.mood_smoothing >= 0.0) {
+            errs.push("conductor.mood_smoothing must be finite and ≥ 0".into());
         }
         if self.conductor.beats_per_bar == 0 {
             errs.push("conductor.beats_per_bar must be ≥ 1".into());
@@ -331,5 +353,20 @@ mod tests {
         let errs = s.validate_structure().unwrap_err();
         assert!(errs.iter().any(|e| e.contains("unknown layer")));
         assert!(errs.iter().any(|e| e.contains("duplicate")));
+    }
+
+    #[test]
+    fn validation_rejects_non_finite_scalars() {
+        let mut s = Scene::default();
+        s.conductor.tempo = f64::NAN;
+        s.conductor.mood_baseline = [0.5, f64::INFINITY, 0.5];
+        s.conductor.tempo_range = [100.0, 50.0];
+        s.layers.push(LayerConfig { name: "a".into(), gain: f32::NAN, mood_weight: -1.0, ..Default::default() });
+        let errs = s.validate_structure().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("tempo must be positive")), "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("mood_baseline")), "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("tempo_range")), "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("gain")), "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("mood_weight")), "{errs:?}");
     }
 }

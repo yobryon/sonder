@@ -299,10 +299,13 @@ async fn play(args: PlayArgs, tui: bool) -> anyhow::Result<()> {
         None
     };
 
+    let mut handle = handle;
     if tui {
         let opts = sonder_tui::TuiOptions { web_url: web_url.clone(), ..Default::default() };
         let res = sonder_tui::run(handle.snapshot.clone(), handle.commands.clone(), opts).await;
         handle.shutdown();
+        // Let the engine finish (MIDI note-offs, audio thread join) before the process exits.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle.done).await;
         res?;
     } else {
         eprintln!("sonder: playing `{}` — audio: {}", args.scene, handle.audio_backend);
@@ -310,12 +313,16 @@ async fn play(args: PlayArgs, tui: bool) -> anyhow::Result<()> {
             eprintln!("sonder: web ui at {u}");
         }
         eprintln!("sonder: Ctrl-C to stop");
-        let mut handle = handle;
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            r = &mut handle.done => { r.ok().transpose()?; },
+            _ = tokio::signal::ctrl_c() => {
+                handle.shutdown();
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle.done).await;
+            },
+            r = &mut handle.done => {
+                // A dropped sender means the control thread died (panicked) without reporting.
+                r.map_err(|_| anyhow::anyhow!("engine control thread exited unexpectedly"))??;
+            },
         }
-        handle.shutdown();
     }
     Ok(())
 }

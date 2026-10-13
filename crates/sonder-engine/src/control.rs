@@ -366,7 +366,7 @@ impl ControlLoop {
                     st.state
                 },
                 message: st.message.clone(),
-                rate: st.recent.len() as f64,
+                rate: st.recent.iter().filter(|t| now - **t <= 1.0).count() as f64,
                 last_sample_at: st.last_sample_at,
                 readings: st.readings.clone(),
             })
@@ -384,7 +384,8 @@ impl ControlLoop {
         snap.master = self.synth.master_meter();
         snap.spectrum = self.analyzer.bands().to_vec();
         snap.viz = self.viz.clone();
-        snap.underruns = self.underruns;
+        // Backends report underruns through the shared atomic, not the feedback queue.
+        snap.underruns = self.underruns.saturating_add(self.synth.underruns());
         snap.audio_backend = self.audio_backend.clone();
         let _ = self.snapshot_tx.send(Arc::new(snap));
     }
@@ -446,4 +447,54 @@ fn fnv(s: &str) -> u64 {
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     h
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn control_with_host() -> (ControlLoop, sonder_audio::SynthHost, tokio::sync::watch::Receiver<Arc<EngineSnapshot>>) {
+        let scene = crate::load_scene("night-freeway").unwrap();
+        let (controller, host) = sonder_audio::synth_pair(48_000.0, scene.layers.len(), None);
+        let (tx, rx) = tokio::sync::watch::channel(Arc::new(EngineSnapshot::default()));
+        let control = ControlLoop::new(scene, 1, controller, None, None, "test".into(), tx).unwrap();
+        (control, host, rx)
+    }
+
+    /// Two ticks = one snapshot publish.
+    fn tick_and_publish(control: &mut ControlLoop, host: &mut sonder_audio::SynthHost, now: Seconds) {
+        let mut block = vec![0.0f32; 960 * 2];
+        control.tick(now);
+        host.render(&mut block);
+        control.tick(now + TICK_SECONDS);
+        host.render(&mut block);
+    }
+
+    #[test]
+    fn backend_underruns_reach_the_snapshot() {
+        let (mut control, mut host, rx) = control_with_host();
+        tick_and_publish(&mut control, &mut host, 0.0);
+        assert_eq!(rx.borrow().underruns, 0);
+        host.report_underrun();
+        host.report_underrun();
+        tick_and_publish(&mut control, &mut host, 1.0);
+        assert_eq!(rx.borrow().underruns, 2);
+    }
+
+    #[test]
+    fn source_rate_decays_when_samples_stop() {
+        let (mut control, mut host, rx) = control_with_host();
+        let traffic = SourceId::new("traffic");
+        for i in 0..5 {
+            control.ingest(Sample::reading(&traffic, i as f64 * 0.1, [("mean_speed", 60.0)]));
+        }
+        tick_and_publish(&mut control, &mut host, 0.5);
+        let src = rx.borrow().sources.iter().find(|s| s.name == "traffic").cloned().unwrap();
+        assert_eq!(src.rate, 5.0);
+        assert_eq!(src.state, SourceState::Live);
+        // Nothing arrives for a while: the per-second rate must fall to zero, not stick at 5.
+        tick_and_publish(&mut control, &mut host, 5.0);
+        let src = rx.borrow().sources.iter().find(|s| s.name == "traffic").cloned().unwrap();
+        assert_eq!(src.rate, 0.0, "rate is stale: {src:?}");
+    }
 }

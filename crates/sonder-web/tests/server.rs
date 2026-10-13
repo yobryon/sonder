@@ -191,3 +191,39 @@ async fn audio_endpoint_without_tap_reports_error() {
     let next = tokio::time::timeout(Duration::from_secs(2), aws.next()).await.unwrap();
     assert!(matches!(next, Some(Ok(Message::Close(_))) | None));
 }
+
+/// Graceful shutdown must not wait on a browser that keeps `/audio` open: the
+/// audio broadcast never closes by itself, so the handler has to watch the engine.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_completes_with_audio_client_connected() {
+    let (snap_tx, snap_rx) = watch::channel(Arc::new(fake_snapshot(0.0)));
+    let (cmd_tx, _cmd_rx) = mpsc::channel::<UserCommand>(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = WebHandle {
+        snapshot: snap_rx,
+        commands: cmd_tx,
+        audio: Some(Box::new(Sine { phase: 0.0, rate: 48000.0 })),
+        sample_rate: 48000,
+    };
+    let server = tokio::spawn(serve_on(listener, handle));
+
+    let (mut aws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/audio")).await.unwrap();
+    let header = tokio::time::timeout(Duration::from_secs(2), aws.next()).await.unwrap().unwrap().unwrap();
+    assert!(header.is_text());
+    // Keep the client connected and reading while the engine goes away.
+    let reader = tokio::spawn(async move {
+        let mut closed = false;
+        while let Ok(Some(m)) = tokio::time::timeout(Duration::from_secs(5), aws.next()).await {
+            if matches!(m, Ok(Message::Close(_)) | Err(_)) {
+                closed = true;
+                break;
+            }
+        }
+        closed
+    });
+    drop(snap_tx);
+    let result = tokio::time::timeout(Duration::from_secs(5), server).await.expect("server should stop").unwrap();
+    result.unwrap();
+    assert!(reader.await.unwrap(), "audio client should see a Close frame");
+}

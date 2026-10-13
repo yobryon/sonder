@@ -131,9 +131,6 @@ fn lower_ident(name: &str, span: Span, lw: &mut Lowerer) -> Result<Node, ExprErr
             name: name.to_string(),
         });
     }
-    if !lw.scope.event_ctx && lw.scope.fields.iter().any(|f| f == name) {
-        return Ok(Node::Field(lw.env.field_slot(name)));
-    }
     match name {
         "time" => return Ok(Node::Time),
         "dt" => return Ok(Node::Dt),
@@ -152,7 +149,10 @@ fn lower_ident(name: &str, span: Span, lw: &mut Lowerer) -> Result<Node, ExprErr
         }
         _ => {}
     }
-    if !lw.scope.event_ctx && lw.scope.fields.is_empty() {
+    // Constants win over bare channel names so that validation (known channels) and
+    // runtime (any channel) agree; a channel called `e` or `time` is still reachable
+    // as `field("e")`.
+    if !lw.scope.event_ctx && (lw.scope.fields.is_empty() || lw.scope.fields.iter().any(|f| f == name)) {
         return Ok(Node::Field(lw.env.field_slot(name)));
     }
     Err(ExprError::at(span, unknown_ident_message(name, lw.scope)))

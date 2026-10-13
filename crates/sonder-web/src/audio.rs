@@ -155,8 +155,17 @@ async fn handle(mut socket: WebSocket, state: Arc<AppState>) {
     }
 
     let mut rx = hub.tx.subscribe();
+    // The hub keeps a broadcast sender alive for the server's lifetime, so the
+    // engine ending is observed through the snapshot watch, not `RecvError::Closed`.
+    let mut engine = state.snapshot.clone();
     loop {
         tokio::select! {
+            changed = engine.changed() => {
+                if changed.is_err() {
+                    let _ = socket.send(Message::Close(None)).await;
+                    return;
+                }
+            }
             frame = rx.recv() => {
                 match frame {
                     Ok(bytes) => {

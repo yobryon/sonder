@@ -240,10 +240,12 @@ pub fn starter_scene(report: &ProbeReport, url: &str) -> Scene {
     let mut pluck = LayerConfig { name: "changes".into(), role: Role::Pluck, instrument: "pluck.glass".into(), ..Default::default() };
     pluck.source = LayerSource::Shared("feed".into());
     let pitch = if lead_path.contains('.') || lead_path.contains('[') {
-        // Nested paths aren't event attrs; wander instead.
-        "walk(0.2, 1)".to_string()
+        // Nested paths aren't event attrs; wander instead. `walk` is stateful and
+        // not allowed in `on_event`, so compute it as a signal and reference it.
+        pluck.signals.insert("wander".into(), "walk(0.2, 4)".into());
+        "wander".to_string()
     } else {
-        format!("hash(attr('{lead_path}'))")
+        format!("hash(attr('{}'))", lead_path.replace('\'', ""))
     };
     let mut on_update = std::collections::BTreeMap::new();
     on_update.insert("pitch".into(), pitch);
@@ -325,6 +327,7 @@ mod tests {
         }
         assert_eq!(s.layers[1].on_event["update"]["pitch"], "hash(attr('requests_per_sec'))");
         assert_eq!(s.layers[2].role, Role::Bass);
+        assert_exprs_compile(&s);
         // Round-trips through JSON (the TOML model is identical).
         let j = serde_json::to_string(&s).unwrap();
         let back: Scene = serde_json::from_str(&j).unwrap();
@@ -337,6 +340,44 @@ mod tests {
         assert!(r.fields.iter().all(|f| !f.changed));
         let s = starter_scene(&r, "https://x/y");
         s.validate_structure().unwrap();
+        assert_exprs_compile(&s);
+    }
+
+    /// Compile every signal/map expression and every `on_event` value the way the
+    /// engine does, so a starter scene can never be rejected by the validator.
+    fn assert_exprs_compile(s: &Scene) {
+        for l in &s.layers {
+            sonder_expr::LayerPipeline::compile(&l.signals, &l.map, 0)
+                .unwrap_or_else(|e| panic!("layer {}: {e}", l.name));
+            let names: Vec<String> = l.signals.keys().cloned().collect();
+            for (ev, m) in &l.on_event {
+                for (k, v) in m {
+                    if k == sonder_core::music::event_keys::QUANTIZE {
+                        continue;
+                    }
+                    sonder_expr::EventExpr::compile(v, &names)
+                        .unwrap_or_else(|e| panic!("layer {} on_event.{ev}.{k} = {v:?}: {e}", l.name));
+                }
+            }
+        }
+    }
+
+    /// `sonder probe http://api.open-notify.org/iss-now.json`: the lead field is
+    /// nested, so the pluck's pitch cannot come from an event attr. Whatever it
+    /// uses instead must be legal in `on_event` (no stateful builtins).
+    #[test]
+    fn nested_lead_field_builds_a_compilable_scene() {
+        let samples = vec![
+            json!({"message": "success", "timestamp": 1700000000, "iss_position": {"latitude": "-12.3", "longitude": "100.1"}}),
+            json!({"message": "success", "timestamp": 1700000005, "iss_position": {"latitude": "-12.1", "longitude": "100.4"}}),
+            json!({"message": "success", "timestamp": 1700000010, "iss_position": {"latitude": "-11.9", "longitude": "100.7"}}),
+        ];
+        let r = analyze(&samples, "http://api.open-notify.org/iss-now.json");
+        let s = starter_scene(&r, "http://api.open-notify.org/iss-now.json");
+        s.validate_structure().unwrap();
+        let pitch = &s.layers[1].on_event["update"]["pitch"];
+        assert!(!pitch.contains("walk("), "stateful builtin in on_event: {pitch}");
+        assert_exprs_compile(&s);
     }
 
     /// `cargo test -p sonder-sources -- --ignored probe`

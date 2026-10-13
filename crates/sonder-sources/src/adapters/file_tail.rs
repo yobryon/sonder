@@ -125,6 +125,9 @@ impl Source for FileTailSource {
             em.status(SourceState::Connecting, format!("waiting for {}", self.path.display())).await;
             let mut pos: Option<u64> = None;
             let mut partial = String::new();
+            // Identity (device, inode) of the file we are following, so a rotation
+            // that replaces it with a file at least as long is still noticed.
+            let mut last_ident: Option<(u64, u64)> = None;
             loop {
                 if em.is_shutdown() {
                     return;
@@ -141,10 +144,18 @@ impl Source for FileTailSource {
                     }
                 };
                 let len = meta.len();
+                let ident = file_identity(&meta);
+                let rotated = last_ident.is_some() && ident.is_some() && ident != last_ident;
+                last_ident = ident;
                 let start = match pos {
-                    Some(p) if p <= len => p,
+                    Some(p) if p <= len && !rotated => p,
+                    // Truncated/rotated (or reappeared after going missing): start over.
+                    Some(_) | None if rotated => {
+                        partial.clear();
+                        lc.csv_header = None;
+                        0
+                    }
                     Some(_) => {
-                        // Truncated/rotated: start over.
                         partial.clear();
                         lc.csv_header = None;
                         0
@@ -160,6 +171,8 @@ impl Source for FileTailSource {
                 if len > start {
                     match read_from(&self.path, start, len - start).await {
                         Ok(bytes) => {
+                            // Only advance by what was actually read (reads are capped).
+                            pos = Some(start + bytes.len() as u64);
                             partial.push_str(&String::from_utf8_lossy(&bytes));
                             let mut emitted = 0;
                             while let Some(nl) = partial.find('\n') {
@@ -173,7 +186,6 @@ impl Source for FileTailSource {
                             if emitted > 0 {
                                 em.status(SourceState::Live, "live").await;
                             }
-                            pos = Some(len);
                         }
                         Err(e) => {
                             em.status(SourceState::Reconnecting, format!("read failed: {e}")).await;
@@ -191,6 +203,19 @@ impl Source for FileTailSource {
             }
         })
     }
+}
+
+/// `(device, inode)` of a file on Unix; `None` elsewhere (rotation is then only
+/// detected by shrinking).
+#[cfg(unix)]
+fn file_identity(m: &std::fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    Some((m.dev(), m.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_identity(_m: &std::fs::Metadata) -> Option<(u64, u64)> {
+    None
 }
 
 async fn read_from(path: &std::path::Path, start: u64, n: u64) -> std::io::Result<Vec<u8>> {
@@ -323,6 +348,49 @@ mod tests {
             }
         }
         assert!(got_reading);
+        let _ = stx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Log rotation that swaps in a file at least as long as the old one must
+    /// restart from offset 0, not continue at the old offset.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rotated_file_is_reread_from_start() {
+        let dir = std::env::temp_dir().join(format!("sonder-tail-rot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.jsonl");
+        std::fs::write(&path, "{\"old\": 1}\n").unwrap();
+        let spec = SourceSpec::new("file-tail").with("path", path.to_string_lossy().to_string()).with("poll", 0.05);
+        let src = factory(&spec).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let (stx, srx) = tokio::sync::watch::channel(false);
+        let ctx = SourceCtx {
+            id: sonder_core::SourceId::new("t"),
+            tx,
+            clock: std::sync::Arc::new(sonder_core::WallClock::new()),
+            http: reqwest::Client::new(),
+            shutdown: srx,
+            seed: 1,
+        };
+        let task = tokio::spawn(src.run(ctx));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Atomic rotation: a new, longer file replaces the old one in place.
+        let tmp = dir.join("log.jsonl.new");
+        std::fs::write(&tmp, "{\"b\": 2}\n{\"c\": 3}\n").unwrap();
+        std::fs::rename(&tmp, &path).unwrap();
+        let mut keys = std::collections::BTreeSet::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline && !keys.contains("b") {
+            if let Ok(Some(s)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                if let Datum::Reading { values } = &s.datum {
+                    keys.extend(values.keys().cloned());
+                }
+            }
+        }
+        assert!(!keys.contains("old"), "pre-existing content must be skipped");
+        assert!(keys.contains("b"), "first line of the rotated file was skipped: {keys:?}");
         let _ = stx.send(true);
         let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
         let _ = std::fs::remove_dir_all(&dir);

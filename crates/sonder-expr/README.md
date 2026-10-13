@@ -50,11 +50,13 @@ A bare name resolves, in order, to:
 
 1. a **signal** of the same layer (any other signal, as long as there is no cycle;
    evaluation order is derived from the references),
-2. a **source channel** — shorthand for `field("name")`,
-3. a **constant**: `time` (seconds since start), `dt`, `beat`, `bar`, `bpm`, `pi`,
+2. a **constant**: `time` (seconds since start), `dt`, `beat`, `bar`, `bpm`, `pi`,
    `tau`, `e`, and `intensity` inside `on_event`.
 
 Unknown names are a compile error listing the known names (with a "did you mean" hint).
+3. a **source channel** — shorthand for `field("name")`. A channel that collides with a
+   constant name (`e`, `time`, …) must be written as `field("e")`.
+
 When the engine knows the source's channels it restricts bare names to them.
 
 ### Strings

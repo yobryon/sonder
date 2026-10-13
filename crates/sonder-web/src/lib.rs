@@ -159,4 +159,52 @@ mod tests {
         assert!(assets::INDEX_HTML.contains("/app.css"));
         assert!(assets::APP_JS.contains("/worklet.js"));
     }
+
+    /// Extract a top-level `function name(...) { ... }` from app.js by brace matching.
+    fn js_function(name: &str) -> String {
+        let start = assets::APP_JS.find(&format!("function {name}(")).unwrap_or_else(|| panic!("no fn {name}"));
+        let body = &assets::APP_JS[start..];
+        let open = body.find('{').unwrap();
+        let mut depth = 0i32;
+        for (i, c) in body[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return body[..open + i + 1].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unbalanced braces in {name}");
+    }
+
+    /// Two events in the same engine tick share `at`; both must be ingested, and a
+    /// later snapshot repeating the window must add nothing. Runs the real JS under
+    /// `node`; skipped (with a note) when node is not installed.
+    #[test]
+    fn js_event_dedupe_keeps_same_tick_events() {
+        let script = format!(
+            "{key}\n{f}\nconst seen = new Map();\n\
+             const w1 = [{{at:1,layer:0,name:'car'}},{{at:1,layer:0,name:'car'}},{{at:1,layer:1,name:'car'}}];\n\
+             const a = newEvents(w1, seen).length;\n\
+             const w2 = w1.concat([{{at:2,layer:0,name:'car'}},{{at:2,layer:0,name:'car'}}]);\n\
+             const b = newEvents(w2, seen).length;\n\
+             const c = newEvents(w2, seen).length;\n\
+             console.log(JSON.stringify([a,b,c]));",
+            key = "const eventKey = (e) => `${e.at}|${e.layer}|${e.name}`;",
+            f = js_function("newEvents"),
+        );
+        let out = match std::process::Command::new("node").arg("-e").arg(&script).output() {
+            Ok(o) => o,
+            Err(_) => {
+                eprintln!("node not installed; skipping JS dedupe test");
+                return;
+            }
+        };
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "[3,2,0]");
+    }
 }

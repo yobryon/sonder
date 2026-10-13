@@ -21,3 +21,6 @@ chrono = { workspace = true }
 bytes = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
+
+[dev-dependencies]
+sonder-expr = { workspace = true }

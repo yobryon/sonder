@@ -89,6 +89,18 @@ impl MidiOut {
     }
 }
 
+impl Drop for MidiOut {
+    /// Release every sounding note before the port closes, so quitting Sonder never
+    /// leaves the external synth droning.
+    fn drop(&mut self) {
+        let sounding: Vec<(u8, u8)> = self.sounding.drain().map(|(_, v)| v).collect();
+        for (ch, key) in sounding {
+            self.send(&[0x80 | ch, key, 0]);
+        }
+        self.panic();
+    }
+}
+
 fn to7(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 127.0).round() as u8
 }
@@ -171,6 +183,19 @@ impl CommandSink for MidiOut {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Needs a MIDI subsystem (ALSA seq / CoreMIDI) to create a virtual port; skipped otherwise.
+    #[test]
+    fn drop_releases_sounding_notes() {
+        let Ok(mut out) = MidiOut::open("virtual", vec![false]) else {
+            eprintln!("no MIDI subsystem; skipping");
+            return;
+        };
+        out.on_command(&SynthCommand::NoteOn { layer: LayerId(0), note: NoteId(1), pitch_hz: 440.0, velocity: 0.8, pan: 0.5 });
+        assert_eq!(out.sounding.len(), 1);
+        // Drop must send the note-off (observed here via the bookkeeping it drains).
+        drop(out);
+    }
+
     #[test]
     fn conversions() {
         assert_eq!(hz_to_key(440.0), 69);
