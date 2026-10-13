@@ -331,6 +331,7 @@ impl<'a> NoteSink<'a> {
 
     /// Humanized (delay, velocity): timing only ever drifts late.
     fn humanize(&mut self, delay: f64, velocity: f64) -> (f64, f32) {
+        let velocity = if velocity.is_finite() { velocity } else { 0.0 };
         if self.humanize <= 0.0 {
             return (delay.max(0.0), velocity.clamp(0.0, 1.0) as f32);
         }
@@ -555,6 +556,32 @@ mod tests {
             .filter(|c| matches!(c, SynthCommand::SetLayerParam { .. }))
             .count();
         assert_eq!(sends, 2);
+    }
+
+    #[test]
+    fn non_finite_velocity_never_reaches_the_synth() {
+        let (mut book, mut pc, mut out, mut notes, mut rng) = sink_env();
+        let mut s = NoteSink::new(
+            &mut book,
+            &mut pc,
+            &mut out,
+            &mut notes,
+            &mut rng,
+            LayerId(0),
+            0.0,
+            0.0,
+        );
+        s.play(60.0, f64::NAN, 0.5, Some(1.0), 0.0);
+        s.drum(Drum::Kick, f64::INFINITY, 0.5, 0.5, 0.0);
+        assert_eq!(out.len(), 2);
+        for c in &out {
+            match c {
+                SynthCommand::NoteOn { velocity, .. } | SynthCommand::Drum { velocity, .. } => {
+                    assert!(velocity.is_finite(), "{c:?}");
+                }
+                other => panic!("{other:?}"),
+            }
+        }
     }
 
     #[test]

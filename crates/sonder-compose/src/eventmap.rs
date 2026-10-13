@@ -51,7 +51,11 @@ impl Trigger {
     /// The role default when a layer has no mapping for an event:
     /// pitch = intensity, velocity = 0.5 + 0.5·intensity, centre pan.
     pub fn default_for(ev: &LayerEvent) -> Self {
-        let i = ev.intensity.clamp(0.0, 1.0);
+        let i = if ev.intensity.is_finite() {
+            ev.intensity.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         Self {
             pitch: i,
             velocity: 0.5 + 0.5 * i,
@@ -278,6 +282,23 @@ mod tests {
         let empty = LayerMappings::default();
         let t = empty.trigger(&ev("x", 0.4), &sig, 0.0, 0.0);
         assert!((t.pitch - 0.4).abs() < 1e-9 && (t.velocity - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn non_finite_intensity_yields_finite_trigger() {
+        let t = Trigger::default_for(&ev("x", f64::NAN));
+        assert!(t.pitch.is_finite() && t.velocity.is_finite(), "{t:?}");
+        let mut cfg = LayerConfig {
+            name: "l".into(),
+            role: Role::Pluck,
+            ..Default::default()
+        };
+        let mut car = BTreeMap::new();
+        car.insert("pan".to_string(), "attr('lane') / 4".to_string());
+        cfg.on_event.insert("car".into(), car);
+        let m = LayerMappings::compile(&cfg).unwrap();
+        let t = m.trigger(&ev("car", f64::INFINITY), &BTreeMap::new(), 0.0, 0.0);
+        assert!(t.pitch.is_finite() && t.velocity.is_finite(), "{t:?}");
     }
 
     #[test]

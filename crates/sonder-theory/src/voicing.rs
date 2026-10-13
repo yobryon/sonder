@@ -123,11 +123,13 @@ pub fn voice_lead(from: &Voicing, to_pcs: &[u8], lo: i32, hi: i32, n: usize) -> 
             }
             let remaining = self.n - v;
             let uncovered = self.used.iter().filter(|&&u| u == 0).count();
-            if remaining < uncovered {
+            // Covering every pc is only required (and possible) with enough voices.
+            let need_cover = self.n >= self.k;
+            if need_cover && remaining < uncovered {
                 return;
             }
             // Must we cover a new pc with this voice?
-            let must_cover = remaining == uncovered;
+            let must_cover = need_cover && remaining == uncovered;
             let distinct_only = self.n <= self.k;
             let mut order: Vec<usize> = (0..self.k).collect();
             order.sort_by_key(|&p| self.cost[v][p]);
@@ -246,6 +248,17 @@ mod tests {
         assert_eq!(pcs_of(&to), vec![0, 4, 7, 11]);
         let shrunk = voice_lead(&Voicing(vec![60, 64, 67, 71]), &[0, 4, 7], 55, 80, 3);
         assert_eq!(shrunk.len(), 3);
+    }
+
+    #[test]
+    fn fewer_voices_than_pcs_still_moves_minimally() {
+        // C E G → Dm7 (D F A C) with three voices: keep C, E→F, G→A = 3 semitones.
+        // Taking the first three pcs (D F A) would cost 2+1+2 = 5.
+        let from = Voicing(vec![60, 64, 67]);
+        let to = voice_lead(&from, &[2, 5, 9, 0], 48, 84, 3);
+        assert_eq!(to.0, vec![60, 65, 69], "{:?}", to.0);
+        assert_eq!(from.motion_to(&to), 3);
+        assert_eq!(pcs_of(&to).len(), 3, "no doubled pitch classes");
     }
 
     #[test]
