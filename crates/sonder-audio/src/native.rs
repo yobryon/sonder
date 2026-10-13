@@ -131,12 +131,13 @@ where
         shared.add_underrun();
         tracing::warn!("cpal stream error: {e}");
     };
-    device.build_output_stream(config.clone(), data_fn, err_fn, Some(Duration::from_secs(2)))
+    device.build_output_stream(*config, data_fn, err_fn, Some(Duration::from_secs(2)))
 }
 
 pub(crate) fn start(host: SynthHost, stop: Arc<AtomicBool>) -> Result<Started, AudioError> {
     let want_rate = host.sample_rate().round() as u32;
     let (tx, rx) = mpsc::channel::<Result<(u32, String), AudioError>>();
+    let stop_thread = stop.clone();
     let thread = std::thread::Builder::new()
         .name("sonder-audio-cpal".into())
         .spawn(move || {
@@ -167,7 +168,7 @@ pub(crate) fn start(host: SynthHost, stop: Arc<AtomicBool>) -> Result<Started, A
             match result {
                 Ok((rate, desc, stream)) => {
                     let _ = tx.send(Ok((rate, desc)));
-                    while !stop.load(Ordering::Relaxed) {
+                    while !stop_thread.load(Ordering::Relaxed) {
                         std::thread::sleep(Duration::from_millis(20));
                     }
                     drop(stream);

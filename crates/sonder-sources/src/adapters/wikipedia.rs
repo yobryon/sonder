@@ -170,9 +170,10 @@ async fn stream_once(
         if em.is_shutdown() {
             return Ok(());
         }
+        let mut timed_out = false;
         let chunk = tokio::select! {
             c = body.next() => c,
-            _ = tokio::time::sleep(Duration::from_secs(2)) => None,
+            _ = tokio::time::sleep(Duration::from_secs(2)) => { timed_out = true; None }
         };
         match chunk {
             Some(Ok(bytes)) => {
@@ -195,12 +196,10 @@ async fn stream_once(
                 }
             }
             Some(Err(e)) => return Err(format!("stream error: {}", util::short_err(&e))),
+            None if !timed_out => return Ok(()),
             None => {
                 if last_data.elapsed() > Duration::from_secs(90) {
                     return Err("no data for 90 s".into());
-                }
-                if body.size_hint().1 == Some(0) {
-                    return Ok(());
                 }
             }
         }

@@ -52,10 +52,14 @@ pub struct ProbeReport {
 }
 
 /// Classify a series of values.
+///
+/// A counter is a series of integers that only ever increases, seen over at least
+/// three polls (two polls can't distinguish a counter from a slowly moving value).
 pub fn classify(values: &[f64]) -> FieldKind {
     if values.len() < 2 {
         return FieldKind::Constant;
     }
+    let pairs = values.len() - 1;
     let changes = values.windows(2).filter(|w| (w[0] - w[1]).abs() > 1e-12).count();
     if changes == 0 {
         return FieldKind::Constant;
@@ -64,15 +68,12 @@ pub fn classify(values: &[f64]) -> FieldKind {
         return FieldKind::Boolean;
     }
     let non_decreasing = values.windows(2).all(|w| w[1] >= w[0] - 1e-12);
-    if non_decreasing && changes >= 1 && values.len() >= 3 && changes * 2 >= values.len() - 1 {
+    let integral = values.iter().all(|v| v.fract() == 0.0);
+    if non_decreasing && integral && values.len() >= 3 && changes * 2 >= pairs {
         return FieldKind::Counter;
     }
-    let pairs = values.len() - 1;
     if changes * 3 <= pairs {
         return FieldKind::Sparse;
-    }
-    if non_decreasing {
-        return FieldKind::Counter;
     }
     FieldKind::Continuous
 }
@@ -113,13 +114,8 @@ pub fn analyze(samples: &[Json], url: &str) -> ProbeReport {
     fields.truncate(crate::adapters::generic::MAX_FIELDS);
     let any_sparse = fields.iter().any(|f| matches!(f.kind, FieldKind::Sparse | FieldKind::Boolean | FieldKind::Counter));
     let any_change = fields.iter().any(|f| f.changed);
-    let events_suggestion = if any_sparse || any_change {
-        Some("change".to_string())
-    } else if samples.len() < 2 {
-        Some("change".to_string())
-    } else {
-        None
-    };
+    // With fewer than two polls nothing can have changed yet; still suggest `change`.
+    let events_suggestion = if any_sparse || any_change || samples.len() < 2 { Some("change".to_string()) } else { None };
     let text_keys = samples
         .first()
         .and_then(Json::as_object)
@@ -226,7 +222,7 @@ pub fn starter_scene(report: &ProbeReport, url: &str) -> Scene {
         .unwrap_or_else(|| "norm(smooth(field('value'), 2))".to_string());
     // Edge detectors make poor pad drivers; smooth the rate of them instead.
     let level_expr = if lead_expr.starts_with("onset(") {
-        format!("norm(smooth(rate(event('update'), 30), 5))")
+        "norm(smooth(rate(event('update'), 30), 5))".to_string()
     } else {
         lead_expr
     };
@@ -305,6 +301,8 @@ mod tests {
     fn sparse_and_counter_detection() {
         assert_eq!(classify(&[0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0]), FieldKind::Sparse);
         assert_eq!(classify(&[1.0, 2.0, 3.0, 4.0]), FieldKind::Counter);
+        assert_eq!(classify(&[1.0, 2.0]), FieldKind::Continuous, "two polls can't prove a counter");
+        assert_eq!(classify(&[50.18, 50.21, 50.25]), FieldKind::Continuous, "non-integers aren't counters");
         assert_eq!(classify(&[1.0, 1.0]), FieldKind::Constant);
         assert_eq!(classify(&[1.0, 0.5, 2.0]), FieldKind::Continuous);
         assert_eq!(classify(&[5.0]), FieldKind::Constant);

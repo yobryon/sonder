@@ -30,18 +30,17 @@ pub fn parse_current(v: &Json) -> Vec<(String, f64)> {
         .filter_map(|(k, v)| v.as_f64().map(|f| (k.clone(), f)))
         .collect();
     // Convenience normalized channels.
-    let get = |k: &str| out.iter().find(|(n, _)| n == k).map(|(_, v)| *v);
-    if let Some(c) = get("cloud_cover") {
-        out.push(("cloud01".into(), clamp01(c / 100.0)));
-    }
-    if let Some(h) = get("relative_humidity_2m") {
-        out.push(("humidity01".into(), clamp01(h / 100.0)));
-    }
-    if let Some(w) = get("wind_speed_10m") {
-        out.push(("wind01".into(), clamp01(w / 25.0)));
-    }
-    if let Some(t) = get("temperature_2m") {
-        out.push(("temp01".into(), clamp01((t + 10.0) / 50.0)));
+    let get = |out: &[(String, f64)], k: &str| out.iter().find(|(n, _)| n == k).map(|(_, v)| *v);
+    let extra = [
+        ("cloud01", get(&out, "cloud_cover").map(|c| clamp01(c / 100.0))),
+        ("humidity01", get(&out, "relative_humidity_2m").map(|h| clamp01(h / 100.0))),
+        ("wind01", get(&out, "wind_speed_10m").map(|w| clamp01(w / 25.0))),
+        ("temp01", get(&out, "temperature_2m").map(|t| clamp01((t + 10.0) / 50.0))),
+    ];
+    for (k, v) in extra {
+        if let Some(v) = v {
+            out.push((k.to_string(), v));
+        }
     }
     out
 }

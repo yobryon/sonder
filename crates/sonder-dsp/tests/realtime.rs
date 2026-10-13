@@ -49,7 +49,7 @@ fn render_does_not_allocate_or_free() {
         let inst = presets::get(names[l % names.len()]).unwrap();
         synth.handle(SynthCommand::SetInstrument { layer: LayerId(l as u16), instrument: Box::new(inst) });
     }
-    synth.handle(SynthCommand::SetEffects(Box::new(Effects::default())));
+    synth.handle(SynthCommand::SetEffects(Box::<Effects>::default()));
     let mut out = vec![0.0f32; 512 * 2];
     synth.render(&mut out);
 
@@ -90,7 +90,7 @@ fn render_does_not_allocate_or_free() {
         }
         if b % 97 == 0 {
             v.push(SynthCommand::SetInstrument { layer, instrument: Box::new(presets::get(names[b % names.len()]).unwrap()) });
-            v.push(SynthCommand::SetEffects(Box::new(Effects::default())));
+            v.push(SynthCommand::SetEffects(Box::<Effects>::default()));
         }
         if b % 400 == 399 {
             v.push(SynthCommand::AllNotesOff { layer });

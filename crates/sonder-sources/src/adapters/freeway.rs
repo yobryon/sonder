@@ -446,6 +446,7 @@ mod tests {
         let sim = run(FreewayConfig::default(), 42, 600.0);
         // Base rate 0.4 * 4 * 0.3 = 0.48 cars/s ≈ 288 in 10 min; platoons add some,
         // blocked entries remove some.
+        eprintln!("freeway: {} exits in 10 min, {} in frame", sim.total_exits, sim.cars.len());
         assert!(sim.total_exits > 120 && sim.total_exits < 700, "exits = {}", sim.total_exits);
         assert!(sim.cars.len() < 60);
     }

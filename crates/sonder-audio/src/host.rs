@@ -28,7 +28,7 @@ impl Default for TapConfig {
 }
 
 #[derive(Debug)]
-struct Shared {
+pub(crate) struct Shared {
     sample_rate: f32,
     /// `[rms, peak]` bit-cast f32.
     master: [AtomicU32; 2],
@@ -263,6 +263,7 @@ impl SynthHost {
 
     /// Clone of the shared underrun counter for backends that detect them in an
     /// error callback (no `&self` available there).
+    #[cfg(feature = "native-audio")]
     pub(crate) fn underrun_counter(&self) -> Arc<Shared> {
         self.shared.clone()
     }
@@ -343,6 +344,7 @@ impl SynthHost {
 }
 
 impl Shared {
+    #[cfg(feature = "native-audio")]
     pub(crate) fn add_underrun(&self) {
         self.underruns.fetch_add(1, Ordering::Relaxed);
     }
@@ -400,5 +402,3 @@ pub fn synth_pair(sample_rate: f32, max_layers: usize, tap: Option<TapConfig>) -
     };
     (controller, host)
 }
-
-pub(crate) type SharedState = Arc<Shared>;

@@ -90,6 +90,7 @@ pub fn param_seed(spec: &SourceSpec) -> Result<Option<u64>, SourceError> {
             .as_u64()
             .or_else(|| n.as_i64().map(|i| i as u64))
             .or_else(|| n.as_f64().map(|f| f as u64))
+            .map(Some)
             .ok_or_else(|| invalid(spec, "seed", "expected an integer")),
         Some(Json::String(s)) => Ok(Some(s.parse().unwrap_or_else(|_| hash_str(s)))),
         Some(_) => Err(invalid(spec, "seed", "expected an integer")),

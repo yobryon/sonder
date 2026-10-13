@@ -60,7 +60,7 @@ fn full_ring_counts_drops() {
             ok += 1;
         }
     }
-    assert!(ok >= 8000 && ok < 10_000);
+    assert!((8000..10_000).contains(&ok));
     assert_eq!(ctl.drops(), 10_000 - ok);
 }
 
@@ -131,7 +131,7 @@ fn offline_render_calls_on_block_in_order() {
     assert_eq!(times.len(), 24_000 / 256 + 1);
     assert!(times.windows(2).all(|w| w[1] > w[0]));
     // Silent before the note, sound after.
-    assert!(out[..0.09_f32.mul_add(48_000.0, 0.0) as usize * 2].iter().all(|s| *s == 0.0));
+    assert!(out[..(0.09 * 48_000.0) as usize * 2].iter().all(|s| *s == 0.0));
     assert!(out[(0.2 * 48_000.0) as usize * 2..].iter().any(|s| s.abs() > 0.01));
 }
 

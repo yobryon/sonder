@@ -39,8 +39,7 @@ impl SseParser {
             self.reset_event();
         }
         let mut out = Vec::new();
-        loop {
-            let Some(nl) = self.buf.iter().position(|&b| b == b'\n') else { break };
+        while let Some(nl) = self.buf.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = self.buf.drain(..=nl).collect();
             let mut line = &line[..line.len() - 1];
             if line.last() == Some(&b'\r') {

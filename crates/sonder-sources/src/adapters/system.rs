@@ -65,7 +65,7 @@ impl Source for SystemSource {
                 };
                 nets.refresh(true);
                 let (mut rx, mut tx) = (0u64, 0u64);
-                for (_, data) in nets.iter() {
+                for data in nets.values() {
                     rx = rx.saturating_add(data.total_received());
                     tx = tx.saturating_add(data.total_transmitted());
                 }
