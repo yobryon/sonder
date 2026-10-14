@@ -48,7 +48,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/web
 
       - name: JS unit tests
-        run: node --test crates/sonder-web/js-tests/
+        run: node --test crates/sonder-web/js-tests/*.test.mjs
 
       - uses: actions/upload-pages-artifact@v3
         with:
