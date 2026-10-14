@@ -71,7 +71,14 @@ pub fn builtin_scenes() -> Result<JsValue, JsError> {
             });
         }
     }
-    serde_wasm_bindgen::to_value(&out).map_err(|e| JsError::new(&e.to_string()))
+    to_js(&out)
+}
+
+/// Serialize as plain JS objects/arrays (serde-wasm-bindgen's default turns maps into
+/// `Map`s, which JSON.stringify renders as `{}`).
+fn to_js<T: Serialize>(v: &T) -> Result<JsValue, JsError> {
+    let ser = serde_wasm_bindgen::Serializer::json_compatible();
+    v.serialize(&ser).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Validation errors for a scene TOML (empty when valid).
@@ -141,7 +148,7 @@ impl Engine {
     /// Sources the scene needs: `[{name, kind, params, builtin}]`. `builtin` sources are
     /// stepped by Rust; the rest must be fed via `push_sample`.
     pub fn source_specs(&self) -> Result<JsValue, JsError> {
-        serde_wasm_bindgen::to_value(&self.specs).map_err(|e| JsError::new(&e.to_string()))
+        to_js(&self.specs)
     }
 
     /// Interleaved stereo frames rendered per tick (`sample_rate / 50`).
