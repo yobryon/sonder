@@ -15,11 +15,18 @@ use std::f64::consts::TAU;
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 use serde_json::json;
-use sonder_core::{Seconds, SourceSpec, SourceState};
+use sonder_core::{Seconds, SourceSpec};
+#[cfg(feature = "native")]
+use sonder_core::SourceState;
 
+#[cfg(feature = "native")]
 use crate::registry::{ParamInfo, SourceInfo};
-use crate::util::{self, clamp01, Attrs, Emitter, RateWindow};
-use crate::{Source, SourceCtx, SourceError, SourceFuture};
+use crate::util::{self, clamp01, Attrs, RateWindow};
+#[cfg(feature = "native")]
+use crate::util::Emitter;
+#[cfg(feature = "native")]
+use crate::{Source, SourceCtx, SourceFuture};
+use crate::SourceError;
 
 /// Frame-traversal speed at normalized speed 1.0 (fraction of frame per second):
 /// a car at speed 1 crosses the frame in 2.5 s.
@@ -352,11 +359,13 @@ fn round3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
 }
 
+#[cfg(feature = "native")]
 struct FreewaySource {
     cfg: FreewayConfig,
     seed: Option<u64>,
 }
 
+#[cfg(feature = "native")]
 impl Source for FreewaySource {
     fn run(self: Box<Self>, ctx: SourceCtx) -> SourceFuture {
         Box::pin(async move {
@@ -403,6 +412,7 @@ impl Source for FreewaySource {
     }
 }
 
+#[cfg(feature = "native")]
 pub fn info() -> SourceInfo {
     SourceInfo {
         kind: "synthetic.freeway",
@@ -421,6 +431,7 @@ pub fn info() -> SourceInfo {
     }
 }
 
+#[cfg(feature = "native")]
 pub fn factory(spec: &SourceSpec) -> Result<Box<dyn Source>, SourceError> {
     let cfg = FreewayConfig::from_spec(spec)?;
     let seed = util::param_seed(spec)?;

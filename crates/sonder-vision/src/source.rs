@@ -283,26 +283,10 @@ fn spawn_worker(
 }
 
 /// Perceptual size of a blob in 0..1 from its frame-area fraction.
-fn blob_size(area: f32) -> f64 {
-    ((area as f64 * 100.0).max(0.0).sqrt()).clamp(0.0, 1.0)
-}
+use crate::events::blob_sample;
 
 fn blob_event(ctx: &SourceCtx, at: Seconds, name: &str, b: &crate::tracker::Blob, lanes: u32) -> Sample {
-    let size = blob_size(b.area);
-    let brightness = b.brightness.clamp(0.0, 1.0) as f64;
-    let intensity = (size * brightness).clamp(0.0, 1.0);
-    let lane = ((b.x.clamp(0.0, 0.999_99) * lanes as f32).floor() as i64).clamp(0, lanes as i64 - 1);
-    Sample::event(&ctx.id, at, name, intensity)
-        .with_attr("x", b.x as f64)
-        .with_attr("y", b.y as f64)
-        .with_attr("size", size)
-        .with_attr("area", b.area as f64)
-        .with_attr("brightness", brightness)
-        .with_attr("speed", b.speed as f64)
-        .with_attr("dir", b.dir as f64)
-        .with_attr("lane", lane)
-        .with_attr("duration", b.age_s as f64)
-        .with_attr("id", b.id as f64)
+    blob_sample(&ctx.id, at, name, b, lanes)
 }
 
 /// Consume analyses from the worker and turn them into samples.

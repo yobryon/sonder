@@ -17,23 +17,35 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "native")]
 use std::future::Future;
+#[cfg(feature = "native")]
 use std::pin::Pin;
+#[cfg(feature = "native")]
 use std::sync::Arc;
 
-use sonder_core::{Clock, Sample, SourceId, SourceSpec};
+#[cfg(feature = "native")]
+use sonder_core::{Clock, Sample, SourceId};
+use sonder_core::SourceSpec;
 
 pub mod adapters;
 pub mod jsonpath;
+#[cfg(feature = "native")]
 pub mod probe;
+#[cfg(feature = "native")]
 pub mod registry;
+#[cfg(feature = "native")]
 pub mod sse;
 pub mod util;
 
+#[cfg(feature = "native")]
 pub use registry::{Factory, ParamInfo, Registry, SourceInfo};
-pub use util::{connect_loop, poll_loop, retry_delay, Emitter, Poll, Poller, USER_AGENT};
+#[cfg(feature = "native")]
+pub use util::{connect_loop, poll_loop, Emitter, Poll, Poller};
+pub use util::{retry_delay, USER_AGENT};
 
 /// Everything a running source needs.
+#[cfg(feature = "native")]
 #[derive(Clone)]
 pub struct SourceCtx {
     pub id: SourceId,
@@ -46,6 +58,7 @@ pub struct SourceCtx {
     pub seed: u64,
 }
 
+#[cfg(feature = "native")]
 impl SourceCtx {
     /// Current engine time.
     pub fn now(&self) -> sonder_core::Seconds {
@@ -70,9 +83,11 @@ impl SourceCtx {
 }
 
 /// A boxed future with no output, `Send`.
+#[cfg(feature = "native")]
 pub type SourceFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// A live data producer. `run` owns the task until shutdown.
+#[cfg(feature = "native")]
 pub trait Source: Send {
     fn run(self: Box<Self>, ctx: SourceCtx) -> SourceFuture;
 }
@@ -97,6 +112,7 @@ pub fn require_str<'a>(spec: &'a SourceSpec, param: &'static str) -> Result<&'a 
 /// A reqwest client configured the way sources like it (User-Agent, timeouts).
 /// The engine may pass its own client in [`SourceCtx::http`]; adapters set the
 /// User-Agent per request too, so any client works.
+#[cfg(feature = "native")]
 pub fn default_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
@@ -106,6 +122,7 @@ pub fn default_http_client() -> reqwest::Client {
 }
 
 /// Registers all builtin kinds.
+#[cfg(feature = "native")]
 pub fn register_builtins(r: &mut Registry) {
     use adapters::*;
     macro_rules! reg {
@@ -121,7 +138,7 @@ pub fn register_builtins(r: &mut Registry) {
     r.register(alias, walk::factory);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tests {
     use super::*;
     use sonder_core::{Datum, VirtualClock};

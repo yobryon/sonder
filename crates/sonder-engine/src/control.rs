@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
+#[cfg(feature = "native")]
 use anyhow::Context;
 use sonder_audio::{AudioTap, SynthController};
 use sonder_compose::{Composer, ComposerInput, LayerInput};
@@ -411,6 +412,7 @@ fn trim_attrs(attrs: BTreeMap<String, Value>) -> BTreeMap<String, Value> {
 }
 
 /// Build a `SourceCtx` and spawn every source in `specs` on the current tokio runtime.
+#[cfg(feature = "native")]
 pub fn spawn_sources(
     registry: &sonder_sources::Registry,
     specs: &[(SourceId, SourceSpec)],
@@ -440,6 +442,7 @@ pub fn spawn_sources(
     Ok(handles)
 }
 
+#[cfg(feature = "native")]
 fn fnv(s: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in s.bytes() {

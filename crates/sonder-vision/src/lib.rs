@@ -16,22 +16,30 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "native")]
 pub mod decode;
+#[cfg(feature = "native")]
 pub mod mjpeg;
+#[cfg(feature = "native")]
 pub mod source;
 pub mod tracker;
+pub mod events;
 
 #[cfg(any(test, feature = "testgen"))]
 pub mod testgen;
 
+#[cfg(feature = "native")]
 pub use decode::{decode_gray, decode_gray_into, downscale_luma, Decoder};
+#[cfg(feature = "native")]
 pub use source::{factory, register, CameraParams, CameraSource, KIND};
+pub use events::{blob_sample, blob_size};
 pub use tracker::{Blob, FrameAnalysis, Mode, Tracker, TrackerConfig};
 
 /// Errors from decoding and stream framing.
 #[derive(Debug, thiserror::Error)]
 pub enum VisionError {
     #[error("jpeg: {0}")]
+#[cfg(feature = "native")]
     Image(#[from] image::ImageError),
     #[error("decode: {0}")]
     Decode(String),

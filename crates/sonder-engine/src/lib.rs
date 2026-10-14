@@ -13,15 +13,19 @@
 
 pub mod control;
 pub mod instruments;
+#[cfg(feature = "native")]
 pub mod live;
 #[cfg(feature = "midi")]
 pub mod midi;
+#[cfg(feature = "native")]
 pub mod render;
 pub mod sink;
 pub mod scenes;
 pub mod validate;
 
+#[cfg(feature = "native")]
 pub use live::{start, AudioBackendChoice, EngineHandle, EngineOptions, WebAudio};
+#[cfg(feature = "native")]
 pub use render::{render_to_wav, RenderStats};
 pub use scenes::{builtin_scenes, load_scene, parse_scene};
 pub use validate::validate;

@@ -11,22 +11,31 @@ sonder-expr = { workspace = true }
 sonder-theory = { workspace = true }
 sonder-compose = { workspace = true }
 sonder-dsp = { workspace = true }
-sonder-sources = { workspace = true }
-sonder-vision = { workspace = true }
+sonder-sources = { workspace = true, optional = true, default-features = false }
+sonder-vision = { workspace = true, optional = true, default-features = false }
 sonder-audio = { workspace = true, default-features = false }
-tokio = { workspace = true, features = ["test-util"] }
+# `sync` alone is wasm-friendly; `native` turns on the rest.
+tokio = { version = "1", default-features = false, features = ["sync"] }
 serde_json = { workspace = true }
 toml = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
-reqwest = { workspace = true }
-hound = { workspace = true }
-rand = { workspace = true }
+reqwest = { workspace = true, optional = true }
+hound = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
 midir = { workspace = true, optional = true }
 
 [features]
-default = ["native-audio", "midi"]
-native-audio = ["sonder-audio/native-audio"]
-midi = ["midir"]
+default = ["native", "native-audio", "midi"]
+## Live mode, offline render, the source registry (tokio runtime, network sources, camera).
+## Without it only the control loop, scene library and validation compile — for wasm.
+native = [
+    "dep:sonder-sources", "sonder-sources/native",
+    "dep:sonder-vision", "sonder-vision/native",
+    "dep:reqwest", "dep:hound", "dep:rand",
+    "tokio/rt", "tokio/rt-multi-thread", "tokio/time", "tokio/macros", "tokio/test-util",
+]
+native-audio = ["native", "sonder-audio/native-audio"]
+midi = ["native", "midir"]

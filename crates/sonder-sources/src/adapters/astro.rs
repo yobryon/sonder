@@ -3,13 +3,25 @@
 //! when given a fixed `date`.
 
 use std::f64::consts::PI;
+#[cfg(feature = "native")]
 use std::time::Duration;
 
-use sonder_core::{SourceSpec, SourceState};
+#[cfg(feature = "native")]
+use sonder_core::SourceSpec;
+#[cfg(feature = "native")]
+use sonder_core::SourceState;
 
+#[cfg(feature = "native")]
 use crate::registry::{ParamInfo, SourceInfo};
-use crate::util::{self, clamp01, invalid, Attrs, Emitter};
-use crate::{Source, SourceCtx, SourceError, SourceFuture};
+use crate::util::clamp01;
+#[cfg(feature = "native")]
+use crate::util::{self, invalid, Attrs};
+#[cfg(feature = "native")]
+use crate::util::Emitter;
+#[cfg(feature = "native")]
+use crate::{Source, SourceCtx, SourceFuture};
+#[cfg(feature = "native")]
+use crate::SourceError;
 
 /// Altitude (deg) below which the sun counts as set (refraction + semi-diameter).
 pub const HORIZON: f64 = -0.833;
@@ -208,6 +220,7 @@ pub fn parse_date(s: &str) -> Option<f64> {
     None
 }
 
+#[cfg(feature = "native")]
 struct AstroSource {
     lat: f64,
     lon: f64,
@@ -219,6 +232,7 @@ struct AstroSource {
     interval: Duration,
 }
 
+#[cfg(feature = "native")]
 impl Source for AstroSource {
     fn run(self: Box<Self>, ctx: SourceCtx) -> SourceFuture {
         Box::pin(async move {
@@ -248,6 +262,7 @@ impl Source for AstroSource {
     }
 }
 
+#[cfg(feature = "native")]
 pub fn info() -> SourceInfo {
     SourceInfo {
         kind: "clock.astro",
@@ -269,6 +284,7 @@ pub fn info() -> SourceInfo {
     }
 }
 
+#[cfg(feature = "native")]
 pub fn factory(spec: &SourceSpec) -> Result<Box<dyn Source>, SourceError> {
     let lat = util::param_f64_in(spec, "lat", 51.5, -90.0, 90.0)?;
     let lon = util::param_f64_in(spec, "lon", -0.12, -180.0, 180.0)?;

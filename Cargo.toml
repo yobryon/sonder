@@ -15,8 +15,8 @@ sonder-expr = { path = "crates/sonder-expr" }
 sonder-theory = { path = "crates/sonder-theory" }
 sonder-compose = { path = "crates/sonder-compose" }
 sonder-dsp = { path = "crates/sonder-dsp" }
-sonder-sources = { path = "crates/sonder-sources" }
-sonder-vision = { path = "crates/sonder-vision" }
+sonder-sources = { path = "crates/sonder-sources", default-features = false }
+sonder-vision = { path = "crates/sonder-vision", default-features = false }
 sonder-audio = { path = "crates/sonder-audio", default-features = false }
 sonder-engine = { path = "crates/sonder-engine", default-features = false }
 sonder-web = { path = "crates/sonder-web" }

@@ -3,15 +3,20 @@
 //! de-dup sets. Adapters stay small by leaning on these.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
+#[cfg(feature = "native")]
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use rand::RngExt;
 use serde_json::Value as Json;
-use sonder_core::{Datum, Sample, Seconds, SourceSpec, SourceState, Value};
+use sonder_core::{Seconds, SourceSpec, Value};
+#[cfg(feature = "native")]
+use sonder_core::{Datum, Sample, SourceState};
 
-use crate::{SourceCtx, SourceError};
+#[cfg(feature = "native")]
+use crate::SourceCtx;
+use crate::SourceError;
 
 /// User-Agent sent on every outbound request.
 pub const USER_AGENT: &str = "sonder/0.1 (+https://github.com/genuye/sonder)";
@@ -146,6 +151,7 @@ pub fn retry_delay(attempt: u32, rng: &mut impl RngExt) -> Duration {
 
 /// Wraps a [`SourceCtx`] and remembers the last reported [`SourceState`] so adapters
 /// only emit `Status` on transitions.
+#[cfg(feature = "native")]
 pub struct Emitter {
     pub ctx: SourceCtx,
     last_state: Option<SourceState>,
@@ -153,6 +159,7 @@ pub struct Emitter {
     pub closed: bool,
 }
 
+#[cfg(feature = "native")]
 impl Emitter {
     pub fn new(ctx: SourceCtx) -> Self {
         Self { ctx, last_state: None, closed: false }
@@ -432,22 +439,26 @@ pub fn hash_of<T: Hash>(v: &T) -> u64 {
 // ---------------------------------------------------------------------------
 
 /// GET `url` and parse the body as JSON. Errors are strings suitable for a status line.
+#[cfg(feature = "native")]
 pub async fn get_json(ctx: &SourceCtx, url: &str) -> Result<Json, String> {
     get_json_with(ctx, url, &[]).await
 }
 
 /// GET with extra headers.
+#[cfg(feature = "native")]
 pub async fn get_json_with(ctx: &SourceCtx, url: &str, headers: &[(String, String)]) -> Result<Json, String> {
     let text = get_text_with(ctx, url, headers).await?;
     serde_json::from_str(&text).map_err(|e| format!("invalid JSON from {url}: {e}"))
 }
 
 /// GET `url` as text.
+#[cfg(feature = "native")]
 pub async fn get_text(ctx: &SourceCtx, url: &str) -> Result<String, String> {
     get_text_with(ctx, url, &[]).await
 }
 
 /// GET `url` as text with extra headers.
+#[cfg(feature = "native")]
 pub async fn get_text_with(ctx: &SourceCtx, url: &str, headers: &[(String, String)]) -> Result<String, String> {
     let mut req = ctx
         .http
@@ -467,6 +478,7 @@ pub async fn get_text_with(ctx: &SourceCtx, url: &str, headers: &[(String, Strin
 }
 
 /// Trim a reqwest error to a one-liner without the URL soup.
+#[cfg(feature = "native")]
 pub fn short_err(e: &reqwest::Error) -> String {
     if e.is_timeout() {
         "timeout".to_string()
@@ -483,6 +495,7 @@ pub fn short_err(e: &reqwest::Error) -> String {
 // ---------------------------------------------------------------------------
 
 /// Outcome of one poll iteration.
+#[cfg(feature = "native")]
 pub enum Poll {
     /// Fresh data arrived.
     Live,
@@ -493,6 +506,7 @@ pub enum Poll {
 /// Runs `f` every `interval` until shutdown. Successful polls reset the backoff and
 /// report `Live`/`Idle`; failures report `Reconnecting` and back off exponentially
 /// (1 s → 5 min with jitter). The first call happens immediately.
+#[cfg(feature = "native")]
 pub async fn poll_loop<F, Fut>(em: &mut Emitter, interval: Duration, mut f: F)
 where
     F: FnMut(SourceCtx) -> Fut,
@@ -541,12 +555,14 @@ where
 ///     if !poller.after(&mut em, res).await { return; } // status + backoff + shutdown-aware sleep
 /// }
 /// ```
+#[cfg(feature = "native")]
 pub struct Poller {
     interval: Duration,
     attempt: u32,
     rng: rand_chacha::ChaCha8Rng,
 }
 
+#[cfg(feature = "native")]
 impl Poller {
     pub fn new(interval: Duration) -> Self {
         Self { interval, attempt: 0, rng: rng_from_seed(0x51ed_270e) }
@@ -584,6 +600,7 @@ impl Poller {
 /// Like [`poll_loop`] but for long-lived connections (SSE, WebSocket): `f` runs until
 /// the connection drops, then we reconnect with backoff. `f` returns `Ok(())` for a
 /// clean end-of-stream, `Err(msg)` for a failure.
+#[cfg(feature = "native")]
 pub async fn connect_loop<F, Fut>(em: &mut Emitter, mut f: F)
 where
     F: FnMut(SourceCtx) -> Fut,
@@ -667,7 +684,7 @@ pub fn unix_now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tests {
     use super::*;
 

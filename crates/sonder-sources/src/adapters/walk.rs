@@ -1,15 +1,25 @@
 //! `synthetic.walk` — N seeded random-walk channels in 0..1 plus optional periodic
 //! events. Handy for testing mappings without any network.
 
+#[cfg(feature = "native")]
 use std::time::Duration;
 
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
-use sonder_core::{Seconds, SourceSpec, SourceState};
+use sonder_core::{Seconds, SourceSpec};
+#[cfg(feature = "native")]
+use sonder_core::SourceState;
 
+#[cfg(feature = "native")]
 use crate::registry::{ParamInfo, SourceInfo};
-use crate::util::{self, Attrs, Emitter};
-use crate::{Source, SourceCtx, SourceError, SourceFuture};
+use crate::util;
+#[cfg(feature = "native")]
+use crate::util::Attrs;
+#[cfg(feature = "native")]
+use crate::util::Emitter;
+#[cfg(feature = "native")]
+use crate::{Source, SourceCtx, SourceFuture};
+use crate::SourceError;
 
 #[derive(Debug, Clone)]
 pub struct WalkConfig {
@@ -101,11 +111,13 @@ impl Walk {
     }
 }
 
+#[cfg(feature = "native")]
 struct WalkSource {
     cfg: WalkConfig,
     seed: Option<u64>,
 }
 
+#[cfg(feature = "native")]
 impl Source for WalkSource {
     fn run(self: Box<Self>, ctx: SourceCtx) -> SourceFuture {
         Box::pin(async move {
@@ -131,6 +143,7 @@ impl Source for WalkSource {
     }
 }
 
+#[cfg(feature = "native")]
 pub fn info() -> SourceInfo {
     SourceInfo {
         kind: "synthetic.walk",
@@ -148,6 +161,7 @@ pub fn info() -> SourceInfo {
     }
 }
 
+#[cfg(feature = "native")]
 pub fn factory(spec: &SourceSpec) -> Result<Box<dyn Source>, SourceError> {
     Ok(Box::new(WalkSource { cfg: WalkConfig::from_spec(spec)?, seed: util::param_seed(spec)? }))
 }

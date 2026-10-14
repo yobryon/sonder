@@ -1,6 +1,8 @@
 //! Full scene validation: structure, expressions, source kinds, instrument names.
 
-use sonder_core::{LayerSource, Scene};
+#[cfg(feature = "native")]
+use sonder_core::LayerSource;
+use sonder_core::Scene;
 
 /// Validate a scene as thoroughly as possible without running it.
 pub fn validate(scene: &Scene) -> Result<(), Vec<String>> {
@@ -8,9 +10,13 @@ pub fn validate(scene: &Scene) -> Result<(), Vec<String>> {
         Ok(()) => Vec::new(),
         Err(e) => e,
     };
+    #[cfg(feature = "native")]
     let registry = crate::live::registry();
     for layer in &scene.layers {
         let ctx = format!("layer `{}`", layer.name);
+        // Source kinds are only checkable where the registry exists; in the browser the
+        // JS side decides what it can feed.
+        #[cfg(feature = "native")]
         if let LayerSource::Spec(spec) = &layer.source {
             if registry.info(&spec.kind).is_none() {
                 let known: Vec<&str> = registry.catalog().iter().map(|i| i.kind).collect();

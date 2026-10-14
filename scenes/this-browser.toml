@@ -1,0 +1,69 @@
+# This Browser — the tab you're sitting in (browser build only).
+#
+# Mouse speed is the energy; clicks pluck; scrolling pushes the register; typing patters;
+# switching away from the tab lets the pad breathe alone.
+
+name = "This Browser"
+description = "Your mouse, clicks, scroll and keys. Works anywhere a browser does."
+tags = ["offline", "browser", "ambient"]
+viz = "generic"
+
+[conductor]
+key = "C"
+mode = "mixolydian"
+tempo = 80
+tempo_range = [70, 100]
+drift = "slow"
+progression = "functional"
+bars_per_chord = 2
+mood_smoothing = 10
+
+[[layer]]
+name = "motion"
+role = "pad"
+instrument = "pad.warm"
+source = { kind = "browser.input" }
+signals.speed   = "norm(smooth(field('mouse_speed'), 1))"
+signals.active  = "smooth(field('visible'), 2)"
+map.energy      = "0.2 + 0.7 * speed"
+map.brightness  = "0.3 + 0.6 * speed"
+map.cutoff      = "0.2 + 0.7 * speed"
+map.volume      = "0.5 + 0.5 * active"
+
+[[layer]]
+name = "clicks"
+role = "pluck"
+instrument = "pluck.nylon"
+source = "motion"
+on_event.click.pitch    = "1 - attr('y')"
+on_event.click.velocity = "0.8"
+on_event.click.pan      = "attr('x')"
+on_event.click.quantize = "1/16"
+
+[[layer]]
+name = "keys"
+role = "bells"
+instrument = "bells.glass"
+source = "motion"
+on_event.key.pitch    = "hash(attr('key'))"
+on_event.key.velocity = "0.6"
+on_event.key.length   = "2"
+
+[[layer]]
+name = "scroll"
+role = "lead"
+instrument = "lead.soft"
+source = "motion"
+signals.depth = "norm(smooth(field('scroll'), 2))"
+signals.speed = "norm(smooth(field('mouse_speed'), 2))"
+map.register  = "depth"
+map.density   = "0.2 + 0.6 * speed"
+map.step      = "0.3 + 0.4 * speed"
+
+[[layer]]
+name = "floor"
+role = "bass"
+instrument = "bass.sub"
+source = "motion"
+signals.speed = "norm(smooth(field('mouse_speed'), 4))"
+map.density   = "0.2 + 0.6 * speed"

@@ -1,6 +1,6 @@
 /target
-/.cargo/config.toml
 *.wav
 !assets/**/*.wav
 /.sonder
 /sonder.log
+/site
