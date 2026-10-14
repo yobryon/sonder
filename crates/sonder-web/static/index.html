@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sonder</title>
-<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="./app.css">
 </head>
 <body>
 <div id="app">
@@ -12,6 +12,8 @@
     <div class="brand">
       <span class="logo">sonder</span>
       <span id="scene" class="scene">—</span>
+      <select id="scene-pick" class="scenepick" title="choose a scene (restarts the engine)" hidden></select>
+      <span id="seed" class="seed mono dim" title="engine seed (?seed=… to pin it)" hidden></span>
       <span id="paused" class="paused" hidden>paused</span>
     </div>
 
@@ -35,6 +37,7 @@
     </div>
 
     <div class="listen">
+      <button id="camera" class="btn" title="use your webcam as the camera source" hidden>◉ camera</button>
       <button id="listen" class="btn primary" title="start audio in the browser">▶ Listen</button>
       <canvas id="vu" width="72" height="18" title="level L/R"></canvas>
       <input id="vol" type="range" min="0" max="1" step="0.01" value="0.8" title="volume">
@@ -44,11 +47,13 @@
     <div class="conn" title="connection">
       <span id="dot" class="dot connecting"></span>
       <span id="conn-label" class="dim">connecting</span>
+      <span id="mode" class="mode" title="no Sonder server behind this page: the engine runs as WebAssembly in a Web Worker and JS adapters fetch the live data" hidden>no server — running in your browser</span>
       <button id="help" class="btn ghost" title="keyboard shortcuts (?)">?</button>
     </div>
   </header>
 
   <div id="note" class="caption">…</div>
+  <div id="banner" class="banner" hidden></div>
 
   <main id="stage">
     <canvas id="viz"></canvas>
@@ -86,6 +91,6 @@
     </table>
   </div>
 </div>
-<script type="module" src="/app.js"></script>
+<script type="module" src="./app.js"></script>
 </body>
 </html>

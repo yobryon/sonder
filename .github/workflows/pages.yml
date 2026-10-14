@@ -1,0 +1,65 @@
+# Build the serverless wasm site and deploy it to GitHub Pages on every push to main.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-site
+
+      - name: Read the wasm-bindgen version from Cargo.lock
+        id: wb
+        run: echo "version=$(scripts/wasm-bindgen-version.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Install wasm-bindgen-cli ${{ steps.wb.outputs.version }}
+        run: |
+          if ! command -v wasm-bindgen >/dev/null || [ "$(wasm-bindgen --version | awk '{print $2}')" != "${{ steps.wb.outputs.version }}" ]; then
+            cargo install wasm-bindgen-cli --version "${{ steps.wb.outputs.version }}" --locked
+          fi
+
+      - name: Install binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Build site
+        run: scripts/build-site.sh
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/web
+
+      - name: JS unit tests
+        run: node --test crates/sonder-web/js-tests/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

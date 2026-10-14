@@ -67,6 +67,30 @@ A scene is a TOML file. Curated ones live in [`scenes/`](scenes/):
 | `hacker-news` | HN firehose | yes |
 | `orbit` | ISS position | yes |
 
+## Run it in your browser
+
+The whole engine also compiles to WebAssembly and runs **with no server at all**: a Web
+Worker hosts the engine, JS adapters fetch the live feeds (USGS, Wikipedia, Coinbase,
+NOAA, Hacker News, GitHub, the ISS…) straight from your browser, and your webcam can stand
+in for the traffic camera. Hosted build: `https://<user>.github.io/sonder/` (deployed by
+`.github/workflows/pages.yml` on every push to `main`).
+
+Build and serve it locally:
+
+```
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version "$(scripts/wasm-bindgen-version.sh)"
+scripts/build-site.sh                 # → site/  (wasm + bindings + the static UI)
+python3 -m http.server -d site        # open http://localhost:8000/
+```
+
+Query flags: `?scene=wikipedia-rain` picks a scene, `?seed=42` pins the seed,
+`?mode=ws|worker` forces the transport (auto-detected: served by `sonder play --web` →
+WebSocket, static host → Worker), `?mock=1` uses the JS mock engine (`engine-mock.js`)
+for UI work without a wasm build. Sources that cannot exist in a browser
+(`system.metrics`, `file-tail`, `stdin`) show as *failed* and their layers play on the
+conductor alone; OpenSky may be blocked by CORS. JS unit tests: `node --test crates/sonder-web/js-tests/`.
+
 ## Building
 
 ```

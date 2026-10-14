@@ -197,6 +197,10 @@ export async function getText(url, { headers = {}, signal, timeoutMs = HTTP_TIME
   }
 }
 
+/** Consecutive network/CORS failures before a source is shown as `failed`. */
+export const FAILED_AFTER = 3;
+export const isNetworkError = (msg) => /network or CORS|connect failed|connect timeout/.test(String(msg));
+
 // ---------------------------------------------------------------------------
 // Poll loop (util.rs::Poller): `pollOnce()` resolves 'live' | 'idle', rejects with a message.
 // ---------------------------------------------------------------------------
@@ -219,7 +223,10 @@ export class Poller {
         delay = Math.max(retryDelaySec(this.attempt), Math.min(this.interval, 5));
         this.attempt++;
         this.em.log(`poll failed (attempt ${this.attempt}): ${msg}`);
-        this.em.statusForce('reconnecting', `${msg}; retry in ${delay.toFixed(0)}s`);
+        // A browser cannot get past CORS by retrying: after a few tries call it failed
+        // (the UI shows why) but keep polling slowly in case the network comes back.
+        if (this.attempt >= FAILED_AFTER && isNetworkError(msg)) this.em.statusForce('failed', `${msg}; retrying every ${delay.toFixed(0)}s`);
+        else this.em.statusForce('reconnecting', `${msg}; retry in ${delay.toFixed(0)}s`);
       }
       await this.sleep(delay);
     }
@@ -246,7 +253,8 @@ export class Connector {
       if (performance.now() - started > 60000) this.attempt = 0;
       const d = retryDelaySec(this.attempt);
       this.attempt++;
-      this.em.statusForce('reconnecting', `${msg}; reconnect in ${d.toFixed(0)}s`);
+      if (this.attempt >= FAILED_AFTER && isNetworkError(msg)) this.em.statusForce('failed', `${msg}; retrying every ${d.toFixed(0)}s`);
+      else this.em.statusForce('reconnecting', `${msg}; reconnect in ${d.toFixed(0)}s`);
       await new Promise((res) => { this.wake = res; this.timer = setTimeout(res, d * 1000); });
     }
   }

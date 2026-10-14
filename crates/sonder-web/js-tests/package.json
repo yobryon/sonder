@@ -1,0 +1,1 @@
+{ "type": "module", "private": true, "description": "node --test suites for the browser build of Sonder (crates/sonder-web/static)" }

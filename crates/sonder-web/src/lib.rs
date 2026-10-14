@@ -6,6 +6,7 @@
 //! GET  /app.js        embedded ES module (UI)
 //! GET  /app.css       embedded stylesheet
 //! GET  /worklet.js    embedded AudioWorklet processor
+//! GET  /transport.js  embedded transport module (app.js imports it; picks ws here)
 //! GET  /api/snapshot  latest `EngineSnapshot` as JSON
 //! WS   /ws            server → snapshot JSON on every change (coalesced);
 //!                     client → `UserCommand` JSON (`{"cmd":"toggle_mute","layer":0}`)
@@ -61,6 +62,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/app.js", get(assets::app_js))
         .route("/app.css", get(assets::app_css))
         .route("/worklet.js", get(assets::worklet_js))
+        .route("/transport.js", get(assets::transport_js))
         .route("/api/snapshot", get(api_snapshot))
         .route("/ws", get(ws::snapshot_ws))
         .route("/audio", get(audio::audio_ws))
@@ -155,6 +157,8 @@ mod tests {
         assert!(!assets::APP_JS.is_empty());
         assert!(!assets::APP_CSS.is_empty());
         assert!(!assets::WORKLET_JS.is_empty());
+        assert!(!assets::TRANSPORT_JS.is_empty());
+        assert!(assets::APP_JS.contains("./transport.js"));
         assert!(assets::INDEX_HTML.contains("/app.js"));
         assert!(assets::INDEX_HTML.contains("/app.css"));
         assert!(assets::APP_JS.contains("/worklet.js"));

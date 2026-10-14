@@ -1,10 +1,21 @@
 // Sonder web UI. Vanilla ES module, no build step, no network beyond this host.
 //
-// Data in:  /ws  → EngineSnapshot JSON at ~20 Hz (see sonder-core/src/snapshot.rs)
-// Data out: /ws  ← UserCommand JSON  {"cmd":"toggle_mute","layer":0}
-// Audio:    /audio → header JSON, then i16 stereo PCM frames → AudioWorklet
+// Data in:  EngineSnapshot JSON at ~20-25 Hz (see sonder-core/src/snapshot.rs)
+// Data out: UserCommand JSON  {"cmd":"toggle_mute","layer":0}
+// Audio:    interleaved stereo f32 chunks → AudioWorklet (worklet.js)
+//
+// Where it all comes from is transport.js's business: `ws` mode talks to the native
+// Sonder server (/ws, /audio); `worker` mode runs the wasm engine in worker.js with
+// JS source adapters, no server at all. Everything drawn here comes from the snapshot,
+// so both modes look identical.
 
 'use strict';
+
+import { connect } from './transport.js';
+// The source-adapter registry is only needed in worker mode and is not served by the
+// native server, so it is imported lazily (a 404 would otherwise sink this whole module).
+let registry = null;
+const loadRegistry = async () => (registry ||= await import('./sources/index.js'));
 
 const $ = (sel) => document.querySelector(sel);
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -638,35 +649,161 @@ function frame() {
 }
 
 // ---------------------------------------------------------------------------
-// Snapshot WebSocket with reconnect
+// Transport (ws ↔ worker), scene picker, main-thread sources
 // ---------------------------------------------------------------------------
-let ws = null;
-let backoff = 500;
-const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const params = new URLSearchParams(location.search);
+const MOCK = params.get('mock') === '1';
+let transport = null;
+let mainAdapters = [];     // browser.input / camera adapters running on this thread
+let cameraAdapter = null;
+let currentScene = null;   // {name, title, toml, ...} in worker mode
+let currentSeed = params.get('seed');
 
 function setConn(stateName) {
   $('#dot').className = `dot ${stateName}`;
   setText($('#conn-label'), stateName);
 }
 
-function connect() {
-  setConn('connecting');
-  ws = new WebSocket(`${wsProto}//${location.host}/ws`);
-  ws.onopen = () => { setConn('live'); backoff = 500; };
-  ws.onmessage = (ev) => {
-    try { ingest(JSON.parse(ev.data)); } catch (e) { console.warn('bad snapshot', e); }
-  };
-  ws.onclose = () => {
-    setConn('closed');
-    ws = null;
-    setTimeout(connect, backoff);
-    backoff = Math.min(5000, backoff * 1.7);
-  };
-  ws.onerror = () => { /* onclose follows */ };
+function banner(text, bad = false) {
+  const el = $('#banner');
+  el.hidden = !text;
+  el.className = `banner${bad ? ' bad' : ''}`;
+  setText(el, text || '');
 }
 
-function send(cmd) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(cmd));
+function send(cmd) { if (transport) transport.send(cmd); }
+
+// Forget everything learned from the previous engine (scene switch / restart).
+function resetClient() {
+  state.snap = null; state.hist = new Map(); state.events = []; state.seenEvents = new Map(); state.notes = new Map();
+  state.rings = []; state.pings = []; state.laneY = new Map(); state.layerSig = ''; state.sourceSig = ''; state.tickerDirty = true;
+  textCache.clear();
+  vg.clearRect(0, 0, W, H); og.clearRect(0, 0, W, H);
+  $('#layer-list').innerHTML = ''; $('#source-list').innerHTML = ''; $('#event-list').innerHTML = '';
+}
+
+function stopMainAdapters() {
+  for (const a of mainAdapters) { try { a.stop(); } catch (_) { /* ignore */ } }
+  mainAdapters = [];
+  cameraAdapter = null;
+  $('#camera').hidden = true;
+  $('#camera').classList.remove('on');
+}
+
+// Sources that need the DOM or user media run here and forward samples to the worker.
+async function startMainAdapters(specs) {
+  stopMainAdapters();
+  const { loadAdapter, isCameraKind } = await loadRegistry();
+  for (const spec of specs) {
+    const emit = (json) => transport.postSample(spec.name, json);
+    const log = (m) => console.debug(`[${spec.name}]`, m);
+    try {
+      const Adapter = await loadAdapter(spec.kind);
+      if (!Adapter) { emit(JSON.stringify({ type: 'status', state: 'failed', message: `no browser adapter for ${spec.kind}` })); continue; }
+      const ctx = { stage: $('#stage'), postFrame: (gray, w, h) => transport.postFrame(spec.name, gray, w, h), onChange: (on) => $('#camera').classList.toggle('on', on) };
+      const a = new Adapter(spec, emit, log, ctx);
+      mainAdapters.push(a);
+      a.start();
+      if (isCameraKind(spec.kind)) { cameraAdapter = a; $('#camera').hidden = false; }
+    } catch (e) {
+      emit(JSON.stringify({ type: 'status', state: 'failed', message: e && e.message ? e.message : String(e) }));
+    }
+  }
+}
+
+$('#camera').addEventListener('click', () => {
+  if (!cameraAdapter) return;
+  if (cameraAdapter.enabled) cameraAdapter.disable(); else cameraAdapter.enable();
+});
+
+function pickScene(scenes, wanted) {
+  return scenes.find((s) => s.name === wanted) || scenes.find((s) => s.name === 'night-freeway') || scenes[0];
+}
+
+function buildScenePicker(scenes) {
+  const sel = $('#scene-pick');
+  sel.innerHTML = '';
+  for (const s of scenes) {
+    const o = document.createElement('option');
+    o.value = s.name;
+    o.textContent = s.title || s.name;
+    o.title = `${s.description || ''}${s.tags?.length ? `  [${s.tags.join(', ')}]` : ''}`;
+    sel.appendChild(o);
+  }
+  sel.hidden = false;
+  $('#scene').hidden = true;
+  sel.onchange = () => {
+    const s = transport.scenes.find((x) => x.name === sel.value);
+    if (s) startScene(s, params.get('seed'));
+  };
+}
+
+// For scenes tagged `camera` whose traffic is simulated, offer a webcam variant: the
+// same scene with `synthetic.freeway` swapped for a camera source (fed by push_frame).
+async function addWebcamVariants(scenes) {
+  if (!navigator.mediaDevices?.getUserMedia) return scenes;
+  const out = [...scenes];
+  for (const s of scenes) {
+    if (!s.tags?.includes('camera') || !/kind\s*=\s*"synthetic\.freeway"/.test(s.toml)) continue;
+    const toml = s.toml.replace(/kind\s*=\s*"synthetic\.freeway"[^}\n]*/, 'kind = "camera.mjpeg", url = "webcam"').replace(/^name\s*=\s*"([^"]*)"/m, 'name = "$1 (webcam)"');
+    const errors = await transport.validate(toml);
+    if (errors.length) { console.debug('webcam variant rejected', errors); continue; }
+    out.splice(out.indexOf(s) + 1, 0, { ...s, name: `${s.name}-webcam`, title: `${s.title || s.name} (webcam)`, description: `${s.description || ''} Uses your webcam.`, toml });
+  }
+  return out;
+}
+
+function startScene(scene, seed) {
+  currentScene = scene;
+  currentSeed = seed ?? String(Math.floor(Math.random() * 2 ** 48));
+  resetClient();
+  stopMainAdapters();
+  setConn('connecting');
+  banner('');
+  transport.start(scene.toml, currentSeed, audio.srcRate);
+  // Drop whatever the old engine had queued in the worklet so latency doesn't stack.
+  if (audio.node) audio.node.port.postMessage({ type: 'config', srcRate: audio.srcRate, targetMs: 200, maxMs: 500 });
+  $('#scene-pick').value = scene.name;
+  const u = new URL(location.href);
+  u.searchParams.set('scene', scene.name);
+  history.replaceState(null, '', u);
+}
+
+async function boot() {
+  transport = await connect({ mode: params.get('mode') || undefined, engine: MOCK ? './engine-mock.js' : './pkg/sonder_wasm.js' });
+  transport.on('status', setConn);
+  transport.on('snapshot', ingest);
+  transport.on('audio', onAudio);
+  transport.on('audio-config', ({ sampleRate }) => {
+    audio.srcRate = sampleRate;
+    if (audio.node) audio.node.port.postMessage({ type: 'config', srcRate: sampleRate, targetMs: 200, maxMs: 500 });
+  });
+  transport.on('audio-error', (msg) => { setText($('#buf'), msg); $('#buf').className = 'buf mono bad'; });
+
+  if (transport.mode === 'ws') {
+    if (transport.probe && !state.snap) ingest(transport.probe);
+    return;
+  }
+
+  $('#mode').hidden = false;
+  $('#mode').textContent = MOCK ? 'no server — mock engine' : 'no server — running in your browser';
+  transport.on('error', ({ message }) => { banner(`engine error: ${message}`, true); setConn('closed'); });
+  transport.on('ready', async ({ scenes, version }) => {
+    console.info(`sonder wasm ${version}: ${scenes.length} scenes`);
+    transport.scenes = await addWebcamVariants(scenes);
+    buildScenePicker(transport.scenes);
+    startScene(pickScene(transport.scenes, params.get('scene')), params.get('seed'));
+  });
+  transport.on('started', async ({ seed, mainSpecs, specs }) => {
+    const { ADAPTERS } = await loadRegistry();
+    const seedEl = $('#seed');
+    seedEl.hidden = false;
+    setText(seedEl, `seed ${seed}`);
+    const u = new URL(location.href); u.searchParams.set('seed', seed); history.replaceState(null, '', u);
+    startMainAdapters(mainSpecs || []);
+    const missing = (specs || []).filter((s) => !s.builtin && !ADAPTERS[s.kind]).map((s) => `${s.name} (${s.kind})`);
+    if (missing.length) banner(`not available in the browser: ${missing.join(', ')} — those layers play on the conductor alone`);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -674,7 +811,7 @@ function send(cmd) {
 // ---------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
   const tag = (e.target && e.target.tagName) || '';
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.metaKey || e.ctrlKey || e.altKey) return;
   const digit = /^Digit([1-9])$/.exec(e.code);
   if (digit) {
     send({ cmd: e.shiftKey ? 'toggle_solo' : 'toggle_mute', layer: +digit[1] - 1 });
@@ -705,10 +842,28 @@ $('#help').addEventListener('click', toggleLegend);
 // Audio playback
 // ---------------------------------------------------------------------------
 const audio = {
-  ctx: null, node: null, gain: null, ws: null, on: false,
+  ctx: null, node: null, gain: null, on: false,
   srcRate: 48000, channels: 2,
   vuL: 0, vuR: 0, bufferedMs: 0, underruns: 0, playing: false,
 };
+
+// A rendered chunk (interleaved stereo f32) from either transport → VU + worklet.
+function onAudio(f32, sampleRate) {
+  if (!audio.node) return; // stopped while frames were still in flight
+  if (sampleRate && sampleRate !== audio.srcRate) {
+    audio.srcRate = sampleRate;
+    audio.node.port.postMessage({ type: 'config', srcRate: sampleRate, targetMs: 200, maxMs: 500 });
+  }
+  let pl = 0, pr = 0;
+  for (let i = 0; i < f32.length; i += 2) {
+    const al = Math.abs(f32[i]), ar = Math.abs(f32[i + 1]);
+    if (al > pl) pl = al;
+    if (ar > pr) pr = ar;
+  }
+  audio.vuL = Math.max(pl, audio.vuL * 0.8);
+  audio.vuR = Math.max(pr, audio.vuR * 0.8);
+  audio.node.port.postMessage({ type: 'pcm', data: f32 }, [f32.buffer]);
+}
 
 async function startAudio() {
   const btn = $('#listen');
@@ -718,7 +873,7 @@ async function startAudio() {
     try { ctx = new AudioContext({ sampleRate: audio.srcRate, latencyHint: 'interactive' }); }
     catch (_) { ctx = new AudioContext({ latencyHint: 'interactive' }); }
     await ctx.resume();
-    await ctx.audioWorklet.addModule('/worklet.js');
+    await ctx.audioWorklet.addModule(new URL('./worklet.js', import.meta.url));
     const node = new AudioWorkletNode(ctx, 'sonder-player', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
     const gain = ctx.createGain();
     gain.gain.value = +$('#vol').value;
@@ -727,8 +882,11 @@ async function startAudio() {
       const m = e.data;
       if (m && m.type === 'stats') { audio.bufferedMs = m.bufferedMs; audio.underruns = m.underruns; audio.playing = m.playing; }
     };
+    node.port.postMessage({ type: 'config', srcRate: audio.srcRate, targetMs: 200, maxMs: 500 });
     audio.ctx = ctx; audio.node = node; audio.gain = gain;
-    openAudioSocket();
+    // In worker mode the engine may have died (error) or not started yet: (re)start it.
+    if (transport && transport.mode === 'worker' && !transport.started && currentScene) startScene(currentScene, currentSeed);
+    transport.startAudio();
     audio.on = true;
     btn.textContent = '■ Stop';
     btn.classList.add('on');
@@ -741,44 +899,9 @@ async function startAudio() {
   }
 }
 
-function openAudioSocket() {
-  const sock = new WebSocket(`${wsProto}//${location.host}/audio`);
-  sock.binaryType = 'arraybuffer';
-  sock.onmessage = (ev) => {
-    if (typeof ev.data === 'string') {
-      let h;
-      try { h = JSON.parse(ev.data); } catch (_) { return; }
-      if (h.error) { setText($('#buf'), h.error); $('#buf').className = 'buf mono bad'; return; }
-      audio.srcRate = h.sample_rate || audio.srcRate;
-      audio.channels = h.channels || 2;
-      if (!audio.node) return;
-      audio.node.port.postMessage({ type: 'config', srcRate: audio.srcRate, targetMs: 200, maxMs: 500 });
-      return;
-    }
-    if (!audio.node) return; // stopped while frames were still in flight
-    const i16 = new Int16Array(ev.data);
-    const f32 = new Float32Array(i16.length);
-    let pl = 0, pr = 0;
-    for (let i = 0; i < i16.length; i += 2) {
-      const l = i16[i] / 32768, r = i16[i + 1] / 32768;
-      f32[i] = l; f32[i + 1] = r;
-      const al = Math.abs(l), ar = Math.abs(r);
-      if (al > pl) pl = al;
-      if (ar > pr) pr = ar;
-    }
-    audio.vuL = Math.max(pl, audio.vuL * 0.8);
-    audio.vuR = Math.max(pr, audio.vuR * 0.8);
-    audio.node.port.postMessage({ type: 'pcm', data: f32 }, [f32.buffer]);
-  };
-  sock.onclose = () => {
-    if (audio.on && audio.ws === sock) setTimeout(() => { if (audio.on) openAudioSocket(); }, 1000);
-  };
-  audio.ws = sock;
-}
-
 async function stopAudio() {
   audio.on = false;
-  if (audio.ws) { try { audio.ws.close(); } catch (_) { /* ignore */ } audio.ws = null; }
+  if (transport) transport.stopAudio();
   if (audio.ctx) { try { await audio.ctx.close(); } catch (_) { /* ignore */ } }
   audio.ctx = null; audio.node = null; audio.gain = null;
   audio.vuL = audio.vuR = 0; audio.bufferedMs = 0; audio.playing = false;
@@ -817,7 +940,6 @@ setInterval(drawVu, 66);
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
-fetch('/api/snapshot').then((r) => r.json()).then((s) => { if (!state.snap) ingest(s); }).catch(() => { /* ws will deliver */ });
-connect();
 window.addEventListener('resize', resize);
 requestAnimationFrame(frame);
+boot().catch((e) => { console.error(e); banner(`failed to start: ${e.message || e}`, true); setConn('closed'); });
