@@ -422,7 +422,7 @@ pub fn spawn_sources(
     seed: u64,
 ) -> anyhow::Result<Vec<tokio::task::JoinHandle<()>>> {
     let http = reqwest::Client::builder()
-        .user_agent("sonder/0.1 (+https://github.com/genuye/sonder)")
+        .user_agent("sonder/0.1 (+https://github.com/yobryon/sonder)")
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("building http client")?;

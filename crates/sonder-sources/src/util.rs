@@ -19,7 +19,7 @@ use crate::SourceCtx;
 use crate::SourceError;
 
 /// User-Agent sent on every outbound request.
-pub const USER_AGENT: &str = "sonder/0.1 (+https://github.com/genuye/sonder)";
+pub const USER_AGENT: &str = "sonder/0.1 (+https://github.com/yobryon/sonder)";
 
 /// Default per-request timeout.
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(30);

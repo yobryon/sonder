@@ -72,7 +72,7 @@ A scene is a TOML file. Curated ones live in [`scenes/`](scenes/):
 The whole engine also compiles to WebAssembly and runs **with no server at all**: a Web
 Worker hosts the engine, JS adapters fetch the live feeds (USGS, Wikipedia, Coinbase,
 NOAA, Hacker News, GitHub, the ISS…) straight from your browser, and your webcam can stand
-in for the traffic camera. Hosted build: `https://<user>.github.io/sonder/` (deployed by
+in for the traffic camera. Hosted build: **https://yobryon.github.io/sonder/** (deployed by
 `.github/workflows/pages.yml` on every push to `main`).
 
 Build and serve it locally:
