@@ -39,13 +39,13 @@ jobs:
             cargo install wasm-bindgen-cli --version "${{ steps.wb.outputs.version }}" --locked
           fi
 
-      - name: Install binaryen (wasm-opt)
-        run: sudo apt-get update && sudo apt-get install -y binaryen
-
+      # Ubuntu's binaryen is too old for wasm-bindgen's reference-types output (it broke
+      # Table.grow at startup); ship the unoptimised module (~1.7 MB) instead.
       - name: Build site
         run: scripts/build-site.sh
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/web
+          WASM_OPT: "0"
 
       - name: JS unit tests
         run: node --test crates/sonder-web/js-tests/*.test.mjs

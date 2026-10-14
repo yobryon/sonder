@@ -37,7 +37,9 @@ wasm-bindgen --target web --no-typescript --out-dir "$OUT/pkg" "$CARGO_TARGET_DI
 
 if [ "${WASM_OPT:-1}" != "0" ] && command -v wasm-opt >/dev/null; then
   echo "+ wasm-opt -Oz"
-  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int -o "$OUT/pkg/sonder_wasm_bg.wasm.opt" "$OUT/pkg/sonder_wasm_bg.wasm" \
+  # wasm-bindgen emits reference types (an externref table its JS glue grows at startup);
+  # an old wasm-opt without this flag freezes the table → "Table.grow(): failed to grow".
+  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-reference-types -o "$OUT/pkg/sonder_wasm_bg.wasm.opt" "$OUT/pkg/sonder_wasm_bg.wasm" \
     && mv "$OUT/pkg/sonder_wasm_bg.wasm.opt" "$OUT/pkg/sonder_wasm_bg.wasm" \
     || echo "warning: wasm-opt failed; keeping the unoptimised module" >&2
 fi
