@@ -89,7 +89,7 @@ Query flags: `?scene=wikipedia-rain` picks a scene, `?seed=42` pins the seed,
 WebSocket, static host → Worker), `?mock=1` uses the JS mock engine (`engine-mock.js`)
 for UI work without a wasm build. Sources that cannot exist in a browser
 (`system.metrics`, `file-tail`, `stdin`) show as *failed* and their layers play on the
-conductor alone; OpenSky may be blocked by CORS. JS unit tests: `node --test crates/sonder-web/js-tests/`.
+conductor alone; OpenSky may be blocked by CORS. JS unit tests: `node --test crates/sonder-web/js-tests/*.test.mjs`.
 
 ## Building
 
