@@ -282,3 +282,15 @@ Recorded after implementation so the contract above and the code agree.
   defaults to threshold 0.25.
 - **sonder-tui**: `m`/`s` mute/solo the selected layer; mode cycling is `n`/`N`; `Ctrl+S`
   saves the current scene.
+
+## Browser build (wasm)
+
+`sonder-sources`, `sonder-vision` and `sonder-engine` have a `native` feature (default on).
+Without it only the pure parts compile — the simulations and astro math, the blob tracker and
+`blob_sample`, the control loop, scene library and validation — which is what
+`crates/sonder-wasm` links for `wasm32-unknown-unknown`. `sonder-wasm` exposes `Engine`
+(new → `tick()` renders 20 ms, `push_sample()`/`push_frame()` feed it, `snapshot_json()`/
+`command()` mirror the native WebSocket protocol); JS adapters in `crates/sonder-web/static/
+sources/` replace the tokio sources. See `docs/WASM.md`. Build with `scripts/build-site.sh`
+(needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` matching the crate version,
+currently 0.2.129; `.cargo/config.toml` sets `getrandom_backend="wasm_js"` for that target).
