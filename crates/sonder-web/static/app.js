@@ -726,19 +726,36 @@ $('#mic').addEventListener('click', () => {
   if (audioAdapter.enabled) audioAdapter.disable(); else audioAdapter.enable();
 });
 
+// The product is about listening to the world: default to a live scene that works from
+// any browser, and fall back to the founding (simulated) one.
+const DEFAULT_SCENES = ['social-firehose', 'night-freeway'];
+
 function pickScene(scenes, wanted) {
-  return scenes.find((s) => s.name === wanted) || scenes.find((s) => s.name === 'night-freeway') || scenes[0];
+  return scenes.find((s) => s.name === wanted)
+    || DEFAULT_SCENES.map((n) => scenes.find((s) => s.name === n)).find(Boolean)
+    || scenes[0];
 }
 
 function buildScenePicker(scenes) {
   const sel = $('#scene-pick');
   sel.innerHTML = '';
-  for (const s of scenes) {
-    const o = document.createElement('option');
-    o.value = s.name;
-    o.textContent = s.title || s.name;
-    o.title = `${s.description || ''}${s.tags?.length ? `  [${s.tags.join(', ')}]` : ''}`;
-    sel.appendChild(o);
+  // Live feeds first; simulated/offline scenes in their own group.
+  const groups = [
+    ['live — real data streams', scenes.filter((s) => s.tags?.includes('live'))],
+    ['offline — simulated or local', scenes.filter((s) => !s.tags?.includes('live'))],
+  ];
+  for (const [label, list] of groups) {
+    if (!list.length) continue;
+    const g = document.createElement('optgroup');
+    g.label = label;
+    for (const s of list) {
+      const o = document.createElement('option');
+      o.value = s.name;
+      o.textContent = s.title || s.name;
+      o.title = `${s.description || ''}${s.tags?.length ? `  [${s.tags.join(', ')}]` : ''}`;
+      g.appendChild(o);
+    }
+    sel.appendChild(g);
   }
   sel.hidden = false;
   $('#scene').hidden = true;
