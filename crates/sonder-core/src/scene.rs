@@ -102,6 +102,44 @@ pub struct ConductorConfig {
     pub humanize: f64,
     /// RNG seed for deterministic renders. None = random per run.
     pub seed: Option<u64>,
+    /// Musical form: how the piece is shaped over minutes.
+    pub form: FormConfig,
+}
+
+/// How the piece is shaped over time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FormStyle {
+    /// No sections: a steady state shaped only by the data.
+    Static,
+    /// Slow tension arcs (intro → build → peak → release), lengths from `arc_minutes`,
+    /// steered by energy. The default for ambient scenes.
+    #[default]
+    Arc,
+    /// Alternating sections of `section_bars` (A/B/A'/B'…) with motifs that recur.
+    Sections,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FormConfig {
+    pub style: FormStyle,
+    /// Typical arc length in minutes (Arc style).
+    pub arc_minutes: f64,
+    /// Bars per section (Sections style).
+    pub section_bars: u32,
+    /// 0..1 how strongly form overrides data (0 = data only, 1 = form only).
+    pub strength: f64,
+    /// Let melodic layers answer salient events on other layers (call-and-response).
+    pub call_and_response: bool,
+    /// Motif memory: 0..1 how often melodic generators restate remembered motifs.
+    pub motif_recall: f64,
+}
+
+impl Default for FormConfig {
+    fn default() -> Self {
+        Self { style: FormStyle::Arc, arc_minutes: 6.0, section_bars: 16, strength: 0.5, call_and_response: true, motif_recall: 0.4 }
+    }
 }
 
 impl Default for ConductorConfig {
@@ -120,6 +158,7 @@ impl Default for ConductorConfig {
             mood_baseline: [0.4, 0.3, 0.5],
             humanize: 0.15,
             seed: None,
+            form: FormConfig::default(),
         }
     }
 }
@@ -205,6 +244,9 @@ pub struct LayerConfig {
     pub mood_weight: f64,
     /// Static gain multiplier 0..1 (in addition to `map.volume`).
     pub gain: f32,
+    /// Caption template for this layer's events, e.g. `"{size} {product} {side} on Kraken"`
+    /// (`{attr}` placeholders; `{intensity}`, `{name}` available). Overrides the source's.
+    pub caption: String,
 }
 
 impl Default for LayerConfig {
@@ -220,6 +262,7 @@ impl Default for LayerConfig {
             muted: false,
             mood_weight: 1.0,
             gain: 1.0,
+            caption: String::new(),
         }
     }
 }

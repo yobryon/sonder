@@ -24,5 +24,9 @@ pub enum UserCommand {
     TogglePause,
     /// Write the current (possibly tweaked) scene to disk at `path` (engine chooses if empty).
     SaveScene { path: String },
+    /// Replace the running scene with this TOML (restart in place).
+    LoadScene { toml: String },
+    /// Jump to the next form section now.
+    NextSection,
     Quit,
 }

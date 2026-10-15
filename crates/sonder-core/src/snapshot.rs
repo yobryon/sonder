@@ -75,6 +75,25 @@ pub struct EventSnapshot {
     pub intensity: f64,
     /// A few attributes worth showing (sources decide what is interesting).
     pub attrs: BTreeMap<String, Value>,
+    /// Human one-liner from the source's caption template (empty if none).
+    #[serde(default)]
+    pub label: String,
+}
+
+/// Why a note happened: the event that triggered it (for event-driven roles) — so the
+/// UI can answer "what was that?" with "a 0.13 BTC sell on OKX".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct NoteCause {
+    /// Event name, e.g. "trade", "strike", "edit".
+    pub event: String,
+    /// When the event arrived.
+    pub at: Seconds,
+    /// Human one-liner, formatted by the engine from the source's caption template
+    /// (empty when the source has none).
+    pub label: String,
+    /// A few attributes worth showing.
+    #[serde(default)]
+    pub attrs: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,6 +107,39 @@ pub struct NoteSnapshot {
     pub duration: Option<f64>,
     /// Is it still sounding?
     pub active: bool,
+    /// The triggering event, for event-driven roles.
+    #[serde(default)]
+    pub cause: Option<NoteCause>,
+    /// Which generator decision produced it: "trigger", "pad", "bass", "motif",
+    /// "answer" (call-and-response), "arp", "lead", … Free-form, for the UI.
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// A moment worth telling the listener about ("a 4.1 off Honshu just rang the bell").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Caption {
+    pub at: Seconds,
+    pub layer: Option<LayerId>,
+    pub text: String,
+    /// 0..1, how much this deserves attention (drives display time / size).
+    pub importance: f64,
+}
+
+/// Where the piece is in its musical form.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct FormSnapshot {
+    /// Current section name: "intro", "build", "peak", "release", "verse", "chorus", …
+    pub section: String,
+    /// Bars elapsed in the section / planned bars (0 = open-ended).
+    pub bar_in_section: u32,
+    pub bars_in_section: u32,
+    /// 0..1 position along the current tension arc.
+    pub arc: f64,
+    /// Name/hash of the motif in play, if any.
+    pub motif: String,
+    /// Human summary ("peak · motif B · answering lightning").
+    pub note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -101,6 +153,12 @@ pub struct EngineSnapshot {
     pub mood: Mood,
     /// Human explanation of what the conductor is doing and why.
     pub conductor_note: String,
+    /// Musical form state (sections, arcs, motifs).
+    #[serde(default)]
+    pub form: FormSnapshot,
+    /// Recent captions, newest last (bounded, ~16).
+    #[serde(default)]
+    pub captions: Vec<Caption>,
     pub layers: Vec<LayerSnapshot>,
     pub sources: Vec<SourceSnapshot>,
     /// Most recent events, newest last (bounded, ~64).

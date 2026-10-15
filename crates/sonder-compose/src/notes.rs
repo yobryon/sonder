@@ -137,6 +137,8 @@ impl NoteBook {
                     pan,
                     duration,
                     active: true,
+                    cause: None,
+                    reason: String::new(),
                 });
             }
             Trigger::Drum {

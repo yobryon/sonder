@@ -112,6 +112,8 @@ impl OscState {
     pub fn render(&mut self, wave: Wave, p: &OscParams) -> (f32, f32) {
         let dt = (p.freq_hz / p.sample_rate).clamp(0.0, 0.49) as f64;
         match wave {
+            // Placeholders until the v2 granular/physical-model oscillators land: silent.
+            Wave::Grain | Wave::String | Wave::Modal => (0.0, 0.0),
             Wave::Sine => {
                 let s = sin_turns(self.phase[0] as f32);
                 self.phase[0] += dt;

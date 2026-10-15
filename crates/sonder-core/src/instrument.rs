@@ -33,6 +33,13 @@ pub enum Wave {
     Noise,
     /// Pink (1/f) noise.
     Pink,
+    /// Granular playback of the layer's live audio ring (see [`Grain`]); silent until
+    /// audio arrives via `SynthCommand::AudioChunk`.
+    Grain,
+    /// Karplus–Strong plucked string (physical model).
+    String,
+    /// Modal resonator bank (struck bar / membrane / bell physical model).
+    Modal,
     /// Band-limited single-cycle wavetable (see [`Osc::table`]).
     Wavetable,
 }
@@ -373,10 +380,15 @@ pub struct MasterSettings {
     pub saturation: f32,
     /// Limiter ceiling in dBFS (negative).
     pub ceiling_db: f32,
+    /// Loudness target in LUFS (e.g. -16 for streaming); the master rides gain slowly
+    /// toward it. None = off.
+    pub target_lufs: Option<f32>,
+    /// Bus compressor amount 0..1 (0 = off): gentle glue, slow release.
+    pub glue: f32,
 }
 
 impl Default for MasterSettings {
     fn default() -> Self {
-        Self { gain: 0.9, saturation: 0.1, ceiling_db: -1.0 }
+        Self { gain: 0.9, saturation: 0.1, ceiling_db: -1.0, target_lufs: Some(-16.0), glue: 0.25 }
     }
 }

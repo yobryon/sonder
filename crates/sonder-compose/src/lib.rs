@@ -416,7 +416,9 @@ impl Composer {
                     }
                 }
             }
-            UserCommand::SaveScene { .. } | UserCommand::Quit => {}
+            UserCommand::SaveScene { .. } | UserCommand::LoadScene { .. } | UserCommand::Quit => {}
+            // Form sections arrive with the v2 form engine; until then a no-op.
+            UserCommand::NextSection => {}
         }
     }
 

@@ -416,6 +416,11 @@ impl Synth {
                     self.recycle_fx.push(old);
                 }
             }
+            // Placeholder until the granular ring lands (v2): nothing sends these yet, and
+            // the box must not be freed on the audio thread, so it is leaked, not dropped.
+            SynthCommand::AudioChunk { chunk, .. } => {
+                std::mem::forget(chunk);
+            }
             SynthCommand::Panic => {
                 for v in self.voices.iter_mut() {
                     if v.active {

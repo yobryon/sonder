@@ -118,6 +118,9 @@ pub enum Datum {
     },
     /// Source health / log line for the UI.
     Status { state: SourceState, message: String },
+    /// Raw audio from a source (hydrophone, mic, radio) for granular instruments on the
+    /// layers that read it. Mono, `rate` Hz, chunks of ~20–100 ms.
+    Audio { rate: u32, samples: Vec<f32> },
     /// Opaque visualization payload the source wants the UI to draw
     /// (e.g. freeway car positions). Passed through to [`crate::snapshot::EngineSnapshot::viz`].
     Viz { payload: serde_json::Value },

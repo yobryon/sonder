@@ -67,8 +67,18 @@ pub enum SynthCommand {
     /// Tempo for synced effects (delay times).
     SetTempo { bpm: f32 },
     SetEffects(Box<Effects>),
+    /// Live audio for a layer's granular instrument (see `Wave::Grain`). The synth copies
+    /// it into the layer's preallocated ring and returns the box via `take_recycled_audio`.
+    AudioChunk { layer: LayerId, chunk: Box<AudioChunk> },
     /// Hard stop everything (voices + effect tails fade over ~50ms).
     Panic,
+}
+
+/// A chunk of mono audio for [`SynthCommand::AudioChunk`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AudioChunk {
+    pub rate: u32,
+    pub samples: Vec<f32>,
 }
 
 /// Messages from the audio thread back to the control side. Non-realtime
