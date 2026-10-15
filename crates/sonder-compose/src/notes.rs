@@ -73,7 +73,22 @@ enum Trigger {
         velocity: f32,
         pan: f32,
         tone: f32,
+        reason: String,
+        cause: Option<NoteCause>,
     },
+}
+
+/// GM percussion key for a drum, so hits show up in the piano roll like MIDI drums.
+pub fn drum_key(d: Drum) -> u8 {
+    match d {
+        Drum::Kick => 36,
+        Drum::Snare => 38,
+        Drum::Hat => 42,
+        Drum::Click => 37,
+        Drum::Noise => 39,
+        Drum::Tom => 45,
+        Drum::Rim => 37,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -171,6 +186,8 @@ impl NoteBook {
                 velocity,
                 pan,
                 tone,
+                reason,
+                cause,
             } => {
                 out.push(SynthCommand::Drum {
                     layer,
@@ -178,6 +195,17 @@ impl NoteBook {
                     velocity,
                     pan,
                     tone,
+                });
+                notes.push(NoteSnapshot {
+                    at: now,
+                    layer,
+                    midi: drum_key(drum) as f32,
+                    velocity,
+                    pan,
+                    duration: Some(0.15),
+                    active: true,
+                    cause,
+                    reason,
                 });
             }
         }
@@ -451,6 +479,12 @@ impl<'a> NoteSink<'a> {
 
     /// Trigger a drum hit.
     pub fn drum(&mut self, drum: Drum, velocity: f64, pan: f64, tone: f64, delay: f64) {
+        self.drum_as(drum, velocity, pan, tone, delay, "perc-pattern", None);
+    }
+
+    /// A drum hit with its reason and (for event-triggered hits) its cause.
+    #[allow(clippy::too_many_arguments)]
+    pub fn drum_as(&mut self, drum: Drum, velocity: f64, pan: f64, tone: f64, delay: f64, reason: &str, cause: Option<NoteCause>) {
         if self.budget == 0 {
             return;
         }
@@ -474,6 +508,8 @@ impl<'a> NoteSink<'a> {
                 velocity,
                 pan,
                 tone,
+                reason: reason.to_string(),
+                cause,
             },
         );
     }

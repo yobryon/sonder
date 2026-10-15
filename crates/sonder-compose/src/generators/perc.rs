@@ -57,7 +57,7 @@ impl Generator for Perc {
                 Some(grid) => ctx.transport.delay_to(Transport::next_grid(beats, grid)),
                 None => 0.0,
             };
-            ctx.sink.drum(drum, t.velocity, t.pan, t.pitch, delay);
+            ctx.sink.drum_as(drum, t.velocity, t.pan, t.pitch, delay, crate::TRIGGER_REASON, Some(crate::notes::cause_of(ev)));
         }
 
         if !self.pattern_mode {
