@@ -199,6 +199,7 @@ export default class Adapter {
     this.maxRate = Math.max(1, paramF64(spec, 'max_rate', DEFAULT_MAX_RATE));
     this.stats = new Stats();
     this.emitted = new RateWindow();
+    this.anonymous = false;   // set after the broker refuses our credentials once
   }
   start() {
     if (this.resolved.error) { this.em.statusForce('failed', this.resolved.error); return; }
@@ -226,7 +227,8 @@ export default class Adapter {
       signal.addEventListener('abort', onAbort, { once: true });
       ws.onopen = () => {
         opened = true; lastRx = performance.now();
-        ws.send(encodeConnect({ clientId: this.clientId, username: this.username, password: this.password, keepalive: this.keepalive }));
+        const creds = this.anonymous ? {} : { username: this.username, password: this.password };
+        ws.send(encodeConnect({ clientId: this.clientId, ...creds, keepalive: this.keepalive }));
       };
       ws.onerror = () => { /* onclose follows */ };
       ws.onclose = (ev) => finish(reject, opened ? `server closed${ev && ev.code && ev.code !== 1000 && ev.code !== 1005 ? ` (${ev.code})` : ''}` : 'connect failed (network, wrong port or no `mqtt` subprotocol)');
@@ -238,7 +240,15 @@ export default class Adapter {
         for (const p of packets) {
           switch (p.type) {
             case CONNACK:
-              if (p.code !== 0) return finish(reject, `broker refused: ${CONNACK_CODES[p.code] || `code ${p.code}`}`);
+              if (p.code !== 0) {
+                // test.mosquitto.org's unauthenticated WebSocket listeners refuse any username
+                // (even `wildcard`); try once more anonymously before giving up on credentials.
+                if ((p.code === 4 || p.code === 5) && !this.anonymous && (this.username !== null || this.password !== null)) {
+                  this.anonymous = true;
+                  this.em.log('credentials refused; retrying anonymously');
+                }
+                return finish(reject, `broker refused: ${CONNACK_CODES[p.code] || `code ${p.code}`}`);
+              }
               connected = true;
               ws.send(encodeSubscribe(1, this.topics, 0));
               this.em.status('connecting', 'connected, subscribing');

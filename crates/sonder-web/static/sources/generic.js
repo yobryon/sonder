@@ -139,9 +139,12 @@ export function parseEventsOn(s) {
 
 /** Parse `fields`, `events_on`, `event_name`, `data_path`, `filter`, `each` from a spec. */
 export function genericConfig(spec, defaultEventsOn, defaultEvent) {
+  // fields: absent / "auto" / [] → every numeric leaf; "none" → no readings at all (events
+  // only: the engine derives its readings from the event mapping); otherwise explicit paths.
   const list = paramStrList(spec, 'fields');
   let fields = 'auto';
-  if (list && list.length && !(list.length === 1 && list[0].toLowerCase() === 'auto')) {
+  if (list && list.length === 1 && list[0].trim().toLowerCase() === 'none') fields = 'none';
+  else if (list && list.length && !(list.length === 1 && list[0].toLowerCase() === 'auto')) {
     for (const p of list) if (!parsePath(p)) throw new Error(`${spec.kind}: param \`fields\`: bad path \`${p}\``);
     fields = list;
   }
@@ -274,6 +277,7 @@ export class Converter {
   /** Numeric channels of obj according to the field selection (sorted keys, like BTreeMap). */
   readingOf(obj) {
     const m = {};
+    if (this.cfg.fields === 'none') return m;
     if (this.cfg.fields === 'auto') {
       const flat = flattenNumeric(obj, '');
       for (const [k, v] of flat.slice(0, MAX_FIELDS)) m[k] = v;

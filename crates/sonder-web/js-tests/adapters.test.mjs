@@ -236,7 +236,7 @@ test('generic converter: auto fields, change policy, explicit paths, filter, dat
   assert.equal(c.convert({ a: 1, b: { c: 2 }, s: 'y' }).length, 1);
   const d3 = c.convert({ a: 2, b: { c: 2 }, s: 'y' });
   assert.equal(d3.length, 2);
-  assert.deepEqual(d3[1], { type: 'event', name: 'update', intensity: 1, attrs: { a: 2, s: 'y' } });
+  assert.deepEqual(d3[1], { type: 'event', name: 'update', intensity: 1, attrs: { a: 2, 'b.c': 2, s: 'y' } });
   const c2 = new Converter({ fields: ['.payload.x', 'payload.arr[1]'], eventsOn: 'every', eventName: 'tick', dataPath: '.msg', filter: ['.type', 'data'] });
   const d = c2.convert({ msg: { type: 'data', payload: { x: 5, arr: [1, 2] } } });
   assert.equal(d.length, 2);
