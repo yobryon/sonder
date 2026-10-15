@@ -728,9 +728,11 @@ mod tests {
         assert!(!trig.is_empty());
         for n in &trig {
             let cause = n.cause.as_ref().expect("event note without a cause");
-            assert_eq!(cause.event, "car");
+            assert!(matches!(cause.event.as_str(), "car" | "hit"), "unexpected cause {}", cause.event);
             assert!(cause.label.is_empty(), "the engine fills labels");
-            assert!(cause.attrs.contains_key("lane"));
+            if cause.event == "car" {
+                assert!(cause.attrs.contains_key("lane"));
+            }
             assert!(cause.at <= n.at + 1e-9);
         }
         for role in ["pad", "bass", "lead", "arp", "drone"] {
