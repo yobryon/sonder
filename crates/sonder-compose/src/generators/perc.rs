@@ -64,6 +64,8 @@ impl Generator for Perc {
             return;
         }
         let density = ctx.params.density(0.4);
+        // Release sections drop the hats (fully once the form is at full strength).
+        let hats = ctx.cue.thin < 0.5;
         let bpb = ctx.transport.beats_per_bar() as f64;
         let steps = (bpb * 4.0).round().max(1.0) as usize;
         let pulses = (2.0 + (density * 3.0).round()) as usize;
@@ -78,10 +80,11 @@ impl Generator for Perc {
                     .drum(Drum::Kick, 0.6 + 0.3 * energy, 0.5, tone, delay);
             }
             let in_beat = p - p.floor();
-            if (in_beat - 0.5).abs() < 1e-6 {
+            if hats && (in_beat - 0.5).abs() < 1e-6 {
                 ctx.sink
                     .drum(Drum::Hat, 0.25 + 0.35 * energy, 0.55, tone, delay);
-            } else if density > 0.6
+            } else if hats
+                && density > 0.6
                 && (in_beat - 0.25).abs() < 1e-6
                 && ctx.rng.random::<f64>() < (density - 0.6) * 1.5
             {

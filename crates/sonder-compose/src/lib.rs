@@ -14,9 +14,12 @@
 
 #![forbid(unsafe_code)]
 
+mod answer;
 mod conductor;
 mod eventmap;
+mod form;
 mod generators;
+mod motif;
 mod notes;
 mod transport;
 
@@ -25,19 +28,33 @@ use std::collections::BTreeMap;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use sonder_core::{
-    map_keys, EngineSnapshot, LayerConfig, LayerEvent, LayerId, LayerParam, LayerSnapshot,
-    NoteSnapshot, Role, Scene, Seconds, SynthCommand, TransportPos, UserCommand,
+    map_keys, EngineSnapshot, FormSnapshot, LayerConfig, LayerEvent, LayerId, LayerParam,
+    LayerSnapshot, NoteSnapshot, Role, Scene, Seconds, SynthCommand, TransportPos, UserCommand,
 };
 
+pub use answer::{Answers, Pending, ANSWER_REASON, NOVELTY_S, SALIENT_INTENSITY};
 pub use conductor::{Harmony, HarmonyChange};
 pub use eventmap::{Snap, Trigger};
-pub use generators::{register_window, GenCtx, Generator, Params};
-pub use notes::{NoteSink, TRIGGERS_PER_TICK};
+pub use form::{blend, Form, FormTargets, Section};
+pub use generators::{
+    register_window, Cue, GenCtx, Generator, Params, MOTIF_REASON, TRIGGER_REASON,
+};
+pub use motif::{Motif, MotifMemory, Restatement, Transform, MAX_MOTIFS};
+pub use notes::{cause_of, NoteSink, CAUSE_ATTRS, TRIGGERS_PER_TICK};
 pub use transport::Transport;
 
 use conductor::{Conductor, MoodSource};
 use eventmap::LayerMappings;
 use notes::{NoteBook, ParamCache};
+
+/// `NoteSnapshot.reason` for notes a role plays on its own clock.
+fn reason_for(role: Role) -> &'static str {
+    match role {
+        Role::Perc => "perc-pattern",
+        Role::Pluck | Role::Bells => generators::TRIGGER_REASON,
+        other => other.name(),
+    }
+}
 
 /// Why a scene could not be turned into a composer.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -114,6 +131,9 @@ pub struct Composer {
     scene_name: String,
     transport: Transport,
     conductor: Conductor,
+    form: Form,
+    motifs: MotifMemory,
+    answers: Answers,
     layers: Vec<Layer>,
     book: NoteBook,
     density_offset: f64,
@@ -130,6 +150,12 @@ impl Composer {
     pub fn new(scene: &Scene, seed: u64) -> Result<Self, ComposeError> {
         let transport = Transport::new(&scene.conductor);
         let conductor = Conductor::new(&scene.conductor, seed)?;
+        let form = Form::new(
+            &scene.conductor.form,
+            seed,
+            transport.bpm(),
+            transport.beats_per_bar(),
+        );
         let mut layers = Vec::with_capacity(scene.layers.len());
         for (i, cfg) in scene.layers.iter().enumerate() {
             let mappings = LayerMappings::compile(cfg)?;
@@ -152,6 +178,9 @@ impl Composer {
             scene_name: scene.name.clone(),
             transport,
             conductor,
+            form,
+            motifs: MotifMemory::new(),
+            answers: Answers::new(seed),
             book: NoteBook::new(scene.layers.len()),
             layers,
             density_offset: 0.0,
@@ -181,6 +210,31 @@ impl Composer {
     /// The current harmonic state.
     pub fn harmony(&self) -> &Harmony {
         &self.conductor.harmony
+    }
+
+    /// The form engine (section, arc, targets).
+    pub fn form(&self) -> &Form {
+        &self.form
+    }
+
+    /// What the form is asking for right now (None for `Static`).
+    pub fn form_targets(&self) -> Option<FormTargets> {
+        self.form.targets()
+    }
+
+    /// Remembered motifs.
+    pub fn motifs(&self) -> &MotifMemory {
+        &self.motifs
+    }
+
+    /// Which unmuted layer answers calls: the first lead, else arp, else pad.
+    fn answer_layer(&self) -> Option<LayerId> {
+        [Role::Lead, Role::Arp, Role::Pad].iter().find_map(|role| {
+            self.layers
+                .iter()
+                .find(|l| l.cfg.role == *role && !self.layer_muted(l.id))
+                .map(|l| l.id)
+        })
     }
 
     /// One control tick. `now` is engine time, `dt` the seconds since the last tick.
@@ -225,23 +279,64 @@ impl Composer {
             sources
         };
         self.conductor.update_mood(&sources, dt);
+
+        // 2. Form: advance by bars, then tell the conductor what it wants.
+        let energy = self.conductor.mood().energy;
+        self.form.tick(
+            self.transport.bar(),
+            self.transport.bpm(),
+            self.transport.beats_per_bar(),
+            energy,
+        );
+        let strength = self.form.strength();
+        let targets = self.form.targets();
+        self.conductor.set_form(targets.map(|t| (t, strength)));
         let mood = self.conductor.mood();
 
-        // 2. Clock.
+        // 3. Clock.
         if let Some(bpm) = self.transport.tick(dt, mood.energy) {
             out.commands
                 .push(SynthCommand::SetTempo { bpm: bpm as f32 });
         }
 
-        // 3. Harmony.
+        // 4. Harmony.
         self.conductor.tick(self.transport.beats());
 
-        // 4. Each layer plays.
+        // 5. Calls: salient events schedule an answer on a melodic layer.
+        if self.form.call_and_response() {
+            let answerer = self.answer_layer();
+            for ev in input.events {
+                let Some(layer) = self.layers.get(ev.layer.0 as usize) else {
+                    continue;
+                };
+                if self.layer_muted(layer.id) || !self.answers.is_salient(ev) {
+                    continue;
+                }
+                if let Some(target) = answerer.filter(|a| *a != layer.id) {
+                    let inp = input.layers.get(layer.id.0 as usize).unwrap_or(&empty);
+                    let pitch = layer
+                        .mappings
+                        .trigger(ev, &inp.signals, now, self.transport.beats())
+                        .pitch;
+                    self.answers.schedule(ev, pitch, target, &self.transport);
+                }
+            }
+        }
+        let section = self.form.section().name();
+        let cue = Cue {
+            section,
+            thin: self.form.thin(),
+            rest_until_beat: 0.0,
+            motif_recall: self.form.motif_recall(),
+        };
+
+        // 6. Each layer plays.
         for i in 0..self.layers.len() {
             let muted = self.layer_muted(LayerId(i as u16));
             let inp = input.layers.get(i).unwrap_or(&empty);
             let layer = &mut self.layers[i];
             if muted {
+                self.answers.forget_layer(layer.id);
                 if !layer.muted_sent {
                     self.book.silence_layer(layer.id);
                     out.commands
@@ -266,9 +361,9 @@ impl Composer {
                 .iter()
                 .filter(|e| e.layer == layer.id)
                 .collect();
-            let params = Params::new(&inp.params, self.density_offset);
+            let params = Params::new(&inp.params, self.density_offset).with_form(targets, strength);
             {
-                let sink = NoteSink::new(
+                let mut sink = NoteSink::new(
                     &mut self.book,
                     &mut layer.params,
                     &mut out.commands,
@@ -277,7 +372,18 @@ impl Composer {
                     layer.id,
                     now,
                     self.transport.humanize(),
-                );
+                )
+                .with_reason(reason_for(layer.cfg.role));
+                for p in self.answers.take_due(layer.id, self.transport.beats()) {
+                    Answers::play(
+                        &p,
+                        layer.cfg.role,
+                        params.register(),
+                        &self.conductor.harmony,
+                        &self.transport,
+                        &mut sink,
+                    );
+                }
                 let mut ctx = GenCtx {
                     now,
                     dt,
@@ -288,24 +394,35 @@ impl Composer {
                     signals: &inp.signals,
                     events: &events,
                     mappings: &layer.mappings,
+                    cue: Cue {
+                        rest_until_beat: self.answers.rest_until(layer.id),
+                        ..cue
+                    },
+                    motifs: &mut self.motifs,
                     rng: &mut layer.rng,
                     sink,
                 };
                 layer.generator.tick(&mut ctx);
             }
-            Self::send_common_params(layer, &params, mood.brightness, &mut out.commands);
+            let dynamics = targets.map(|t| blend(1.0, 0.5 + 0.6 * t.dynamics, strength));
+            Self::send_common_params(layer, &params, mood.brightness, dynamics, &mut out.commands);
+            // The snapshot shows effective values: user offset and form blended in.
             layer.last_params = inp.params.clone();
-            if let Some(d) = layer.last_params.get_mut(map_keys::DENSITY) {
-                *d = (*d + self.density_offset).clamp(0.0, 1.0);
-            } else if self.density_offset != 0.0 {
-                layer.last_params.insert(
-                    map_keys::DENSITY.to_string(),
-                    self.density_offset.clamp(0.0, 1.0),
-                );
+            let has_density = inp.params.contains_key(map_keys::DENSITY);
+            if has_density || self.density_offset != 0.0 || targets.is_some() {
+                let default = if has_density { 0.0 } else { 0.5 };
+                layer
+                    .last_params
+                    .insert(map_keys::DENSITY.to_string(), params.density(default));
+            }
+            if targets.is_some() || inp.params.contains_key(map_keys::REGISTER) {
+                layer
+                    .last_params
+                    .insert(map_keys::REGISTER.to_string(), params.register());
             }
         }
 
-        // 5. Deferred triggers and planned releases that are due.
+        // 7. Deferred triggers and planned releases that are due.
         self.book.flush(now, &mut out.commands, &mut out.notes);
         out
     }
@@ -315,11 +432,13 @@ impl Composer {
         layer: &mut Layer,
         params: &Params<'_>,
         brightness: f64,
+        dynamics: Option<f64>,
         out: &mut Vec<SynthCommand>,
     ) {
         let id = layer.id;
-        let gain =
-            params.get(map_keys::VOLUME).unwrap_or(1.0).clamp(0.0, 1.0) as f32 * layer.cfg.gain;
+        let gain = (params.get(map_keys::VOLUME).unwrap_or(1.0) * dynamics.unwrap_or(1.0))
+            .clamp(0.0, 1.0) as f32
+            * layer.cfg.gain;
         layer.params.send(id, LayerParam::Gain(gain), out);
         if let Some(p) = params.get(map_keys::PAN) {
             layer
@@ -417,8 +536,7 @@ impl Composer {
                 }
             }
             UserCommand::SaveScene { .. } | UserCommand::LoadScene { .. } | UserCommand::Quit => {}
-            // Form sections arrive with the v2 form engine; until then a no-op.
-            UserCommand::NextSection => {}
+            UserCommand::NextSection => self.form.request_next(),
         }
     }
 
@@ -433,7 +551,12 @@ impl Composer {
         snap.transport = self.transport.pos();
         snap.mood = self.conductor.mood();
         self.conductor.fill(&mut snap.harmony);
-        snap.conductor_note = self.conductor.note(self.transport.bpm());
+        snap.conductor_note = format!(
+            "{}; {}",
+            self.conductor.note(self.transport.bpm()),
+            self.form.describe()
+        );
+        self.fill_form(&mut snap.form);
         if snap.layers.len() < self.layers.len() {
             snap.layers
                 .resize_with(self.layers.len(), LayerSnapshot::default);
@@ -453,6 +576,25 @@ impl Composer {
             s.active_notes = self.book.active_count(l.id);
             s.params = l.last_params.clone();
         }
+    }
+}
+
+impl Composer {
+    /// Fill the form snapshot: section, bars, arc, motif in play, and a summary.
+    fn fill_form(&self, snap: &mut FormSnapshot) {
+        self.form.fill(snap);
+        snap.motif = self.motifs.current().to_string();
+        let mut note = self.form.describe();
+        if self.form.style() != sonder_core::FormStyle::Static {
+            note.push_str(&format!(" · arc {:.2}", self.form.arc()));
+        }
+        if !snap.motif.is_empty() {
+            note.push_str(&format!(" · motif {}", snap.motif));
+        }
+        if !self.answers.last_call().is_empty() {
+            note.push_str(&format!(" · answering {}", self.answers.last_call()));
+        }
+        snap.note = note;
     }
 }
 
@@ -497,8 +639,13 @@ mod tests {
     }
 
     fn run(scene: &Scene, seed: u64, seconds: f64) -> Vec<SynthCommand> {
+        run_full(scene, seed, seconds).0
+    }
+
+    fn run_full(scene: &Scene, seed: u64, seconds: f64) -> (Vec<SynthCommand>, Vec<NoteSnapshot>) {
         let mut c = Composer::new(scene, seed).unwrap();
         let mut all = Vec::new();
+        let mut notes = Vec::new();
         let n = (seconds / 0.02) as usize;
         let mut inputs: Vec<LayerInput> =
             scene.layers.iter().map(|_| LayerInput::default()).collect();
@@ -540,6 +687,9 @@ mod tests {
             if i == 950 {
                 c.handle(&UserCommand::TogglePause);
             }
+            if i == 1200 {
+                c.handle(&UserCommand::NextSection);
+            }
             let out = c.tick(
                 now,
                 0.02,
@@ -549,20 +699,97 @@ mod tests {
                 },
             );
             all.extend(out.commands);
+            notes.extend(out.notes);
         }
-        all
+        (all, notes)
     }
 
     #[test]
     fn deterministic_for_same_seed_and_inputs() {
-        let s = scene();
-        let a = run(&s, 42, 40.0);
-        let b = run(&s, 42, 40.0);
+        let mut s = scene();
+        s.conductor.form.style = sonder_core::FormStyle::Sections;
+        s.conductor.form.section_bars = 4;
+        s.conductor.form.motif_recall = 0.8;
+        let (a, na) = run_full(&s, 42, 40.0);
+        let (b, nb) = run_full(&s, 42, 40.0);
         assert_eq!(a, b);
+        assert_eq!(na, nb, "notes (reasons, causes) must be identical too");
         assert!(a.iter().any(|c| matches!(c, SynthCommand::NoteOn { .. })));
         assert!(a.iter().any(|c| matches!(c, SynthCommand::Drum { .. })));
         let c = run(&s, 43, 40.0);
         assert_ne!(a, c, "a different seed should give a different performance");
+
+        // Every note says why it happened; event notes say what caused them.
+        assert!(
+            na.iter().all(|n| !n.reason.is_empty()),
+            "a note without a reason"
+        );
+        let trig: Vec<&NoteSnapshot> = na.iter().filter(|n| n.reason == TRIGGER_REASON).collect();
+        assert!(!trig.is_empty());
+        for n in &trig {
+            let cause = n.cause.as_ref().expect("event note without a cause");
+            assert_eq!(cause.event, "car");
+            assert!(cause.label.is_empty(), "the engine fills labels");
+            assert!(cause.attrs.contains_key("lane"));
+            assert!(cause.at <= n.at + 1e-9);
+        }
+        for role in ["pad", "bass", "lead", "arp", "drone"] {
+            assert!(na.iter().any(|n| n.reason == role), "no {role} note");
+        }
+        assert!(na
+            .iter()
+            .filter(|n| n.reason != TRIGGER_REASON)
+            .all(|n| n.cause.is_none() || n.reason == ANSWER_REASON));
+        assert!(
+            na.iter().any(|n| n.reason == ANSWER_REASON),
+            "no answer in 40 s of loud events"
+        );
+        assert!(na
+            .iter()
+            .filter(|n| n.reason == ANSWER_REASON)
+            .all(|n| n.cause.is_some()));
+    }
+
+    #[test]
+    fn next_section_jumps_at_the_bar() {
+        let mut s = scene();
+        s.conductor.form.style = sonder_core::FormStyle::Sections;
+        s.conductor.form.section_bars = 16;
+        let mut c = Composer::new(&s, 1).unwrap();
+        let inputs: Vec<LayerInput> = s.layers.iter().map(|_| LayerInput::default()).collect();
+        let input = ComposerInput {
+            layers: &inputs,
+            events: &[],
+        };
+        let mut snap = EngineSnapshot::default();
+        for i in 0..100 {
+            c.tick(i as f64 * 0.02, 0.02, &input);
+        }
+        c.fill_snapshot(&mut snap);
+        assert_eq!(snap.form.section, "A");
+        assert_eq!(snap.form.bars_in_section, 16);
+        assert!(
+            snap.conductor_note.contains("A 1/16"),
+            "{}",
+            snap.conductor_note
+        );
+        c.handle(&UserCommand::NextSection);
+        // 90 bpm, 4/4: a bar is 2.67 s; the jump lands on the next bar line.
+        let mut t = 2.0;
+        let mut jumped_at = None;
+        while t < 6.0 {
+            c.tick(t, 0.02, &input);
+            c.fill_snapshot(&mut snap);
+            if snap.form.section == "B" {
+                jumped_at = Some(t);
+                break;
+            }
+            t += 0.02;
+        }
+        let t = jumped_at.expect("section should have changed");
+        assert!((2.6..2.8).contains(&t), "jumped at {t}");
+        assert_eq!(snap.form.bar_in_section, 0);
+        assert!(snap.form.note.starts_with("B 1/16"), "{}", snap.form.note);
     }
 
     #[test]

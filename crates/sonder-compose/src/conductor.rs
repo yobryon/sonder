@@ -11,6 +11,7 @@ use sonder_theory::{
     diatonic_chord, mode_by_name, modes_by_brightness, pitch_class_name, progression, Chord, Scale,
 };
 
+use crate::form::FormTargets;
 use crate::ComposeError;
 
 /// What changed in the harmony this tick.
@@ -69,6 +70,9 @@ pub struct Conductor {
     energy_driver: String,
     pub harmony: Harmony,
     chord_degree: u8,
+    /// Beats per chord from the scene.
+    base_chord_beats: f64,
+    /// Beats per chord in effect (the form's chord-change rate applied).
     chord_beats: f64,
     next_change_beat: f64,
     home_mode: &'static str,
@@ -76,6 +80,8 @@ pub struct Conductor {
     mode_cooldown_bars: f64,
     force_change: bool,
     pending: HarmonyChange,
+    /// The form's targets and its strength, blended into tension and chord rate.
+    form: Option<(FormTargets, f64)>,
 }
 
 impl Conductor {
@@ -117,6 +123,7 @@ impl Conductor {
             energy_driver: String::new(),
             harmony,
             chord_degree: 0,
+            base_chord_beats: chord_beats,
             chord_beats,
             next_change_beat: chord_beats,
             home_mode,
@@ -124,11 +131,35 @@ impl Conductor {
             mode_cooldown_bars: cooldown,
             force_change: false,
             pending: HarmonyChange::default(),
+            form: None,
         })
     }
 
+    /// The mood as the music hears it: tension blended toward the form's target.
     pub fn mood(&self) -> Mood {
-        self.mood
+        let mut m = self.mood;
+        if let Some((t, s)) = self.form {
+            m.tension = crate::form::blend(m.tension, t.tension, s);
+        }
+        m
+    }
+
+    /// Tell the conductor what the form wants (None = data only).
+    pub fn set_form(&mut self, form: Option<(FormTargets, f64)>) {
+        self.form = form;
+    }
+
+    /// Beats per chord in effect: the scene's `bars_per_chord` scaled by the
+    /// form's chord-change rate (0.5 = as written, 1 = twice as fast, 0 = half).
+    fn effective_chord_beats(&self) -> f64 {
+        match self.form {
+            Some((t, s)) => {
+                let factor =
+                    2f64.powf((0.5 - t.chord_rate.clamp(0.0, 1.0)) * 2.0 * s.clamp(0.0, 1.0));
+                (self.base_chord_beats * factor).max(0.5)
+            }
+            None => self.base_chord_beats,
+        }
     }
 
     fn extensions_for(tension: f64) -> u8 {
@@ -228,7 +259,8 @@ impl Conductor {
                 change.mode = self.harmony.change.mode || change.mode;
                 change.tonic = self.harmony.change.tonic || change.tonic;
             }
-            // Realign the next boundary to the chord grid.
+            // Realign the next boundary to the chord grid (at the form's rate).
+            self.chord_beats = self.effective_chord_beats();
             let mut next = self.next_change_beat;
             while next <= beats + 1e-9 {
                 next += self.chord_beats;
@@ -239,7 +271,7 @@ impl Conductor {
             self.harmony.chord = diatonic_chord(
                 &self.harmony.scale,
                 self.chord_degree,
-                Self::extensions_for(self.mood.tension),
+                Self::extensions_for(self.mood().tension),
             );
             self.harmony.refresh();
         }
@@ -249,7 +281,7 @@ impl Conductor {
     }
 
     fn advance_chord(&mut self, _beats: f64) {
-        let tension = self.mood.tension;
+        let tension = self.mood().tension;
         let n = self.harmony.scale.len() as u8;
         self.chord_degree = match self.cfg.progression {
             Progression::Static => self.chord_degree,

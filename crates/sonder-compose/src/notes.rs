@@ -6,8 +6,28 @@ use std::collections::{BTreeMap, BinaryHeap};
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 use sonder_core::{
-    midi_to_hz, Drum, LayerId, LayerParam, NoteId, NoteSnapshot, Seconds, SynthCommand,
+    midi_to_hz, Drum, LayerEvent, LayerId, LayerParam, NoteCause, NoteId, NoteSnapshot, Seconds,
+    SynthCommand,
 };
+
+/// Most event attributes copied into a [`NoteCause`].
+pub const CAUSE_ATTRS: usize = 6;
+
+/// The cause record for a note triggered by `ev`. The label is left empty:
+/// the engine fills it from caption templates.
+pub fn cause_of(ev: &LayerEvent) -> NoteCause {
+    NoteCause {
+        event: ev.name.clone(),
+        at: ev.at,
+        label: String::new(),
+        attrs: ev
+            .attrs
+            .iter()
+            .take(CAUSE_ATTRS)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    }
+}
 
 /// Max timing jitter at humanize = 1, in seconds.
 const JITTER_S: f64 = 0.015;
@@ -44,6 +64,8 @@ enum Trigger {
         velocity: f32,
         pan: f32,
         duration: Option<f64>,
+        reason: String,
+        cause: Option<NoteCause>,
     },
     Drum {
         layer: LayerId,
@@ -112,6 +134,8 @@ impl NoteBook {
                 velocity,
                 pan,
                 duration,
+                reason,
+                cause,
             } => {
                 self.active.insert(note, Active { layer });
                 if let Some(c) = self.active_count.get_mut(layer.0 as usize) {
@@ -137,8 +161,8 @@ impl NoteBook {
                     pan,
                     duration,
                     active: true,
-                    cause: None,
-                    reason: String::new(),
+                    cause,
+                    reason,
                 });
             }
             Trigger::Drum {
@@ -304,6 +328,8 @@ pub struct NoteSink<'a> {
     now: Seconds,
     humanize: f64,
     budget: usize,
+    /// Default `NoteSnapshot.reason` for notes played through [`NoteSink::play`].
+    reason: &'static str,
 }
 
 impl<'a> NoteSink<'a> {
@@ -328,7 +354,19 @@ impl<'a> NoteSink<'a> {
             now,
             humanize,
             budget: TRIGGERS_PER_TICK,
+            reason: "",
         }
+    }
+
+    /// Set the default reason notes from this sink carry ("pad", "lead", …).
+    pub fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = reason;
+        self
+    }
+
+    /// The sink's default reason.
+    pub fn reason(&self) -> &'static str {
+        self.reason
     }
 
     /// Humanized (delay, velocity): timing only ever drifts late.
@@ -367,6 +405,23 @@ impl<'a> NoteSink<'a> {
         duration: Option<f64>,
         delay: f64,
     ) -> Option<NoteId> {
+        let reason = self.reason;
+        self.play_as(midi, velocity, pan, duration, delay, reason, None)
+    }
+
+    /// [`NoteSink::play`] with an explicit `reason` and (for event-triggered
+    /// notes) the event that caused it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn play_as(
+        &mut self,
+        midi: f64,
+        velocity: f64,
+        pan: f64,
+        duration: Option<f64>,
+        delay: f64,
+        reason: &str,
+        cause: Option<NoteCause>,
+    ) -> Option<NoteId> {
         if self.budget == 0 || !midi.is_finite() {
             return None;
         }
@@ -387,6 +442,8 @@ impl<'a> NoteSink<'a> {
                 velocity,
                 pan,
                 duration,
+                reason: reason.to_string(),
+                cause,
             },
         );
         Some(note)

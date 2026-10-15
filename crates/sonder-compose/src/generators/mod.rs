@@ -16,8 +16,26 @@ use sonder_core::{map_keys, LayerConfig, LayerEvent, Mood, Role, Seconds};
 
 use crate::conductor::Harmony;
 use crate::eventmap::LayerMappings;
+use crate::form::{blend, FormTargets};
+use crate::motif::MotifMemory;
 use crate::notes::NoteSink;
 use crate::transport::Transport;
+
+pub use hits::TRIGGER_REASON;
+pub use lead::MOTIF_REASON;
+
+/// What the form engine tells every generator this tick.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Cue<'a> {
+    /// Current section name ("intro", "A", …), for motif keying.
+    pub section: &'a str,
+    /// 0..1 how much to thin out (release sections, scaled by form strength).
+    pub thin: f64,
+    /// Melodic generators stay quiet until this beat (an answer is playing).
+    pub rest_until_beat: f64,
+    /// 0..1 probability of restating a remembered motif at phrase start.
+    pub motif_recall: f64,
+}
 
 /// Everything a generator may read or do during one tick.
 pub struct GenCtx<'a> {
@@ -30,15 +48,19 @@ pub struct GenCtx<'a> {
     pub signals: &'a BTreeMap<String, f64>,
     pub events: &'a [&'a LayerEvent],
     pub mappings: &'a LayerMappings,
+    pub cue: Cue<'a>,
+    pub motifs: &'a mut MotifMemory,
     pub rng: &'a mut ChaCha8Rng,
     pub sink: NoteSink<'a>,
 }
 
-/// A layer's resolved `map` values plus the global density offset.
+/// A layer's resolved `map` values plus the global density offset and the
+/// form's targets (blended in by its strength).
 #[derive(Clone, Copy)]
 pub struct Params<'a> {
     map: &'a BTreeMap<String, f64>,
     density_offset: f64,
+    form: Option<(FormTargets, f64)>,
 }
 
 impl<'a> Params<'a> {
@@ -46,7 +68,13 @@ impl<'a> Params<'a> {
         Self {
             map,
             density_offset,
+            form: None,
         }
+    }
+    /// Blend density / register toward the form's targets by `strength`.
+    pub fn with_form(mut self, targets: Option<FormTargets>, strength: f64) -> Self {
+        self.form = targets.map(|t| (t, strength));
+        self
     }
     /// A raw param if the scene mapped it (and it is finite).
     pub fn get(&self, key: &str) -> Option<f64> {
@@ -56,13 +84,22 @@ impl<'a> Params<'a> {
     pub fn or(&self, key: &str, default: f64) -> f64 {
         self.get(key).unwrap_or(default).clamp(0.0, 1.0)
     }
-    /// Density with the user's global offset applied.
+    /// Density with the user's global offset applied and the form blended in.
     pub fn density(&self, default: f64) -> f64 {
-        (self.get(map_keys::DENSITY).unwrap_or(default) + self.density_offset).clamp(0.0, 1.0)
+        let data =
+            (self.get(map_keys::DENSITY).unwrap_or(default) + self.density_offset).clamp(0.0, 1.0);
+        match self.form {
+            Some((t, s)) => blend(data, t.density, s),
+            None => data,
+        }
     }
-    /// Register 0..1 (0.5 = the role's home window).
+    /// Register 0..1 (0.5 = the role's home window), form blended in.
     pub fn register(&self) -> f64 {
-        self.or(map_keys::REGISTER, 0.5)
+        let data = self.or(map_keys::REGISTER, 0.5);
+        match self.form {
+            Some((t, s)) => blend(data, t.register, s),
+            None => data,
+        }
     }
 }
 

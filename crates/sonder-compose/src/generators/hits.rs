@@ -6,7 +6,11 @@ use sonder_theory::Quantizer;
 
 use super::{register_window, GenCtx, Generator};
 use crate::eventmap::{default_length_beats, Snap};
+use crate::notes::cause_of;
 use crate::transport::Transport;
+
+/// `NoteSnapshot.reason` for event-triggered notes.
+pub const TRIGGER_REASON: &str = "trigger";
 
 pub struct Hits {
     role: Role,
@@ -25,9 +29,12 @@ impl Generator for Hits {
         let beats = ctx.transport.beats();
         let spb = ctx.transport.seconds_per_beat();
         let chance_scale = ctx.params.density(1.0);
+        // Release sections thin the plucks out.
+        let thin = 1.0 - 0.5 * ctx.cue.thin.clamp(0.0, 1.0);
         for ev in ctx.events {
             let t = ctx.mappings.trigger(ev, ctx.signals, ctx.now, beats);
             let p = t.chance
+                * thin
                 * if chance_scale < 1.0 {
                     0.5 + 0.5 * chance_scale
                 } else {
@@ -53,7 +60,15 @@ impl Generator for Hits {
                 .length_beats
                 .unwrap_or_else(|| default_length_beats(self.role))
                 * spb;
-            ctx.sink.play(midi, t.velocity, t.pan, Some(length), delay);
+            ctx.sink.play_as(
+                midi,
+                t.velocity,
+                t.pan,
+                Some(length),
+                delay,
+                TRIGGER_REASON,
+                Some(cause_of(ev)),
+            );
         }
     }
 }
