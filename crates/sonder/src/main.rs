@@ -8,6 +8,9 @@ use clap::{Args, Parser, Subcommand};
 use sonder_core::{Scene, SourceSpec};
 use sonder_engine::{AudioBackendChoice, EngineOptions};
 
+mod radio;
+mod record;
+
 #[derive(Parser)]
 #[command(name = "sonder", version, about = "A realtime generative music engine that listens to the world.", long_about = None)]
 struct Cli {
@@ -66,6 +69,10 @@ enum Cmd {
     Show { scene: String },
     /// List MIDI output ports (for --midi).
     MidiPorts,
+    /// Stream a scene 24/7 through ffmpeg to Icecast, an HLS directory or a file (docs/RADIO.md).
+    Radio(radio::RadioArgs),
+    /// Render today's dated track (seed = date) into an album directory with an index page.
+    Record(record::RecordArgs),
     /// Compose a scene from a prompt with Claude (needs ANTHROPIC_API_KEY).
     Compose(ComposeArgs),
     /// Print the composer catalog (source kinds, recipes, presets, system prompt).
@@ -105,6 +112,9 @@ struct PlayArgs {
     /// Also send MIDI to this output port (substring match), or `virtual` to create one.
     #[arg(long, value_name = "PORT")]
     midi: Option<String>,
+    /// Reload the scene in place whenever its file changes on disk (polled every second).
+    #[arg(long)]
+    watch: bool,
     #[command(flatten)]
     source: SourceOverride,
 }
@@ -269,6 +279,8 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Cmd::Radio(args) => rt.block_on(radio::run(args)),
+        Cmd::Record(args) => record::run(args),
         Cmd::Show { scene } => {
             let (_, src) = sonder_engine::scenes::BUILTIN_SCENE_SOURCES
                 .iter()
@@ -308,6 +320,10 @@ async fn play(args: PlayArgs, tui: bool) -> anyhow::Result<()> {
     let handle = sonder_engine::start(scene, opts).await?;
     if let Some(p) = &handle.midi_port {
         tracing::info!("midi out → {p}");
+    }
+    if args.watch {
+        let path = scene_file_path(&args.scene).context("--watch needs a scene file, not a built-in name")?;
+        tokio::spawn(watch_scene_file(path, handle.commands.clone()));
     }
     let web_url = if args.web != 0 {
         let addr: SocketAddr = format!("{}:{}", args.bind, args.web).parse().context("bad --bind/--web")?;
@@ -371,6 +387,39 @@ async fn play(args: PlayArgs, tui: bool) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The on-disk file a scene argument refers to, if it is one (`load_scene` semantics).
+fn scene_file_path(name_or_path: &str) -> Option<PathBuf> {
+    if sonder_engine::scenes::BUILTIN_SCENE_SOURCES.iter().any(|(n, _)| *n == name_or_path) {
+        return None;
+    }
+    let p = PathBuf::from(name_or_path);
+    [p.clone(), p.with_extension("toml")].into_iter().find(|p| p.is_file())
+}
+
+/// Poll a scene file's mtime once a second and hot-reload it when it changes.
+async fn watch_scene_file(path: PathBuf, commands: tokio::sync::mpsc::Sender<sonder_core::UserCommand>) {
+    let mtime = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let mut last = mtime(&path);
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let now = mtime(&path);
+        if now.is_some() && now != last {
+            last = now;
+            // Editors often write in two steps; give the file a moment to settle.
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            match std::fs::read_to_string(&path) {
+                Ok(toml) => {
+                    tracing::info!(path = %path.display(), "scene file changed; reloading");
+                    if commands.send(sonder_core::UserCommand::LoadScene { toml }).await.is_err() {
+                        return;
+                    }
+                }
+                Err(e) => tracing::warn!(path = %path.display(), "cannot read changed scene: {e}"),
+            }
+        }
+    }
 }
 
 /// Adapts the engine's broadcast of f32 chunks to the web server's pull interface.

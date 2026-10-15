@@ -3048,6 +3048,7 @@ dependencies = [
  "anyhow",
  "clap",
  "reqwest",
+ "serde",
  "serde_json",
  "sonder-core",
  "sonder-dsp",

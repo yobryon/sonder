@@ -171,34 +171,6 @@ fn draw_top(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
                 .add_modifier(Modifier::BOLD),
         ),
     ]);
-    // Musical form: section name, arc position, motif (empty until the form engine runs).
-    let f = &snap.form;
-    if !f.section.is_empty() || !f.motif.is_empty() {
-        spans.push(sep.clone());
-        if !f.section.is_empty() {
-            spans.push(Span::styled(
-                f.section.to_uppercase(),
-                Style::default().fg(Color::Indexed(81)).add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" "));
-        }
-        spans.push(Span::styled(
-            mini_gauge(f.arc, 6),
-            Style::default().fg(Color::Indexed(81)),
-        ));
-        if f.bars_in_section > 0 {
-            spans.push(Span::styled(
-                format!(" {}/{}", f.bar_in_section + 1, f.bars_in_section),
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
-        if !f.motif.is_empty() {
-            spans.push(Span::styled(
-                format!(" motif {}", f.motif),
-                Style::default().fg(Color::Gray),
-            ));
-        }
-    }
     if wide {
         spans.extend([
             sep.clone(),
@@ -231,32 +203,65 @@ fn draw_top(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
         ));
     }
     if snap.underruns > 0 {
-        spans.push(sep);
+        spans.push(sep.clone());
         spans.push(Span::styled(
             format!("{} underruns", snap.underruns),
             Style::default().fg(Color::Red),
         ));
     }
-    // Second line: the conductor's note, the form's note, and the latest caption.
-    let mut note = vec![Span::styled(
-        format!(" {}", snap.conductor_note),
-        Style::default().fg(Color::DarkGray),
-    )];
-    if !snap.form.note.is_empty() {
-        note.push(sep.clone());
+    // Second line: musical form (section, arc, motif), the conductor's note, the form's
+    // note, and the latest caption.
+    let mut note = Vec::new();
+    let f = &snap.form;
+    if !f.section.is_empty() || !f.motif.is_empty() {
+        note.push(Span::raw(" "));
+        if !f.section.is_empty() {
+            note.push(Span::styled(
+                f.section.to_uppercase(),
+                Style::default().fg(Color::Indexed(81)).add_modifier(Modifier::BOLD),
+            ));
+            note.push(Span::raw(" "));
+        }
         note.push(Span::styled(
-            snap.form.note.clone(),
+            mini_gauge(f.arc, 6),
             Style::default().fg(Color::Indexed(81)),
         ));
+        if f.bars_in_section > 0 {
+            note.push(Span::styled(
+                format!(" {}/{}", f.bar_in_section + 1, f.bars_in_section),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        if !f.motif.is_empty() {
+            note.push(Span::styled(
+                format!(" motif {}", f.motif),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+        note.push(sep.clone());
+    } else {
+        note.push(Span::raw(" "));
     }
-    if let Some(cap) = snap.captions.iter().rev().find(|c| !c.text.is_empty()) {
-        note.push(sep);
+    let caption = snap.captions.iter().rev().find(|c| !c.text.is_empty());
+    if let Some(cap) = caption {
         let style = if cap.importance >= 0.8 {
             Style::default().fg(Color::Indexed(220)).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Indexed(220))
         };
         note.push(Span::styled(format!("“{}”", cap.text), style));
+        note.push(sep.clone());
+    }
+    note.push(Span::styled(
+        snap.conductor_note.clone(),
+        Style::default().fg(Color::DarkGray),
+    ));
+    if caption.is_none() && !snap.form.note.is_empty() {
+        note.push(sep);
+        note.push(Span::styled(
+            snap.form.note.clone(),
+            Style::default().fg(Color::Indexed(81)),
+        ));
     }
     let text = Text::from(vec![Line::from(spans), Line::from(note)]);
     let widget = Paragraph::new(text).block(
@@ -982,8 +987,6 @@ mod tests {
             serde_json::json!({"lanes": 4, "cars": [{"x": 0.1, "y": 0.3, "lane": 0, "bright": 0.9}, {"x": 0.6, "y": 0.8, "lane": 2, "bright": 0.2}]}),
         );
         EngineSnapshot {
-            captions: Vec::new(),
-            form: Default::default(),
             scene_name: "Night Freeway".into(),
             viz_kind: "freeway".into(),
             time: 30.0,

@@ -23,6 +23,8 @@ pub struct RenderStats {
     pub notes: usize,
     pub events: usize,
     pub seed: u64,
+    /// Every caption the engine produced, in order.
+    pub captions: Vec<Caption>,
 }
 
 /// Render `seconds` of a scene to a 16-bit stereo WAV at 48 kHz.
@@ -73,6 +75,7 @@ async fn render_inner(scene: &Scene, seconds: f64, seed: u64) -> anyhow::Result<
     let mut events = 0usize;
     let mut last_event_at = -1.0;
     let mut last_note_at = -1.0;
+    let mut captions: Vec<Caption> = Vec::new();
 
     for i in 0..ticks {
         let t = i as f64 * TICK_SECONDS;
@@ -113,6 +116,9 @@ async fn render_inner(scene: &Scene, seconds: f64, seed: u64) -> anyhow::Result<
         if let Some(e) = snap.events.last() {
             last_event_at = e.at;
         }
+        // Captions are a bounded ring; collect the ones newer than the last we kept.
+        let fresh = snap.captions.iter().rev().take_while(|c| captions.last().is_none_or(|l| l.at != c.at || l.text != c.text)).count();
+        captions.extend(snap.captions[snap.captions.len() - fresh..].iter().cloned());
     }
     let _ = shutdown_tx.send(true);
     for t in tasks {
@@ -120,7 +126,7 @@ async fn render_inner(scene: &Scene, seconds: f64, seed: u64) -> anyhow::Result<
     }
     let frames = out.len() / 2;
     let rms = if out.is_empty() { 0.0 } else { (sumsq / out.len() as f64).sqrt() as f32 };
-    Ok((out, RenderStats { seconds, sample_rate: SR, frames, peak, rms, notes, events, seed }))
+    Ok((out, RenderStats { seconds, sample_rate: SR, frames, peak, rms, notes, events, seed, captions }))
 }
 
 #[cfg(test)]
@@ -137,6 +143,9 @@ mod tests {
         assert!(sa.peak > 0.01, "render should not be silent: {sa:?}");
         assert!(sa.peak <= 1.0);
         assert!(a.iter().all(|s| s.is_finite()));
+        assert!(!sa.captions.is_empty(), "the first car should have been captioned");
+        assert!(sa.captions.windows(2).all(|w| w[0].at <= w[1].at));
+        assert!(sa.captions.iter().any(|c| c.text.starts_with("car in lane")), "{:?}", sa.captions);
     }
 
     #[test]

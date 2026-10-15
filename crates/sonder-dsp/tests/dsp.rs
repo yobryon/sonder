@@ -475,11 +475,15 @@ fn modal_wave_decays_for_both_stiffness_extremes() {
 
 #[test]
 fn glue_compressor_reduces_crest_factor() {
+    // 300 ms swells (60 ms raised-cosine edges) every 2 s over a quieter bed.
     let bursty = || -> Vec<f32> {
-        let mut buf = vec![0.0f32; 48_000 * 4];
+        let mut buf = vec![0.0f32; 48_000 * 2 * 8];
         for (i, s) in buf.iter_mut().enumerate() {
             let t = (i / 2) as f32 / SR;
-            let env = if (t * 2.0).fract() < 0.15 { 0.6 } else { 0.06 };
+            let phase = (t * 0.5).fract() * 2.0;
+            let edge = |x: f32| 0.5 - 0.5 * (x.clamp(0.0, 1.0) * std::f32::consts::PI).cos();
+            let burst = if phase < 0.3 { edge(phase / 0.06).min(edge((0.3 - phase) / 0.06)) } else { 0.0 };
+            let env = 0.15 + 0.55 * burst;
             *s = (t * 220.0 * std::f32::consts::TAU).sin() * env;
         }
         buf
@@ -495,9 +499,10 @@ fn glue_compressor_reduces_crest_factor() {
     };
     let (dry, _) = run(0.0);
     let (wet, gr) = run(1.0);
-    assert!((dry - crest(&bursty()[48_000 * 2..])).abs() < 1e-3, "glue 0 must be transparent");
+    let raw = bursty();
+    assert!((dry - crest(&raw[raw.len() / 2..])).abs() < 1e-3, "glue 0 must be transparent");
     assert!(wet < dry * 0.9, "glue should lower the crest factor: dry {dry} wet {wet}");
-    assert!(gr >= 0.0 && gr < 20.0);
+    assert!((0.0..20.0).contains(&gr));
 }
 
 #[test]
@@ -511,6 +516,7 @@ fn loudness_rider_converges_on_target() {
     m.process(&mut buf);
     assert_eq!(m.rider_db(), 0.0);
     // A steady tone about 6 dB too quiet: the rider must bring it to within ±1 dB.
+    let mut buf = vec![0.0f32; 48_000 * 2];
     let mut phase = 0.0f32;
     let mut lufs_path = Vec::new();
     for _ in 0..40 {
@@ -526,9 +532,14 @@ fn loudness_rider_converges_on_target() {
     let last = *lufs_path.last().unwrap();
     assert!((last - target).abs() < 1.0, "rider ended at {last} LUFS (target {target}); path {lufs_path:?}");
     assert!(m.rider_db() > 3.0 && m.rider_db() <= 12.0, "rider gain {}", m.rider_db());
-    // Speed limit: no more than ~0.5 dB per rendered second, allowing one rider step of slack.
-    for w in lufs_path.windows(2).skip(2) {
-        assert!((w[1] - w[0]).abs() <= 0.55, "rider moved too fast: {} → {}", w[0], w[1]);
+    // Speed limit: once the 3 s window is full of tone, the output loudness may move no
+    // faster than the rider's 0.5 dB/s (plus a little meter slack).
+    for w in lufs_path.windows(2).skip(4) {
+        assert!((w[1] - w[0]).abs() <= 0.6, "rider moved too fast: {} → {}", w[0], w[1]);
+    }
+    // Starting ~11 dB away at 0.5 dB/s, every window from 26 s on sits within the ±1 dB band (no oscillation).
+    for (i, l) in lufs_path.iter().enumerate().skip(26) {
+        assert!((l - target).abs() < 1.0, "window {i}: {l} LUFS; path {lufs_path:?}");
     }
     // The master output through the synth exposes the same meter.
     let mut synth = Synth::new(SR, 1);

@@ -682,6 +682,53 @@ mod tests {
     }
 
     #[test]
+    fn events_get_labels_and_salient_ones_become_captions() {
+        let (mut control, mut host, rx) = control_with_host();
+        let traffic = SourceId::new("traffic");
+        // First `car` on the layer: labelled from the built-in template and captioned.
+        control.ingest(Sample::event(&traffic, 0.5, "car", 0.3).with_attr("lane", 2.0).with_attr("speed", 61.25));
+        // A second, quiet one a moment later: labelled, not captioned.
+        control.ingest(Sample::event(&traffic, 0.6, "car", 0.3).with_attr("lane", 3.0));
+        // A loud one: captioned on intensity alone.
+        control.ingest(Sample::event(&traffic, 0.7, "car", 0.95).with_attr("lane", 1.0));
+        control.ingest(Sample::status(&traffic, 0.8, SourceState::Failed, "gone"));
+        tick_and_publish(&mut control, &mut host, 1.0);
+        let snap = rx.borrow().clone();
+        let labels: Vec<&str> = snap.events.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, vec!["car in lane 2", "car in lane 3", "car in lane 1"]);
+        let texts: Vec<&str> = snap.captions.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, vec!["car in lane 2", "car in lane 1", "traffic failed: gone"]);
+        assert!(snap.captions[1].importance >= 0.9);
+        assert_eq!(snap.captions[0].layer, Some(snap.events[0].layer));
+        // Note causes are labelled from the event ring (or the template) when the composer
+        // leaves the label empty.
+        let cause = NoteCause { event: "car".into(), at: 0.6, label: String::new(), attrs: BTreeMap::new() };
+        assert_eq!(control.cause_label(snap.events[0].layer, &cause), "car in lane 3");
+        let fresh = NoteCause { event: "car".into(), at: 42.0, label: String::new(), attrs: [("lane".to_string(), Value::Num(4.0))].into() };
+        assert_eq!(control.cause_label(snap.events[0].layer, &fresh), "car in lane 4");
+    }
+
+    #[test]
+    fn live_audio_is_routed_to_every_reader_as_chunks() {
+        let (mut control, mut host, _rx) = control_with_host();
+        let traffic = SourceId::new("traffic");
+        let readers = control.readers[&traffic].len();
+        assert!(readers >= 2, "night-freeway shares `traffic` across layers");
+        // Drain setup commands first so the ring is empty.
+        let mut block = vec![0.0f32; 960 * 2];
+        host.render(&mut block);
+        let before = control.synth.capacity_left();
+        control.ingest(Sample { source: traffic.clone(), at: 0.0, datum: Datum::Audio { rate: 48_000, samples: vec![0.1; 2400] } });
+        assert_eq!(before - control.synth.capacity_left(), readers, "one AudioChunk command per reading layer");
+        // Unknown sources route nowhere.
+        let before = control.synth.capacity_left();
+        control.ingest(Sample { source: SourceId::new("nobody"), at: 0.0, datum: Datum::Audio { rate: 48_000, samples: vec![0.0; 10] } });
+        assert_eq!(before, control.synth.capacity_left());
+        host.render(&mut block);
+        control.tick(0.02);
+    }
+
+    #[test]
     fn source_rate_decays_when_samples_stop() {
         let (mut control, mut host, rx) = control_with_host();
         let traffic = SourceId::new("traffic");

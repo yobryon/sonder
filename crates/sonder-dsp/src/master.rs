@@ -165,6 +165,8 @@ pub struct MasterChain {
     // Loudness rider.
     target_lufs: Option<f32>,
     rider_db: f32,
+    /// Linear gain for `rider_db` (refreshed whenever the rider steps).
+    rider_lin: f32,
     rider_step_db: f32,
     meter: LoudnessMeter,
 }
@@ -184,6 +186,7 @@ impl MasterChain {
             glue_makeup: 1.0,
             target_lufs: None,
             rider_db: 0.0,
+            rider_lin: 1.0,
             rider_step_db: RIDER_MAX_DB_PER_SECOND / LUFS_BINS_PER_SECOND as f32,
             meter: LoudnessMeter::new(sample_rate),
         };
@@ -201,6 +204,7 @@ impl MasterChain {
         let target = s.target_lufs.filter(|t| t.is_finite()).map(|t| t.clamp(-40.0, -6.0));
         if target.is_none() {
             self.rider_db = 0.0;
+            self.rider_lin = 1.0;
         }
         self.target_lufs = target;
     }
@@ -248,11 +252,10 @@ impl MasterChain {
     /// Process interleaved stereo in place. Never lets |x| exceed the ceiling.
     pub fn process(&mut self, buf: &mut [f32]) {
         let n = buf.len() / 2;
-        let rider = db_to_lin(self.rider_db);
         let glue_on = self.glue > 0.0;
         for i in 0..n {
-            let mut l = buf[i * 2] * rider;
-            let mut r = buf[i * 2 + 1] * rider;
+            let mut l = buf[i * 2] * self.rider_lin;
+            let mut r = buf[i * 2 + 1] * self.rider_lin;
             if glue_on {
                 // Stereo-linked peak detector with 10 ms attack / 300 ms release.
                 let peak = l.abs().max(r.abs());
@@ -308,5 +311,6 @@ impl MasterChain {
         }
         let step = err.clamp(-self.rider_step_db, self.rider_step_db);
         self.rider_db = (self.rider_db + step).clamp(-RIDER_RANGE_DB, RIDER_RANGE_DB);
+        self.rider_lin = db_to_lin(self.rider_db);
     }
 }
