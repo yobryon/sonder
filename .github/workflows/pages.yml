@@ -46,6 +46,10 @@ jobs:
 
       # Ubuntu's binaryen is too old for wasm-bindgen's reference-types output (it broke
       # Table.grow at startup); ship the unoptimised module (~1.7 MB) instead.
+      # The catalog step runs the native binary (cpal needs ALSA headers to compile).
+      - name: Native build deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+
       - name: Build site
         run: scripts/build-site.sh
         env:
