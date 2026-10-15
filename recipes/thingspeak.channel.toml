@@ -1,0 +1,20 @@
+[recipe]
+kind = "thingspeak.channel"
+summary = "A public ThingSpeak IoT channel (latest feed entry, polled)"
+network = true
+
+[params.channel]
+summary = "Public channel id (e.g. 1417 = CheerLights)"
+default = 1417
+
+[params.interval]
+summary = "Seconds between polls"
+default = 20
+
+[spec]
+kind = "http-json"
+url = "https://api.thingspeak.com/channels/{channel}/feeds.json?results=1"
+interval = "{interval}"
+data_path = ".feeds[0]"
+events_on = "change"
+event_name = "update"

@@ -1,0 +1,28 @@
+# Note: binance.com refuses connections from US networks; use host = "stream.binance.us:9443"
+# with symbols like "btcusd" there.
+[recipe]
+kind = "binance.trades"
+summary = "Binance spot trades (combined stream, no key; not reachable from the US — see host)"
+network = true
+
+[params.symbols]
+summary = "Lower-case symbols like btcusdt, ethusdt"
+default = ["btcusdt"]
+
+[params.host]
+summary = "stream.binance.com:9443 or stream.binance.us:9443"
+default = "stream.binance.com:9443"
+
+[spec]
+kind = "websocket"
+url = "wss://{host}/stream?streams={symbols:%s@trade|/}"
+data_path = ".data"
+events_on = "every"
+fields = "none"
+
+[spec.event]
+name = "trade"
+intensity = "clamp(log10(1 + attr('p') * attr('q')) / 5, 0, 1)"
+attrs = { product = "s", price = "p", size = "q" }
+derive = { usd = "attr('p') * attr('q')", buy = "if(attr('m'), 0, 1)" }
+readings = { price = "attr('p')" }

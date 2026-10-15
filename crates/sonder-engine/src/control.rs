@@ -58,6 +58,7 @@ pub struct ControlLoop {
     quit_requested: bool,
     save_requests: Vec<String>,
     sinks: Vec<Box<dyn crate::sink::CommandSink>>,
+    mappings: HashMap<SourceId, crate::mapping::SourceMapping>,
 }
 
 impl ControlLoop {
@@ -77,6 +78,7 @@ impl ControlLoop {
         let mut readers: HashMap<SourceId, Vec<usize>> = HashMap::new();
         let mut sources = BTreeMap::new();
         let mut instrument_names = Vec::with_capacity(scene.layers.len());
+        let mut mappings: HashMap<SourceId, crate::mapping::SourceMapping> = HashMap::new();
 
         for (i, layer) in scene.layers.iter().enumerate() {
             let pipeline = LayerPipeline::compile(&layer.signals, &layer.map, seed ^ (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
@@ -87,6 +89,14 @@ impl ControlLoop {
             if let (Some(sid), Some(owner)) = (&sid, owner) {
                 readers.entry(sid.clone()).or_default().push(i);
                 if let LayerSource::Spec(spec) = &owner.source {
+                    if !mappings.contains_key(sid) {
+                        let expanded = crate::recipes::expand(spec).map_err(|e| anyhow::anyhow!("source `{sid}`: {e}"))?;
+                        if let Some(m) = crate::mapping::SourceMapping::from_spec(&expanded)
+                            .map_err(|e| anyhow::anyhow!("source `{sid}`: {e}"))?
+                        {
+                            mappings.insert(sid.clone(), m);
+                        }
+                    }
                     sources.entry(sid.clone()).or_insert_with(|| SourceStatus {
                         kind: spec.kind.clone(),
                         state: SourceState::Connecting,
@@ -134,17 +144,20 @@ impl ControlLoop {
             quit_requested: false,
             save_requests: Vec::new(),
             sinks: Vec::new(),
+            mappings,
         })
     }
 
-    /// The names of the sources this scene needs started, with their specs (after the
-    /// engine applied overrides).
+    /// The names of the sources this scene needs started, with their specs — recipes
+    /// expanded to their transport specs, so sources/adapters never see recipe kinds.
     pub fn source_specs(scene: &Scene) -> Vec<(SourceId, SourceSpec)> {
         scene
             .layers
             .iter()
             .filter_map(|l| match &l.source {
-                LayerSource::Spec(spec) => Some((SourceId::new(&l.name), spec.clone())),
+                LayerSource::Spec(spec) => {
+                    Some((SourceId::new(&l.name), crate::recipes::expand(spec).unwrap_or_else(|_| spec.clone())))
+                }
                 _ => None,
             })
             .collect()
@@ -174,8 +187,22 @@ impl ControlLoop {
         std::mem::take(&mut self.save_requests)
     }
 
-    /// Feed one sample from a source.
+    /// Feed one sample from a source. Sources with a mapping (recipes, `event = {..}`)
+    /// have their events reshaped first.
     pub fn ingest(&mut self, sample: Sample) {
+        if let Some(m) = self.mappings.get(&sample.source) {
+            if matches!(sample.datum, Datum::Event { .. }) {
+                let beat = self.composer.transport().beats;
+                for s in m.apply(sample, beat) {
+                    self.ingest_raw(s);
+                }
+                return;
+            }
+        }
+        self.ingest_raw(sample);
+    }
+
+    fn ingest_raw(&mut self, sample: Sample) {
         let now = sample.at;
         if let Some(st) = self.sources.get_mut(&sample.source) {
             st.last_sample_at = Some(now);

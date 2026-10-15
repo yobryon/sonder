@@ -294,3 +294,25 @@ Without it only the pure parts compile — the simulations and astro math, the b
 sources/` replace the tokio sources. See `docs/WASM.md`. Build with `scripts/build-site.sh`
 (needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` matching the crate version,
 currently 0.2.129; `.cargo/config.toml` sets `getrandom_backend="wasm_js"` for that target).
+
+## Source mapping and recipes (shared engine)
+
+Transports are per runtime (tokio adapters natively, JS adapters in the browser); *meaning*
+lives in the shared engine so both behave identically:
+
+- **Mapping** (`sonder-engine/src/mapping.rs`): a source spec may carry `event = { name,
+  when, intensity, attrs, derive, readings, keep_raw }` (or a list of such tables). The
+  control loop applies it as samples are ingested: raw generic events (whose attrs are the
+  flattened scalars of the JSON object, dotted paths, ≤48) become named, weighted events
+  with chosen/derived attrs, plus optional readings. Expressions are `on_event`
+  expressions (`attr`, `attr_text == "..."`, `attr_len`, `has`, `intensity`, `time`, `beat`).
+- **Recipes** (`recipes/*.toml`, embedded in `sonder-engine/src/recipes.rs`): a named kind
+  = transport spec template + mapping + typed parameters with `{name}` / `{name:fmt|sep}`
+  placeholders. `ControlLoop::source_specs` expands recipes before specs reach any adapter,
+  natively and in wasm; `validate` accepts recipe kinds; `sonder sources` lists them.
+- Generic transports gained `each = ".path"` (convert each array element as its own
+  object) and nested attr flattening, in both the Rust and JS converters.
+
+Adding a keyless JSON feed is therefore a recipe file plus a scene — no code in either
+runtime. Protocol feeds (MQTT, Blitzortung, SeedLink, GTFS-RT, audio, JPEG cameras) are
+coded adapters, mirrored in JS only where a browser can reach them.

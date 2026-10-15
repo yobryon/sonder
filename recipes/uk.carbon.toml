@@ -1,0 +1,17 @@
+[recipe]
+kind = "uk.carbon"
+summary = "Great Britain grid carbon intensity (gCO2/kWh, half-hourly, no key)"
+network = true
+
+[params.interval]
+summary = "Seconds between polls"
+default = 600
+
+[spec]
+kind = "http-json"
+url = "https://api.carbonintensity.org.uk/intensity"
+interval = "{interval}"
+data_path = ".data[0].intensity"
+fields = [".actual", ".forecast"]
+events_on = "change"
+event_name = "update"

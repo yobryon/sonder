@@ -166,7 +166,22 @@ fn main() -> anyhow::Result<()> {
                     for info in reg.catalog() {
                         println!("{:<26} {:<4} {}", info.kind, if info.network { "yes" } else { "no" }, info.summary);
                     }
+                    println!("\nrecipes (generic transport + engine-side mapping; see recipes/README.md):");
+                    for r in sonder_engine::recipes::all() {
+                        println!("{:<26} {:<4} {}", r.recipe.kind, if r.recipe.network { "yes" } else { "no" }, r.recipe.summary);
+                    }
                     println!("\n`sonder sources <kind>` for parameters, channels and events.");
+                }
+                Some(k) if sonder_engine::recipes::is_recipe(&k) => {
+                    let r = sonder_engine::recipes::get(&k).context("recipe vanished")?;
+                    println!("{} (recipe)\n  {}\n", r.recipe.kind, r.recipe.summary);
+                    println!("parameters:");
+                    for (name, p) in &r.params {
+                        let d = p.default.as_ref().map(|d| format!(" (default {d})")).unwrap_or_else(|| " (required)".into());
+                        println!("  {:<16} {}{}", name, p.summary, d);
+                    }
+                    let expanded = sonder_engine::recipes::expand(&SourceSpec::new(&k)).map_err(anyhow::Error::msg)?;
+                    println!("expands to:        {} {}", expanded.kind, serde_json::to_string(&expanded.params).unwrap_or_default());
                 }
                 Some(k) => {
                     let info = reg.info(&k).with_context(|| format!("unknown source kind `{k}`"))?;

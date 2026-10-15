@@ -744,6 +744,8 @@ pub(crate) enum Node {
     },
     /// `hash(attr_text("k"))`.
     HashAttr(String),
+    /// `attr_len("k")`: character length of a text attribute (0 if missing / non-text).
+    AttrLen(String),
     /// `hash(<numeric expr>)`.
     HashNum(Box<Node>),
     Unary(UnOp, Box<Node>),
@@ -883,6 +885,11 @@ impl Node {
                     .ok()
                     .map(finite)
                     .unwrap_or_else(|| hash_text(t)),
+            },
+            Node::AttrLen(key) => match ctx.attr(key) {
+                Some(Value::Text(t)) => t.chars().count() as f64,
+                Some(Value::Num(n)) => n.to_string().len() as f64,
+                _ => 0.0,
             },
             Node::Has(key) => {
                 if ctx.attr(key).is_some() {

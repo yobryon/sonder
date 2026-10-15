@@ -1,0 +1,24 @@
+[recipe]
+kind = "kraken.trades"
+summary = "Kraken spot trades (WebSocket v2, no key, reachable worldwide)"
+network = true
+
+[params.symbols]
+summary = "Pairs like BTC/USD, ETH/USD"
+default = ["BTC/USD"]
+
+[spec]
+kind = "websocket"
+url = "wss://ws.kraken.com/v2"
+subscribe = { method = "subscribe", params = { channel = "trade", symbol = "{symbols}" } }
+filter = ".channel==trade"
+each = ".data"
+events_on = "every"
+fields = "none"
+
+[spec.event]
+name = "trade"
+intensity = "clamp(log10(1 + attr('price') * attr('qty')) / 5, 0, 1)"
+attrs = { product = "symbol", price = "price", size = "qty", side = "side" }
+derive = { usd = "attr('price') * attr('qty')", buy = "if(attr_text('side') == 'buy', 1, 0)" }
+readings = { price = "attr('price')" }

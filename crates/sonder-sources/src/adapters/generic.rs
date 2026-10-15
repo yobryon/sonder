@@ -14,7 +14,11 @@ use crate::SourceError;
 /// Maximum numeric channels emitted per object.
 pub const MAX_FIELDS: usize = 64;
 /// Maximum event attributes per object.
-pub const MAX_ATTRS: usize = 16;
+pub const MAX_ATTRS: usize = 48;
+/// How deep [`attrs_of`] descends into nested objects.
+pub const ATTR_DEPTH: usize = 4;
+/// How many elements of a nested array [`attrs_of`] flattens.
+pub const ATTR_ARRAY_LIMIT: usize = 8;
 
 /// When a generic adapter emits an Event for an incoming object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +59,9 @@ pub struct GenericConfig {
     pub data_path: Option<String>,
     /// Optional `(path, value)` filter: only objects whose `path` equals `value` pass.
     pub filter: Option<(String, Json)>,
+    /// Optional path to an array: each element is converted as its own object
+    /// (its own reading + event). Applied after `data_path` and `filter`.
+    pub each: Option<String>,
 }
 
 impl GenericConfig {
@@ -63,6 +70,9 @@ impl GenericConfig {
         let fields = match param_str_list(spec, "fields") {
             None => Fields::Auto,
             Some(list) if list.len() == 1 && list[0].eq_ignore_ascii_case("auto") => Fields::Auto,
+            // `fields = "none"`: no readings at all (events only, e.g. recipes that derive
+            // their own readings in the engine mapping).
+            Some(list) if list.len() == 1 && list[0].eq_ignore_ascii_case("none") => Fields::Paths(Vec::new()),
             Some(list) if list.is_empty() => Fields::Auto,
             Some(list) => {
                 for p in &list {
@@ -80,6 +90,15 @@ impl GenericConfig {
         };
         let event_name = param_str(spec, "event_name", default_event);
         let data_path = spec.get_str("data_path").map(str::to_string).filter(|s| !s.trim().is_empty());
+        let each = match spec.get_str("each") {
+            None => None,
+            Some(p) => {
+                if jsonpath::parse(p).is_none() {
+                    return Err(invalid(spec, "each", &format!("bad path `{p}`")));
+                }
+                Some(p.to_string())
+            }
+        };
         if let Some(p) = &data_path {
             if jsonpath::parse(p).is_none() {
                 return Err(invalid(spec, "data_path", "bad path"));
@@ -101,7 +120,7 @@ impl GenericConfig {
             }
             Some(_) => return Err(invalid(spec, "filter", "expected `path==value` or {path, value}")),
         };
-        Ok(Self { fields, events_on, event_name, data_path, filter })
+        Ok(Self { fields, events_on, event_name, data_path, filter, each })
     }
 }
 
@@ -134,6 +153,21 @@ impl Converter {
                 _ => return out,
             }
         }
+        if let Some(p) = &self.cfg.each {
+            if let Some(Json::Array(items)) = jsonpath::extract(obj, p) {
+                for item in items {
+                    out.extend(self.convert_one(item));
+                }
+                return out;
+            }
+        }
+        out.extend(self.convert_one(obj));
+        out
+    }
+
+    /// Convert one object (after `data_path`/`filter`/`each` resolution).
+    fn convert_one(&mut self, obj: &Json) -> Vec<Datum> {
+        let mut out = Vec::new();
         let values = self.reading_of(obj);
         let changed = self.prev.as_ref() != Some(&values);
         let emit_event = match self.cfg.events_on {
@@ -194,26 +228,48 @@ pub fn channel_name(path: &str) -> String {
     }
 }
 
-/// Top-level scalar attributes of an object (numbers, bools, strings; capped).
+/// Scalar attributes of an object: numbers, bools and strings, with nested objects and
+/// arrays flattened to dotted keys (`data.p`, `data[0].px`) up to [`ATTR_DEPTH`] /
+/// [`ATTR_ARRAY_LIMIT`], capped at [`MAX_ATTRS`] in JSON order.
 pub fn attrs_of(obj: &Json) -> BTreeMap<String, Value> {
-    let mut attrs = BTreeMap::new();
-    match obj {
-        Json::Object(m) => {
-            for (k, v) in m {
-                if attrs.len() >= MAX_ATTRS {
-                    break;
+    fn scalar(v: &Json) -> Option<Value> {
+        match v {
+            Json::Number(n) => n.as_f64().map(Value::Num),
+            Json::Bool(b) => Some(Value::Bool(*b)),
+            Json::String(s) => Some(Value::Text(s.chars().take(200).collect())),
+            _ => None,
+        }
+    }
+    fn walk(v: &Json, prefix: &str, depth: usize, attrs: &mut BTreeMap<String, Value>, order: &mut Vec<String>) {
+        if order.len() >= MAX_ATTRS {
+            return;
+        }
+        match v {
+            Json::Object(m) if depth < ATTR_DEPTH => {
+                for (k, v) in m {
+                    let key = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
+                    walk(v, &key, depth + 1, attrs, order);
                 }
-                let val = match v {
-                    Json::Number(n) => n.as_f64().map(Value::Num),
-                    Json::Bool(b) => Some(Value::Bool(*b)),
-                    Json::String(s) => Some(Value::Text(s.chars().take(256).collect())),
-                    _ => None,
-                };
-                if let Some(val) = val {
-                    attrs.insert(k.clone(), val);
+            }
+            Json::Array(items) if depth < ATTR_DEPTH => {
+                for (i, v) in items.iter().take(ATTR_ARRAY_LIMIT).enumerate() {
+                    walk(v, &format!("{prefix}[{i}]"), depth + 1, attrs, order);
+                }
+            }
+            _ => {
+                if let Some(val) = scalar(v) {
+                    if !prefix.is_empty() && !attrs.contains_key(prefix) {
+                        attrs.insert(prefix.to_string(), val);
+                        order.push(prefix.to_string());
+                    }
                 }
             }
         }
+    }
+    let mut attrs = BTreeMap::new();
+    let mut order = Vec::new();
+    match obj {
+        Json::Object(_) | Json::Array(_) => walk(obj, "", 0, &mut attrs, &mut order),
         Json::Number(n) => {
             if let Some(f) = n.as_f64() {
                 attrs.insert("value".into(), Value::Num(f));
@@ -255,7 +311,7 @@ mod tests {
     use serde_json::json;
 
     fn cfg(events: EventsOn) -> GenericConfig {
-        GenericConfig { fields: Fields::Auto, events_on: events, event_name: "update".into(), data_path: None, filter: None }
+        GenericConfig { fields: Fields::Auto, events_on: events, event_name: "update".into(), data_path: None, filter: None, each: None }
     }
 
     #[test]
@@ -287,6 +343,7 @@ mod tests {
             event_name: "tick".into(),
             data_path: Some(".msg".into()),
             filter: Some((".type".into(), json!("data"))),
+            each: None,
         });
         let d = c.convert(&json!({"msg": {"type": "data", "payload": {"x": 5, "arr": [1, 2]}}}));
         assert_eq!(d.len(), 2);

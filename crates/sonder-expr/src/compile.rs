@@ -74,6 +74,7 @@ pub const PURE_FUNCTIONS: &[&str] = &[
     "wrap",
     "hash",
     "has",
+    "attr_len",
     "attr",
     "attr_text",
     "field",
@@ -398,6 +399,11 @@ fn lower_call(
             require_event_ctx(name, span, lw)?;
             arity(name, args, 1, 1, span)?;
             return Ok(Node::Has(string_arg(name, &args[0])?));
+        }
+        "attr_len" => {
+            require_event_ctx(name, span, lw)?;
+            arity(name, args, 1, 1, span)?;
+            return Ok(Node::AttrLen(string_arg(name, &args[0])?));
         }
         "hash" => {
             arity(name, args, 1, 1, span)?;

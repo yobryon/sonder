@@ -16,6 +16,7 @@ sonder-vision = { workspace = true, optional = true, default-features = false }
 sonder-audio = { workspace = true, default-features = false }
 # `sync` alone is wasm-friendly; `native` turns on the rest.
 tokio = { version = "1", default-features = false, features = ["sync"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 anyhow = { workspace = true }

@@ -1,0 +1,91 @@
+# Markets Live — three exchanges, one key.
+#
+# Kraken, Bybit and OKX trade feeds (all keyless WebSockets, reachable from anywhere) are
+# three layers of one ensemble: Kraken buys/sells pluck, Bybit's big prints ring bells, OKX
+# keeps the percussion ticking. Trade rate is the energy; how far price moved is the tension.
+
+name = "Markets Live"
+description = "Kraken, Bybit and OKX trades, live. Buys rise, sells fall, size is loudness."
+tags = ["live", "rhythmic", "recipes"]
+viz = "generic"
+
+[conductor]
+key = "E"
+mode = "minor_pentatonic"
+tempo = 94
+tempo_range = [82, 112]
+drift = "medium"
+progression = "functional"
+bars_per_chord = 2
+mood_smoothing = 15
+swing = 0.1
+
+[[layer]]
+name = "kraken"
+role = "pluck"
+instrument = "pluck.marimba"
+source = { kind = "kraken.trades", symbols = ["BTC/USD", "ETH/USD"] }
+signals.rate   = "norm(smooth(rate(event('trade'), 5), 1.5))"
+signals.move   = "norm(smooth(abs(derivative(smooth(field('price'), 2))), 10))"
+map.energy     = "rate"
+map.tension    = "move"
+map.density    = "rate"
+on_event.trade.chance   = "clamp(0.3 + 0.7 * intensity, 0, 1)"
+on_event.trade.pitch    = "if(attr('buy') > 0.5, 0.55 + 0.45 * intensity, 0.45 - 0.45 * intensity)"
+on_event.trade.velocity = "0.3 + 0.7 * intensity"
+on_event.trade.pan      = "if(attr('buy') > 0.5, 0.65, 0.35)"
+on_event.trade.quantize = "1/16"
+on_event.trade.length   = "0.25"
+
+[[layer]]
+name = "bybit"
+role = "bells"
+instrument = "bells.fm"
+source = { kind = "bybit.trades", symbols = ["BTCUSDT"] }
+signals.rate = "norm(smooth(rate(event('trade'), 5), 2))"
+map.energy   = "rate"
+on_event.trade.chance   = "step(0.6, intensity)"
+on_event.trade.pitch    = "if(attr('buy') > 0.5, 0.8, 0.2)"
+on_event.trade.velocity = "0.5 + 0.5 * intensity"
+on_event.trade.length   = "4"
+on_event.trade.quantize = "1/8"
+
+[[layer]]
+name = "okx"
+role = "perc"
+instrument = "perc.kit"
+source = { kind = "okx.trades", symbols = ["BTC-USDT", "ETH-USDT"] }
+signals.rate = "norm(smooth(rate(event('trade'), 5), 1.5))"
+map.density  = "0.3 + 0.7 * rate"
+map.volume   = "0.6"
+on_event.trade.drum     = "hat"
+on_event.trade.velocity = "0.3 + 0.6 * intensity"
+on_event.trade.chance   = "0.5"
+on_event.trade.quantize = "1/16"
+
+[[layer]]
+name = "trend"
+role = "lead"
+instrument = "lead.soft"
+source = "kraken"
+signals.trend = "norm(smooth(field('price'), 20))"
+signals.rate  = "norm(smooth(rate(event('trade'), 10), 3))"
+map.register  = "trend"
+map.density   = "0.3 + 0.5 * rate"
+map.step      = "0.3 + 0.5 * rate"
+
+[[layer]]
+name = "floor"
+role = "bass"
+instrument = "bass.fm"
+source = "kraken"
+signals.rate = "norm(smooth(rate(event('trade'), 10), 3))"
+map.density  = "0.4 + 0.5 * rate"
+
+[[layer]]
+name = "bed"
+role = "pad"
+instrument = "pad.glass"
+source = "kraken"
+map.register = "0.5"
+map.volume   = "0.6"

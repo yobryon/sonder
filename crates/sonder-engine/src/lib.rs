@@ -13,6 +13,8 @@
 
 pub mod control;
 pub mod instruments;
+pub mod mapping;
+pub mod recipes;
 #[cfg(feature = "native")]
 pub mod live;
 #[cfg(feature = "midi")]

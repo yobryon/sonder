@@ -1,0 +1,24 @@
+[recipe]
+kind = "okx.trades"
+summary = "OKX spot trades (WebSocket v5, no key)"
+network = true
+
+[params.symbols]
+summary = "Instruments like BTC-USDT, ETH-USDT"
+default = ["BTC-USDT"]
+
+[spec]
+kind = "websocket"
+url = "wss://ws.okx.com:8443/ws/v5/public"
+subscribe = { op = "subscribe", args = "{symbols:{\"channel\":\"trades\",\"instId\":\"%s\"}}" }
+each = ".data"
+events_on = "every"
+fields = "none"
+ping = 20
+
+[spec.event]
+name = "trade"
+intensity = "clamp(log10(1 + attr('px') * attr('sz')) / 5, 0, 1)"
+attrs = { product = "instId", price = "px", size = "sz", side = "side" }
+derive = { usd = "attr('px') * attr('sz')", buy = "if(attr_text('side') == 'buy', 1, 0)" }
+readings = { price = "attr('px')" }

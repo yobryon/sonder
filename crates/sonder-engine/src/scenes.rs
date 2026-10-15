@@ -12,6 +12,7 @@ pub const BUILTIN_SCENE_SOURCES: &[(&str, &str)] = &[
     ("planet-tonight", include_str!("../../../scenes/planet-tonight.toml")),
     ("wikipedia-rain", include_str!("../../../scenes/wikipedia-rain.toml")),
     ("markets-open", include_str!("../../../scenes/markets-open.toml")),
+    ("markets-live", include_str!("../../../scenes/markets-live.toml")),
     ("weather-station", include_str!("../../../scenes/weather-station.toml")),
     ("hacker-news", include_str!("../../../scenes/hacker-news.toml")),
     ("orbit", include_str!("../../../scenes/orbit.toml")),

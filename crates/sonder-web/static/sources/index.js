@@ -17,6 +17,9 @@ export const ADAPTERS = {
   'http-json': { load: () => import('./http_json.js') },
   'sse': { load: () => import('./sse.js') },
   'websocket': { load: () => import('./websocket.js') },
+  'mqtt': { load: () => import('./mqtt.js') },
+  'blitzortung.lightning': { load: () => import('./blitzortung.js') },
+  'audio.features': { load: () => import('./audio.js'), main: true },
   'browser.input': { load: () => import('./browser_input.js'), main: true },
   'camera.webcam': { load: () => import('./camera.js'), main: true },
   'camera.mjpeg': { load: () => import('./camera.js'), main: true },
@@ -31,6 +34,7 @@ export const UNAVAILABLE = {
 
 export const isMainThreadKind = (kind) => !!ADAPTERS[kind]?.main;
 export const isCameraKind = (kind) => typeof kind === 'string' && kind.startsWith('camera.');
+export const isAudioKind = (kind) => kind === 'audio.features';
 
 /** Resolve the adapter class for a kind, or null if unknown. */
 export async function loadAdapter(kind) {

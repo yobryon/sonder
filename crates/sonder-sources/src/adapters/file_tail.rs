@@ -270,6 +270,7 @@ mod tests {
             event_name: "line".into(),
             data_path: None,
             filter: None,
+            each: None,
         }
     }
 

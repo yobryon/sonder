@@ -184,3 +184,5 @@ Determinism: nothing reads the wall clock; same inputs and seed produce identica
 value that is simply rising from zero at startup would read as "maximum" for minutes, because it
 is always the running max of itself. The adaptive envelope still tracks from the first sample;
 only the output confidence ramps.
+
+`attr_len("k")` — character length of a text attribute (event context only).

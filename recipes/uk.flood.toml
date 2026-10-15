@@ -1,0 +1,21 @@
+[recipe]
+kind = "uk.flood"
+summary = "UK Environment Agency river level at one station (polled, no key)"
+network = true
+
+[params.station]
+summary = "Station reference, e.g. 1491TH (Thames at Kingston)"
+default = "1491TH"
+
+[params.interval]
+summary = "Seconds between polls (data updates every 15 min)"
+default = 300
+
+[spec]
+kind = "http-json"
+url = "https://environment.data.gov.uk/flood-monitoring/id/stations/{station}/readings?_sorted&_limit=1"
+interval = "{interval}"
+data_path = ".items[0]"
+fields = [".value"]
+events_on = "change"
+event_name = "update"

@@ -656,6 +656,7 @@ const MOCK = params.get('mock') === '1';
 let transport = null;
 let mainAdapters = [];     // browser.input / camera adapters running on this thread
 let cameraAdapter = null;
+let audioAdapter = null;   // audio.features (mic / stream) adapter, toggled by #mic
 let currentScene = null;   // {name, title, toml, ...} in worker mode
 let currentSeed = params.get('seed');
 
@@ -688,21 +689,26 @@ function stopMainAdapters() {
   cameraAdapter = null;
   $('#camera').hidden = true;
   $('#camera').classList.remove('on');
+  audioAdapter = null;
+  $('#mic').hidden = true;
+  $('#mic').classList.remove('on');
 }
 
 // Sources that need the DOM or user media run here and forward samples to the worker.
 async function startMainAdapters(specs) {
   stopMainAdapters();
-  const { loadAdapter, isCameraKind } = await loadRegistry();
+  const { loadAdapter, isCameraKind, isAudioKind } = await loadRegistry();
   for (const spec of specs) {
     const emit = (json) => transport.postSample(spec.name, json);
     const log = (m) => console.debug(`[${spec.name}]`, m);
     try {
       const Adapter = await loadAdapter(spec.kind);
       if (!Adapter) { emit(JSON.stringify({ type: 'status', state: 'failed', message: `no browser adapter for ${spec.kind}` })); continue; }
-      const ctx = { stage: $('#stage'), postFrame: (gray, w, h) => transport.postFrame(spec.name, gray, w, h), onChange: (on) => $('#camera').classList.toggle('on', on) };
+      const audio = isAudioKind(spec.kind);
+      const ctx = { stage: $('#stage'), postFrame: (gray, w, h) => transport.postFrame(spec.name, gray, w, h), onChange: (on) => $(audio ? '#mic' : '#camera').classList.toggle('on', on) };
       const a = new Adapter(spec, emit, log, ctx);
       mainAdapters.push(a);
+      if (audio) { audioAdapter = a; $('#mic').textContent = a.label; $('#mic').hidden = false; }
       a.start();
       if (isCameraKind(spec.kind)) { cameraAdapter = a; $('#camera').hidden = false; }
     } catch (e) {
@@ -714,6 +720,10 @@ async function startMainAdapters(specs) {
 $('#camera').addEventListener('click', () => {
   if (!cameraAdapter) return;
   if (cameraAdapter.enabled) cameraAdapter.disable(); else cameraAdapter.enable();
+});
+$('#mic').addEventListener('click', () => {
+  if (!audioAdapter) return;
+  if (audioAdapter.enabled) audioAdapter.disable(); else audioAdapter.enable();
 });
 
 function pickScene(scenes, wanted) {

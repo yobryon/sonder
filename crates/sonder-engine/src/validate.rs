@@ -1,8 +1,6 @@
 //! Full scene validation: structure, expressions, source kinds, instrument names.
 
-#[cfg(feature = "native")]
-use sonder_core::LayerSource;
-use sonder_core::Scene;
+use sonder_core::{LayerSource, Scene};
 
 /// Validate a scene as thoroughly as possible without running it.
 pub fn validate(scene: &Scene) -> Result<(), Vec<String>> {
@@ -16,10 +14,16 @@ pub fn validate(scene: &Scene) -> Result<(), Vec<String>> {
         let ctx = format!("layer `{}`", layer.name);
         // Source kinds are only checkable where the registry exists; in the browser the
         // JS side decides what it can feed.
+        if let LayerSource::Spec(spec) = &layer.source {
+            if let Err(e) = crate::recipes::expand(spec) {
+                errs.push(format!("{ctx}: {e}"));
+            }
+        }
         #[cfg(feature = "native")]
         if let LayerSource::Spec(spec) = &layer.source {
-            if registry.info(&spec.kind).is_none() {
-                let known: Vec<&str> = registry.catalog().iter().map(|i| i.kind).collect();
+            if registry.info(&spec.kind).is_none() && !crate::recipes::is_recipe(&spec.kind) {
+                let mut known: Vec<String> = registry.catalog().iter().map(|i| i.kind.to_string()).collect();
+                known.extend(crate::recipes::all().into_iter().map(|r| r.recipe.kind));
                 errs.push(format!("{ctx}: unknown source kind `{}` (known: {})", spec.kind, known.join(", ")));
             }
         }

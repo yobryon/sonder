@@ -1,0 +1,21 @@
+[recipe]
+kind = "bluesky.firehose"
+summary = "Every public Bluesky post as it is created (Jetstream, no key)"
+network = true
+
+[params.collections]
+summary = "Record collections to subscribe to"
+default = ["app.bsky.feed.post"]
+
+[spec]
+kind = "websocket"
+url = "wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections={collections:%s|&wantedCollections=}"
+filter = ".commit.operation==create"
+events_on = "every"
+fields = "none"
+
+[spec.event]
+name = "post"
+intensity = "clamp(attr_len('commit.record.text') / 300, 0.05, 1)"
+attrs = { did = "did", lang = "commit.record.langs[0]", collection = "commit.collection", text = "commit.record.text" }
+derive = { length = "attr_len('commit.record.text')", reply = "has('commit.record.reply.root.uri')", image = "has('commit.record.embed.images[0].alt')" }

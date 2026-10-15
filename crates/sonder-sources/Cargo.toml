@@ -21,12 +21,13 @@ chrono = { workspace = true }
 bytes = { workspace = true, optional = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
+prost = { version = "0.14", optional = true }
 
 [features]
 default = ["native"]
 ## Async adapters, the registry and network/system access (tokio, reqwest, sysinfo).
 ## Without it only the pure parts compile (simulations, astro math, jsonpath) — for wasm.
-native = ["dep:tokio", "dep:tokio-stream", "dep:futures", "dep:reqwest", "dep:tokio-tungstenite", "dep:sysinfo", "dep:bytes"]
+native = ["dep:tokio", "dep:tokio-stream", "dep:futures", "dep:reqwest", "dep:tokio-tungstenite", "dep:sysinfo", "dep:bytes", "dep:prost"]
 
 [dev-dependencies]
 sonder-expr = { workspace = true }

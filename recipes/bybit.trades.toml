@@ -1,0 +1,25 @@
+[recipe]
+kind = "bybit.trades"
+summary = "Bybit spot trades (WebSocket v5, no key)"
+network = true
+
+[params.symbols]
+summary = "Symbols like BTCUSDT, ETHUSDT"
+default = ["BTCUSDT"]
+
+[spec]
+kind = "websocket"
+url = "wss://stream.bybit.com/v5/public/spot"
+subscribe = { op = "subscribe", args = "{symbols:publicTrade.%s}" }
+filter = ".type==snapshot"
+each = ".data"
+events_on = "every"
+fields = "none"
+ping = 20
+
+[spec.event]
+name = "trade"
+intensity = "clamp(log10(1 + attr('p') * attr('v')) / 5, 0, 1)"
+attrs = { product = "s", price = "p", size = "v", side = "S" }
+derive = { usd = "attr('p') * attr('v')", buy = "if(attr_text('S') == 'Buy', 1, 0)" }
+readings = { price = "attr('p')" }
