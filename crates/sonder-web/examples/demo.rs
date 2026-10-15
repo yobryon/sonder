@@ -147,8 +147,6 @@ impl Sim {
         let bpm = 62.0;
         let beats = self.t * bpm / 60.0;
         EngineSnapshot {
-            captions: Vec::new(),
-            form: Default::default(),
             scene_name: "Night Freeway".into(),
             viz_kind: "freeway".into(),
             time: self.t,
@@ -183,6 +181,7 @@ impl Sim {
             viz,
             underruns: 0,
             audio_backend: "demo".into(),
+            ..Default::default()
         }
     }
 }
