@@ -1,0 +1,80 @@
+/* Sonder — scene composer modal. Uses the app's tokens (app.css :root). */
+
+.sc-backdrop {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 6vh 16px 16px;
+  background: rgba(0, 0, 0, .6);
+  overflow: auto;
+}
+.sc-modal {
+  width: 100%; max-width: 760px;
+  background: var(--bg-1, #0d0f12);
+  border: 1px solid var(--line, #1d2128);
+  border-radius: 8px;
+  padding: 16px 18px 18px;
+  display: flex; flex-direction: column; gap: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .6);
+}
+.sc-head { display: flex; align-items: center; justify-content: space-between; }
+.sc-head h2 { margin: 0; }
+.sc-close {
+  background: none; border: 0; color: var(--fg-dim, #7c838e);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 2px 6px;
+}
+.sc-close:hover { color: var(--fg, #d6d9de); }
+
+.sc-field { display: flex; flex-direction: column; gap: 5px; }
+.sc-label {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--fg-dim, #7c838e);
+}
+.sc-modal textarea, .sc-modal input[type="password"], .sc-modal select {
+  width: 100%;
+  background: var(--bg-2, #13161b);
+  border: 1px solid var(--line, #1d2128);
+  border-radius: 4px;
+  color: var(--fg, #d6d9de);
+  padding: 7px 9px;
+  resize: vertical;
+}
+.sc-modal textarea:focus, .sc-modal input:focus, .sc-modal select:focus {
+  outline: none; border-color: var(--accent, #e8c88a);
+}
+.sc-remember { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.sc-warning {
+  font-size: 12px; line-height: 1.45;
+  color: var(--warn, #e2b04a);
+  border-left: 2px solid var(--warn, #e2b04a);
+  padding: 4px 10px;
+}
+
+.sc-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.sc-grow { flex: 1 1 220px; }
+.sc-modal button {
+  background: var(--bg-2, #13161b);
+  border: 1px solid var(--line, #1d2128);
+  border-radius: 4px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.sc-modal button:hover { border-color: var(--fg-dim, #7c838e); }
+.sc-go, .sc-apply { border-color: var(--accent, #e8c88a) !important; color: var(--accent, #e8c88a); }
+.sc-status { font-size: 12px; align-self: center; }
+
+.sc-log {
+  margin: 0; max-height: 160px; overflow: auto;
+  font-size: 12px; line-height: 1.45; white-space: pre-wrap;
+  color: var(--fg-dim, #7c838e);
+  background: var(--bg, #07080a);
+  border: 1px solid var(--line, #1d2128);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+.sc-out { font-size: 12px; line-height: 1.4; white-space: pre; }
+.sc-actions { justify-content: flex-end; }
+
+@media (max-width: 520px) {
+  .sc-backdrop { padding: 8px; }
+  .sc-modal { padding: 12px; }
+}
