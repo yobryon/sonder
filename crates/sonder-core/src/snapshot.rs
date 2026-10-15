@@ -166,10 +166,17 @@ pub struct EngineSnapshot {
     /// Recent notes for a piano-roll, newest last (bounded, ~256).
     pub notes: Vec<NoteSnapshot>,
     pub master: Meter,
+    /// Integrated-ish loudness of the master in LUFS (−70 when silent).
+    #[serde(default = "silence_lufs")]
+    pub master_lufs: f32,
     /// Log-spaced magnitude bands (0..1), ~48 bins, for a spectrum display.
     pub spectrum: Vec<f32>,
     /// Latest `Datum::Viz` payload per source, keyed by source name.
     pub viz: BTreeMap<String, serde_json::Value>,
     pub underruns: u32,
     pub audio_backend: String,
+}
+
+fn silence_lufs() -> f32 {
+    -70.0
 }
