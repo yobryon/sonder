@@ -1,0 +1,96 @@
+# Daily record: render today's dated track (offline, seed = YYYYMMDD) and a short live
+# capture, add them to the album kept on the `records` branch, and let pages.yml publish
+# the album under site/records/.
+name: record
+
+on:
+  schedule:
+    - cron: "17 4 * * *" # 04:17 UTC daily
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Length of the offline render (minutes)
+        default: "10"
+      live_seconds:
+        description: Length of the live capture (seconds)
+        default: "180"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: record
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # The album so far (the branch may not exist yet on the first run).
+      - uses: actions/checkout@v4
+        id: album
+        continue-on-error: true
+        with:
+          ref: records
+          path: album
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: record
+
+      - name: Install ffmpeg and ALSA headers
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg libasound2-dev
+
+      - name: Build sonder
+        run: cargo build --release -p sonder
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/record
+
+      - name: Record
+        env:
+          SONDER: ${{ github.workspace }}/target/record/release/sonder
+          MINUTES: ${{ github.event.inputs.minutes || '10' }}
+          LIVE_SECONDS: ${{ github.event.inputs.live_seconds || '180' }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%F)
+          mkdir -p site/records
+          if [ "${{ steps.album.outcome }}" = "success" ]; then
+            rsync -a --exclude .git album/ site/records/
+          fi
+          # Live capture: three minutes of the social firehose, straight to MP3.
+          if ! "$SONDER" radio social-firehose --format mp3 --bitrate 128k \
+               --out "site/records/$DATE-live.mp3" --seconds "$LIVE_SECONDS"; then
+            echo "::warning::live capture failed; recording the offline render only"
+            rm -f "site/records/$DATE-live.mp3"
+          fi
+          ATTACH=()
+          [ -f "site/records/$DATE-live.mp3" ] && ATTACH=(--attach "$DATE-live.mp3")
+          # Offline render, deterministic for the date.
+          "$SONDER" record --scene night-freeway --minutes "$MINUTES" --out site/records \
+            --date "$DATE" --no-wav "${ATTACH[@]}"
+          # Keep the album to the last 30 days (Pages sites are capped at 1 GB).
+          for old in $(ls site/records/*.json | sort | head -n -30); do
+            d=$(basename "$old" .json)
+            rm -f site/records/"$d".* site/records/"$d"-*
+          done
+          "$SONDER" record --index-only --out site/records
+          ls -la site/records
+
+      - name: Publish to the records branch
+        run: |
+          set -euo pipefail
+          cd site/records
+          git init -q -b records
+          git config user.name "sonder-record[bot]"
+          git config user.email "sonder-record@users.noreply.github.com"
+          git add -A
+          git commit -q -m "records $(date -u +%F)"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" records
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
