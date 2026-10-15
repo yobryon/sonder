@@ -1064,6 +1064,8 @@ mod tests {
             viz,
             underruns: 3,
             audio_backend: "cpal:pulse".into(),
+            // New snapshot fields land often during v2; the view must not care.
+            ..Default::default()
         }
     }
 

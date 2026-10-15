@@ -568,6 +568,7 @@ impl ControlLoop {
             })
             .collect();
         snap.master = self.synth.master_meter();
+        snap.master_lufs = self.synth.lufs();
         snap.spectrum = self.analyzer.bands().to_vec();
         snap.viz = self.viz.clone();
         // Backends report underruns through the shared atomic, not the feedback queue.
