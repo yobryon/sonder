@@ -1,9 +1,14 @@
-# Build the serverless wasm site and deploy it to GitHub Pages on every push to main.
+# Build the serverless wasm site and deploy it to GitHub Pages on every push to main — and
+# whenever record.yml has added a day to the album on the `records` branch, which is
+# published alongside the site under /records/.
 name: pages
 
 on:
   push:
     branches: [main]
+  workflow_run:
+    workflows: [record]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -49,6 +54,22 @@ jobs:
 
       - name: JS unit tests
         run: node --test crates/sonder-web/js-tests/*.test.mjs
+
+      # The daily album lives on the `records` branch (see record.yml); absent until the
+      # first record has run.
+      - uses: actions/checkout@v4
+        id: records
+        continue-on-error: true
+        with:
+          ref: records
+          path: records
+
+      - name: Add the records album to the site
+        if: steps.records.outcome == 'success'
+        run: |
+          mkdir -p site/records
+          rsync -a --exclude .git records/ site/records/
+          du -sh site/records
 
       - uses: actions/upload-pages-artifact@v3
         with:

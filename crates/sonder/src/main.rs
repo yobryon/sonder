@@ -752,6 +752,7 @@ async fn compose(args: ComposeArgs) -> anyhow::Result<()> {
                 sample_rate: 48000,
                 seed: None,
                 midi: None,
+                watch: false,
                 source: SourceOverride::default(),
             },
             true,

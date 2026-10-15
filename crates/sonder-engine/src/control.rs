@@ -63,7 +63,8 @@ pub struct ControlLoop {
     captioner: Captioner,
     /// `LoadScene` TOML waiting for the live runner (which owns the sources).
     load_request: Option<String>,
-    /// Recycled audio-chunk boxes, reused for `Datum::Audio` routing.
+    /// Recycled audio-chunk boxes (allocation and all), reused for `Datum::Audio` routing.
+    #[allow(clippy::vec_box)]
     audio_pool: Vec<Box<AudioChunk>>,
 }
 
@@ -397,7 +398,7 @@ impl ControlLoop {
 
     /// Reclaim audio-chunk boxes the synth has finished with.
     fn recycle_audio(&mut self) {
-        while let Some(chunk) = RecycledAudio::take_recycled_audio(&mut self.synth) {
+        while let Some(chunk) = self.synth.take_recycled_audio() {
             if self.audio_pool.len() < 64 {
                 self.audio_pool.push(chunk);
             }
@@ -573,19 +574,6 @@ impl ControlLoop {
         snap.underruns = self.underruns.saturating_add(self.synth.underruns());
         snap.audio_backend = self.audio_backend.clone();
         let _ = self.snapshot_tx.send(Arc::new(snap));
-    }
-}
-
-/// Audio-chunk recycling. `sonder-audio` is growing `SynthController::take_recycled_audio`
-/// alongside the granular instrument; until it lands the synth drops chunks itself and
-/// the pool simply stays empty (every chunk is a fresh allocation).
-trait RecycledAudio {
-    fn take_recycled_audio(&mut self) -> Option<Box<AudioChunk>>;
-}
-
-impl RecycledAudio for SynthController {
-    fn take_recycled_audio(&mut self) -> Option<Box<AudioChunk>> {
-        None
     }
 }
 

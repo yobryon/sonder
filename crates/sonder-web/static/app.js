@@ -1058,7 +1058,8 @@ function startScene(scene, seed) {
   }
   pick.value = scene.custom ? '__custom' : scene.name;
   const u = new URL(location.href);
-  if (scene.custom) { u.searchParams.delete('scene'); } else { u.searchParams.set('scene', scene.name); if (!scene.keepHash) u.hash = ''; }
+  if (scene.custom) u.searchParams.delete('scene'); else u.searchParams.set('scene', scene.name);
+  if (!scene.keepHash) u.hash = ''; // a stale #s= would describe a different scene than the one playing
   history.replaceState(null, '', u);
   if (editor) editor.setToml(scene.toml, scene.custom ? '' : scene.name);
 }

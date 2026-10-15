@@ -176,7 +176,6 @@ export class Engine {
         if (src) { src.readings = { count: this.cars.length, mean_speed: 0.5 + 0.2 * Math.sin(this.t / 7) }; src.times.push(this.t); }
         this.viz.traffic = { cars: this.cars.map((c) => ({ x: c.x, y: c.y, lane: c.lane, size: c.size, bright: c.bright })) };
       }
-    }
       // Map scenes: fake geo events (quakes along the ring of fire-ish) and lightning strikes so
       // Live Earth has something to draw without the network.
       if (this.scene.viz === 'map') {
