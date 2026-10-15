@@ -358,6 +358,7 @@ mod tests {
             name: name.into(),
             intensity: 0.5,
             attrs: BTreeMap::new(),
+                    label: String::new(),
         }
     }
 

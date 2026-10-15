@@ -57,7 +57,7 @@ fn no_effects() -> Effects {
     Effects {
         reverb: ReverbSettings { level: 0.0, ..ReverbSettings::default() },
         delay: DelaySettings { level: 0.0, ..DelaySettings::default() },
-        master: MasterSettings { gain: 1.0, saturation: 0.0, ceiling_db: -0.1 },
+        master: MasterSettings { gain: 1.0, saturation: 0.0, ceiling_db: -0.1, target_lufs: None, glue: 0.0 },
     }
 }
 
@@ -350,7 +350,7 @@ fn every_preset_renders_and_round_trips_through_serde() {
 fn limiter_never_exceeds_ceiling() {
     let mut m = MasterChain::new(SR);
     let ceiling_db = -3.0;
-    m.configure(&MasterSettings { gain: 4.0, saturation: 0.0, ceiling_db });
+    m.configure(&MasterSettings { gain: 4.0, saturation: 0.0, ceiling_db, target_lufs: None, glue: 0.0 });
     let ceiling = 10f32.powf(ceiling_db / 20.0);
     let mut buf = vec![0.0f32; 48_000 * 2];
     for (i, s) in buf.iter_mut().enumerate() {
