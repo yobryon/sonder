@@ -66,6 +66,14 @@ A scene is a TOML file. Curated ones live in [`scenes/`](scenes/):
 | `weather-station` | Open-Meteo · NOAA tides · sun position | yes |
 | `hacker-news` | HN firehose | yes |
 | `orbit` | ISS position | yes |
+| `markets-live` | Kraken · Bybit · OKX trades (recipes) | yes |
+| `social-firehose` | every Bluesky post · Wikipedia · HN | yes |
+| `storm` | Blitzortung lightning · NOAA buoys · wind | yes |
+| `machines` | the public MQTT broker's IoT firehose | yes |
+| `seismic` | an IRIS seismometer (SeedLink) · USGS quakes | yes |
+| `city-transit` | GTFS-Realtime transit · a Caltrans camera still | yes |
+| `deep-ocean` | an Orcasound hydrophone via ffmpeg · tide | yes (stdin) |
+| `this-browser` | mouse, clicks, scroll, keys (browser build) | no |
 
 ## Run it in your browser
 
@@ -90,6 +98,21 @@ WebSocket, static host → Worker), `?mock=1` uses the JS mock engine (`engine-m
 for UI work without a wasm build. Sources that cannot exist in a browser
 (`system.metrics`, `file-tail`, `stdin`) show as *failed* and their layers play on the
 conductor alone; OpenSky may be blocked by CORS. JS unit tests: `node --test crates/sonder-web/js-tests/*.test.mjs`.
+
+## Sources
+
+`sonder sources` lists every kind. Coded adapters: `synthetic.freeway`, `synthetic.walk`,
+`system.metrics`, `clock.astro`, `camera.mjpeg`, `camera.jpeg`, `wikipedia.recent-changes`,
+`usgs.earthquakes`, `opensky.flights`, `open-meteo.weather`, `noaa.space-weather`,
+`noaa.tides`, `noaa.buoys`, `coinbase.trades`, `iss.position`, `hackernews.firehose`,
+`github.events`, `blitzortung.lightning`, `mqtt`, `seedlink.seismic`, `transit.gtfs-rt`,
+`audio.features`, and the generic `http-json` / `sse` / `websocket` / `file-tail` / `stdin`.
+
+**Recipes** (`recipes/*.toml`) turn a generic transport plus an engine-side mapping into a
+named kind with no code — `kraken.trades`, `bybit.trades`, `okx.trades`, `binance.trades`,
+`bluesky.firehose`, `thingspeak.channel`, `uk.flood`, `uk.carbon` so far. A recipe is ~15
+lines of TOML and runs identically natively and in the browser; see
+[`recipes/README.md`](recipes/README.md) to add one.
 
 ## Building
 

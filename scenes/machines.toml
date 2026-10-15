@@ -24,7 +24,7 @@ swing = 0.15
 name = "devices"
 role = "arp"
 instrument = "arp.pulse"
-source = { kind = "mqtt", url = "mqtt://test.mosquitto.org:1883", topics = ["#"], username = "wildcard", max_rate = 40 }
+source = { kind = "mqtt", url = "mqtt://test.mosquitto.org:1883", topics = ["#"], max_rate = 40 }
 signals.rate   = "norm(smooth(field('rate'), 3))"
 signals.topics = "norm(smooth(field('topics'), 10))"
 map.energy     = "rate"
