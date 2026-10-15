@@ -833,6 +833,7 @@ mod tests {
         let mut viz = 0;
         while let Some(s) = rx.recv().await {
             match s.datum {
+                Datum::Audio { .. } => {}
                 Datum::Event { name, attrs, .. } => events.push((name, attrs)),
                 Datum::Reading { values } => {
                     readings += 1;

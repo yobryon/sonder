@@ -389,6 +389,7 @@ mod tests {
                     blobs += 1;
                 }
                 Datum::Status { state, .. } => live |= state == SourceState::Live,
+                Datum::Audio { .. } => {}
             }
         }
         assert!(live);

@@ -175,7 +175,10 @@ impl CommandSink for MidiOut {
                 self.send(&[0xB0 | ch, cc, v]);
             }
             SynthCommand::Panic => self.panic(),
-            SynthCommand::SetInstrument { .. } | SynthCommand::SetTempo { .. } | SynthCommand::SetEffects(_) => {}
+            SynthCommand::SetInstrument { .. }
+            | SynthCommand::SetTempo { .. }
+            | SynthCommand::SetEffects(_)
+            | SynthCommand::AudioChunk { .. } => {}
         }
     }
 }

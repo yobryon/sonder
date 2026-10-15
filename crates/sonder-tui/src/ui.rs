@@ -932,6 +932,8 @@ mod tests {
             serde_json::json!({"lanes": 4, "cars": [{"x": 0.1, "y": 0.3, "lane": 0, "bright": 0.9}, {"x": 0.6, "y": 0.8, "lane": 2, "bright": 0.2}]}),
         );
         EngineSnapshot {
+            captions: Vec::new(),
+            form: Default::default(),
             scene_name: "Night Freeway".into(),
             viz_kind: "freeway".into(),
             time: 30.0,

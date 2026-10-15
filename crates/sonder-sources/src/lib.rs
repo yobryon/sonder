@@ -195,6 +195,7 @@ mod tests {
             assert!(s.at >= last_at - 1e-9, "samples must be time-ordered");
             last_at = s.at;
             match s.datum {
+                Datum::Audio { .. } => {}
                 Datum::Event { name, intensity, attrs } => {
                     assert_eq!(name, "car");
                     assert!((0.0..=1.0).contains(&intensity));

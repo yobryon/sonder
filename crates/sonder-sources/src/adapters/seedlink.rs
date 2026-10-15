@@ -1210,6 +1210,7 @@ mod tests {
         let (mut readings, mut viz, mut live) = (0, 0, false);
         while let Ok(s) = rx.try_recv() {
             match s.datum {
+                Datum::Audio { .. } => {}
                 Datum::Reading { values } => {
                     assert!(values.contains_key("rms") && values.contains_key("dominant_hz") && values.contains_key("ratio"));
                     assert!((30.0..=50.0).contains(&values["samples_per_s"]), "playout rate ≈ 40 Hz: {}", values["samples_per_s"]);
