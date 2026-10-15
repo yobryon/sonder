@@ -85,17 +85,17 @@ impl Sim {
             attrs.insert("lane".into(), Value::Num(c.2 as f64));
             attrs.insert("x".into(), Value::Num(c.0.clamp(0.0, 1.0)));
             attrs.insert("speed".into(), Value::Num(40.0 + c.3 * 50.0));
-            self.events.push(EventSnapshot { at: self.t, layer: LayerId(1), name: "car".into(), intensity: c.3, attrs });
+            self.events.push(EventSnapshot { at: self.t, layer: LayerId(1), name: "car".into(), intensity: c.3, attrs, label: String::new() });
             let midi = 50.0 + [0.0, 4.0, 7.0, 11.0, 14.0][(c.2 + (self.t as usize % 2)) % 5] as f32 + 12.0 * (c.2 % 2) as f32;
-            self.notes.push(NoteSnapshot { at: self.t, layer: LayerId(1), midi, velocity: 0.4 + c.3 as f32 * 0.6, pan: c.0 as f32, duration: Some(0.6), active: true });
+            self.notes.push(NoteSnapshot { at: self.t, layer: LayerId(1), midi, velocity: 0.4 + c.3 as f32 * 0.6, pan: c.0 as f32, duration: Some(0.6), active: true, cause: None, reason: String::new() });
         }
         if (self.t * 4.0).floor() != ((self.t - dt) * 4.0).floor() && self.rnd() < 0.5 {
             let midi = 62.0 + [0.0, 2.0, 4.0, 6.0, 7.0, 9.0][(self.rnd() * 6.0) as usize] as f32;
-            self.notes.push(NoteSnapshot { at: self.t, layer: LayerId(2), midi, velocity: 0.5, pan: 0.5, duration: Some(0.25), active: true });
+            self.notes.push(NoteSnapshot { at: self.t, layer: LayerId(2), midi, velocity: 0.5, pan: 0.5, duration: Some(0.25), active: true, cause: None, reason: String::new() });
         }
         if (self.t * 0.25).floor() != ((self.t - dt) * 0.25).floor() {
             for m in [50.0f32, 57.0, 62.0, 66.0] {
-                self.notes.push(NoteSnapshot { at: self.t, layer: LayerId(0), midi: m, velocity: 0.35, pan: 0.5, duration: Some(4.0), active: true });
+                self.notes.push(NoteSnapshot { at: self.t, layer: LayerId(0), midi: m, velocity: 0.35, pan: 0.5, duration: Some(4.0), active: true, cause: None, reason: String::new() });
             }
         }
         for n in &mut self.notes {
@@ -147,6 +147,8 @@ impl Sim {
         let bpm = 62.0;
         let beats = self.t * bpm / 60.0;
         EngineSnapshot {
+            captions: Vec::new(),
+            form: Default::default(),
             scene_name: "Night Freeway".into(),
             viz_kind: "freeway".into(),
             time: self.t,
