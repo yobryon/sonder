@@ -252,7 +252,7 @@ impl ControlLoop {
                 if let Some(&first) = readers.first() {
                     push_bounded(
                         &mut self.events,
-                        EventSnapshot { at: now, layer: LayerId(first as u16), name, intensity, attrs: trim_attrs(attrs) },
+                        EventSnapshot { at: now, layer: LayerId(first as u16), name, intensity, attrs: trim_attrs(attrs), label: String::new() },
                         MAX_EVENTS,
                     );
                 }
@@ -302,7 +302,7 @@ impl ControlLoop {
                 });
                 push_bounded(
                     &mut self.events,
-                    EventSnapshot { at: now, layer: LayerId(i as u16), name: f.name, intensity: f.intensity, attrs: BTreeMap::new() },
+                    EventSnapshot { at: now, layer: LayerId(i as u16), name: f.name, intensity: f.intensity, attrs: BTreeMap::new(), label: String::new() },
                     MAX_EVENTS,
                 );
             }

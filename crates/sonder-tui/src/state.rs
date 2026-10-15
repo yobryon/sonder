@@ -371,7 +371,7 @@ mod tests {
             pan: 0.5,
             duration: Some(0.5),
             active,
-        }
+         cause: None, reason: String::new(), }
     }
 
     #[test]

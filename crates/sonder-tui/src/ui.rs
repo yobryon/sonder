@@ -907,7 +907,7 @@ mod tests {
                 layer: LayerId(i % 3),
                 name: if i % 2 == 0 {
                     "car".into()
-                } else {
+                 label: String::new(), } else {
                     "quake".into()
                 },
                 intensity: 0.1 * i as f64,
@@ -923,7 +923,7 @@ mod tests {
                 pan: 0.5,
                 duration: Some(0.4),
                 active: i > 26,
-            })
+             cause: None, reason: String::new(), })
             .collect();
         let mut viz = BTreeMap::new();
         viz.insert(
