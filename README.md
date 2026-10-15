@@ -99,6 +99,23 @@ for UI work without a wasm build. Sources that cannot exist in a browser
 (`system.metrics`, `file-tail`, `stdin`) show as *failed* and their layers play on the
 conductor alone; OpenSky may be blocked by CORS. JS unit tests: `node --test crates/sonder-web/js-tests/*.test.mjs`.
 
+## v2: form, attribution, sharing, presence
+
+- **Form**: `conductor.form` shapes pieces over minutes — tension arcs or A/B sections,
+  motifs that recur and transform, melodic layers that *answer* salient events.
+- **Legibility**: every event-triggered note knows its cause (hover a note in the piano
+  roll: "0.13 BTC sell on OKX"); captions tell you what just happened; the **Live Earth**
+  view plots every geo-tagged event on a world map with the day/night terminator.
+- **Sound**: granular playback of live audio (`grain.ocean` — the hydrophone *is* the
+  instrument), Karplus–Strong strings and modal bells, a glue compressor and LUFS rider.
+- **Sharing**: a scene lives in a link (`#s=…`); an in-browser editor with live validation;
+  `sonder compose "a calm piece from Tokyo weather and its trains"` writes a scene with
+  Claude (also in the browser with your own key). `sonder play --watch` hot-reloads.
+- **Presence**: `sonder radio <scene> --out icecast://…` streams a station
+  ([docs/RADIO.md](docs/RADIO.md)); `sonder record` renders dated tracks and a daily
+  workflow publishes them under `/records/`; the [Overpass kit](docs/OVERPASS.md) puts
+  the founding image on a Raspberry Pi. Scope and status: [docs/V2.md](docs/V2.md).
+
 ## Sources
 
 `sonder sources` lists every kind. Coded adapters: `synthetic.freeway`, `synthetic.walk`,
