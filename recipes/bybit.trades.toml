@@ -9,6 +9,7 @@ default = ["BTCUSDT"]
 
 [spec]
 kind = "websocket"
+caption = "{size} {product} {side} on Bybit"
 url = "wss://stream.bybit.com/v5/public/spot"
 subscribe = { op = "subscribe", args = "{symbols:publicTrade.%s}" }
 filter = ".type==snapshot"

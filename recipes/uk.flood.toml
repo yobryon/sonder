@@ -13,6 +13,7 @@ default = 300
 
 [spec]
 kind = "http-json"
+caption = "river level {value} m"
 url = "https://environment.data.gov.uk/flood-monitoring/id/stations/{station}/readings?_sorted&_limit=1"
 interval = "{interval}"
 data_path = ".items[0]"

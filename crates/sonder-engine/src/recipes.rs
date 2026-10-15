@@ -82,7 +82,9 @@ pub fn expand(spec: &SourceSpec) -> Result<SourceSpec, String> {
         if k == "kind" {
             continue;
         }
-        out.params.insert(k.clone(), substitute(v, &values)?);
+        // `caption` is a caption template (`{size} {product}`), not recipe placeholders.
+        let v = if k == "caption" { v.clone() } else { substitute(v, &values)? };
+        out.params.insert(k.clone(), v);
     }
     // Any extra user params (not recipe parameters) override the transport spec directly,
     // so `ping`, `interval` etc. can still be tuned.
@@ -222,6 +224,7 @@ mod tests {
             crate::mapping::SourceMapping::from_spec(&out).unwrap_or_else(|e| panic!("{}: {e}", r.recipe.kind));
             let text = serde_json::to_string(&out.params).unwrap();
             assert!(!text.contains("{symbols") && !text.contains("{host"), "{}: unexpanded placeholder in {text}", r.recipe.kind);
+            assert!(out.get_str("caption").is_some_and(|c| !c.is_empty()), "{}: recipe has no caption", r.recipe.kind);
         }
     }
 

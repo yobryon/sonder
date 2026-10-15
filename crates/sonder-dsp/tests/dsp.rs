@@ -2,7 +2,7 @@
 
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
-use sonder_core::{Adsr, Chorus, DelaySettings, Effects, Filter, FilterKind, Instrument, LayerId, MasterSettings, NoteId, Osc, ReverbSettings, SynthCommand, Table, Wave};
+use sonder_core::{Adsr, AudioChunk, Chorus, DelaySettings, Effects, Filter, FilterKind, Grain, Instrument, LayerId, MasterSettings, Model, NoteId, Osc, ReverbSettings, SynthCommand, Table, Wave};
 use sonder_dsp::master::MasterChain;
 use sonder_dsp::wavetable::{self, MIPS};
 use sonder_dsp::reverb::Plate;
@@ -51,6 +51,32 @@ fn dry_sine() -> Instrument {
         velocity_to_amp: 0.0,
         ..Instrument::default()
     }
+}
+
+fn sine_chunk(hz: f32, rate: u32, seconds: f32, amp: f32) -> Box<AudioChunk> {
+    let n = (rate as f32 * seconds) as usize;
+    Box::new(AudioChunk { rate, samples: (0..n).map(|i| (i as f32 / rate as f32 * hz * std::f32::consts::TAU).sin() * amp).collect() })
+}
+
+/// Dominant frequency by positive zero crossings (for clean, near-sinusoidal signals).
+fn zero_crossing_hz(mono: &[f32], sr: f32) -> f32 {
+    let mut first = None;
+    let mut last = 0;
+    let mut count = 0usize;
+    for i in 1..mono.len() {
+        if mono[i - 1] <= 0.0 && mono[i] > 0.0 {
+            if first.is_none() {
+                first = Some(i);
+            }
+            last = i;
+            count += 1;
+        }
+    }
+    (count.max(1) - 1) as f32 * sr / (last - first.unwrap_or(0)).max(1) as f32
+}
+
+fn left(stereo: &[f32]) -> Vec<f32> {
+    stereo.chunks(2).map(|f| f[0]).collect()
 }
 
 fn no_effects() -> Effects {
@@ -329,6 +355,11 @@ fn every_preset_renders_and_round_trips_through_serde() {
         let back: Instrument = serde_json::from_str(&json).unwrap();
         assert_eq!(back, inst, "{name} serde round trip");
         let mut synth = Synth::new(SR, 1);
+        if inst.osc.iter().any(|o| o.wave == Wave::Grain) {
+            // Granular presets need live audio in the layer ring to make a sound.
+            synth.handle(SynthCommand::AudioChunk { layer: LayerId(0), chunk: sine_chunk(220.0, 48_000, 2.0, 0.5) });
+            assert!(synth.take_recycled_audio().is_some(), "{name}: chunk box must come back");
+        }
         set_instrument(&mut synth, 0, inst);
         for (i, hz) in [110.0f32, 261.63, 523.25].iter().enumerate() {
             note_on(&mut synth, 0, i as u64, *hz, 0.9);
@@ -344,6 +375,168 @@ fn every_preset_renders_and_round_trips_through_serde() {
         let tail = render_seconds(&mut synth, 1.0);
         assert!(tail.iter().all(|s| s.is_finite()), "{name} tail NaN");
     }
+}
+
+#[test]
+fn grain_follows_pitch_and_is_silent_without_audio() {
+    let grain_inst = |follow: f32| Instrument {
+        osc: vec![Osc { wave: Wave::Grain, grain: Grain { size_ms: 60.0, density: 40.0, spray: 0.2, pitch_follow: follow, jitter_cents: 0.0, width: 0.0, ..Grain::default() }, ..Osc::default() }],
+        ..dry_sine()
+    };
+    // Empty ring: a grain voice is silent (and finite), not NaN.
+    let mut synth = Synth::new(SR, 2);
+    synth.handle(SynthCommand::SetEffects(Box::new(no_effects())));
+    set_instrument(&mut synth, 0, grain_inst(1.0));
+    note_on(&mut synth, 0, 1, 440.0, 1.0);
+    let quiet = render_seconds(&mut synth, 0.5);
+    assert!(quiet.iter().all(|s| s.is_finite()));
+    assert_eq!(peak(&quiet), 0.0, "empty ring must be silent");
+    note_off(&mut synth, 0, 1);
+    let _ = render_seconds(&mut synth, 0.5);
+
+    // Feed a 220 Hz sine (at 44.1 kHz, exercising the resampler) and ask for 440 Hz.
+    synth.handle(SynthCommand::AudioChunk { layer: LayerId(0), chunk: sine_chunk(220.0, 44_100, 1.5, 0.5) });
+    assert!(synth.take_recycled_audio().is_some());
+    assert!(synth.take_recycled_audio().is_none());
+    note_on(&mut synth, 0, 2, 440.0, 1.0);
+    let out = render_seconds(&mut synth, 1.5);
+    assert!(out.iter().all(|s| s.is_finite()));
+    assert!((synth.layer_source_pitch(LayerId(0)) - 220.0).abs() < 5.0, "source pitch {}", synth.layer_source_pitch(LayerId(0)));
+    let mono = left(&out[out.len() / 3..]);
+    assert!(rms(&mono) > 0.02, "grains should be audible: rms {}", rms(&mono));
+    let f = zero_crossing_hz(&mono, SR);
+    assert!((f - 440.0).abs() / 440.0 < 0.05, "pitch-following grains measured {f} Hz, wanted 440");
+
+    // Without pitch following the source plays at its own pitch.
+    set_instrument(&mut synth, 1, grain_inst(0.0));
+    synth.handle(SynthCommand::AudioChunk { layer: LayerId(1), chunk: sine_chunk(220.0, 48_000, 1.5, 0.5) });
+    note_on(&mut synth, 1, 3, 880.0, 1.0);
+    synth.handle(SynthCommand::SetLayerParam { layer: LayerId(0), param: sonder_core::LayerParam::Mute(true) });
+    let _ = render_seconds(&mut synth, 0.3);
+    let out = render_seconds(&mut synth, 1.0);
+    let f = zero_crossing_hz(&left(&out), SR);
+    assert!((f - 220.0).abs() / 220.0 < 0.05, "unpitched grains measured {f} Hz, wanted 220");
+    // Boxes sent to a bad layer still come back.
+    synth.handle(SynthCommand::AudioChunk { layer: LayerId(99), chunk: sine_chunk(220.0, 48_000, 0.1, 0.5) });
+    assert!(synth.take_recycled_audio().is_some());
+    assert_eq!(synth.leaked_boxes(), 0);
+}
+
+#[test]
+fn string_wave_is_in_tune_through_the_synth() {
+    for hz in [110.0f32, 440.0, 880.0] {
+        let mut synth = Synth::new(SR, 1);
+        synth.handle(SynthCommand::SetEffects(Box::new(no_effects())));
+        set_instrument(&mut synth, 0, Instrument { osc: vec![Osc { wave: Wave::String, model: Model { damping: 0.2, brightness: 0.3, ..Model::default() }, ..Osc::default() }], ..dry_sine() });
+        note_on(&mut synth, 0, 1, hz, 1.0);
+        let out = render_seconds(&mut synth, 0.8);
+        assert!(out.iter().all(|s| s.is_finite()));
+        let mono = left(&out[out.len() / 2..]);
+        assert!(rms(&mono) > 1e-3, "{hz}: string should still ring");
+        // Autocorrelation around the expected period (the string is rich in harmonics).
+        let lo = (SR / (hz * 1.3)) as usize;
+        let hi = (SR / (hz * 0.7)) as usize;
+        let n = mono.len() - hi - 1;
+        let corr = |lag: usize| (0..n).map(|i| mono[i] * mono[i + lag]).sum::<f32>();
+        let (mut best, mut best_c) = (lo, f32::MIN);
+        for lag in lo..=hi {
+            let c = corr(lag);
+            if c > best_c {
+                best_c = c;
+                best = lag;
+            }
+        }
+        let (cm, c0, cp) = (corr(best - 1), corr(best), corr(best + 1));
+        let d = cm - 2.0 * c0 + cp;
+        let f = SR / (best as f32 + if d.abs() > 1e-9 { 0.5 * (cm - cp) / d } else { 0.0 });
+        assert!((f - hz).abs() / hz < 0.01, "{hz} Hz string measured {f}");
+    }
+}
+
+#[test]
+fn modal_wave_decays_for_both_stiffness_extremes() {
+    for stiffness in [0.0f32, 1.0] {
+        let mut synth = Synth::new(SR, 1);
+        synth.handle(SynthCommand::SetEffects(Box::new(no_effects())));
+        set_instrument(
+            &mut synth,
+            0,
+            Instrument { osc: vec![Osc { wave: Wave::Modal, model: Model { stiffness, modes: 32, damping: 0.3, ..Model::default() }, ..Osc::default() }], ..dry_sine() },
+        );
+        note_on(&mut synth, 0, 1, 330.0, 1.0);
+        let out = render_seconds(&mut synth, 3.0);
+        assert!(out.iter().all(|s| s.is_finite()), "stiffness {stiffness}: NaN");
+        let early = peak(&out[..out.len() / 10]);
+        let late = peak(&out[out.len() * 9 / 10..]);
+        assert!(early > 0.02, "stiffness {stiffness}: silent ({early})");
+        assert!(late < early * 0.15, "stiffness {stiffness}: no decay ({early} → {late})");
+    }
+}
+
+#[test]
+fn glue_compressor_reduces_crest_factor() {
+    let bursty = || -> Vec<f32> {
+        let mut buf = vec![0.0f32; 48_000 * 4];
+        for (i, s) in buf.iter_mut().enumerate() {
+            let t = (i / 2) as f32 / SR;
+            let env = if (t * 2.0).fract() < 0.15 { 0.6 } else { 0.06 };
+            *s = (t * 220.0 * std::f32::consts::TAU).sin() * env;
+        }
+        buf
+    };
+    let crest = |buf: &[f32]| peak(buf) / rms(buf);
+    let run = |glue: f32| {
+        let mut m = MasterChain::new(SR);
+        m.configure(&MasterSettings { gain: 1.0, saturation: 0.0, ceiling_db: -0.1, target_lufs: None, glue });
+        let mut buf = bursty();
+        m.process(&mut buf);
+        assert!(buf.iter().all(|s| s.is_finite()));
+        (crest(&buf[buf.len() / 2..]), m.glue_reduction_db())
+    };
+    let (dry, _) = run(0.0);
+    let (wet, gr) = run(1.0);
+    assert!((dry - crest(&bursty()[48_000 * 2..])).abs() < 1e-3, "glue 0 must be transparent");
+    assert!(wet < dry * 0.9, "glue should lower the crest factor: dry {dry} wet {wet}");
+    assert!(gr >= 0.0 && gr < 20.0);
+}
+
+#[test]
+fn loudness_rider_converges_on_target() {
+    let target = -20.0;
+    let mut m = MasterChain::new(SR);
+    m.configure(&MasterSettings { gain: 1.0, saturation: 0.0, ceiling_db: -0.1, target_lufs: Some(target), glue: 0.0 });
+    assert_eq!(m.lufs(), sonder_dsp::master::SILENCE_LUFS);
+    // Silence is gated: the rider must not move.
+    let mut buf = vec![0.0f32; 48_000 * 2 * 4];
+    m.process(&mut buf);
+    assert_eq!(m.rider_db(), 0.0);
+    // A steady tone about 6 dB too quiet: the rider must bring it to within ±1 dB.
+    let mut phase = 0.0f32;
+    let mut lufs_path = Vec::new();
+    for _ in 0..40 {
+        for f in buf.chunks_mut(2) {
+            phase += 440.0 / SR;
+            let s = (phase * std::f32::consts::TAU).sin() * 0.05;
+            f[0] = s;
+            f[1] = s;
+        }
+        m.process(&mut buf);
+        lufs_path.push(m.lufs());
+    }
+    let last = *lufs_path.last().unwrap();
+    assert!((last - target).abs() < 1.0, "rider ended at {last} LUFS (target {target}); path {lufs_path:?}");
+    assert!(m.rider_db() > 3.0 && m.rider_db() <= 12.0, "rider gain {}", m.rider_db());
+    // Speed limit: no more than ~0.5 dB per rendered second, allowing one rider step of slack.
+    for w in lufs_path.windows(2).skip(2) {
+        assert!((w[1] - w[0]).abs() <= 0.55, "rider moved too fast: {} → {}", w[0], w[1]);
+    }
+    // The master output through the synth exposes the same meter.
+    let mut synth = Synth::new(SR, 1);
+    assert_eq!(synth.master_lufs(), sonder_dsp::master::SILENCE_LUFS);
+    set_instrument(&mut synth, 0, dry_sine());
+    note_on(&mut synth, 0, 1, 220.0, 1.0);
+    let _ = render_seconds(&mut synth, 1.0);
+    assert!(synth.master_lufs() > -40.0 && synth.master_lufs() < 0.0, "{}", synth.master_lufs());
 }
 
 #[test]

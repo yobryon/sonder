@@ -9,6 +9,7 @@ default = ["app.bsky.feed.post"]
 
 [spec]
 kind = "websocket"
+caption = "{lang} post, {length} chars"
 url = "wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections={collections:%s|&wantedCollections=}"
 filter = ".commit.operation==create"
 events_on = "every"

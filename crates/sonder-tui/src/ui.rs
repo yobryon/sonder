@@ -40,7 +40,7 @@ const ROLL_MIDI: (f64, f64) = (36.0, 96.0);
 
 /// Static part of the footer legend.
 pub const KEY_LEGEND: &str =
-    "q quit · space pause · [ ] tempo · - = density · k/K transpose · n/N mode · c chord · m/s mute/solo · ^s save · w web · ? help";
+    "q quit · space pause · [ ] tempo · - = density · k/K transpose · o/O mode · c chord · n section · m/s mute/solo · ^s save · w web · ? help";
 
 fn block(title: &str) -> Block<'_> {
     Block::default()
@@ -171,6 +171,34 @@ fn draw_top(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
                 .add_modifier(Modifier::BOLD),
         ),
     ]);
+    // Musical form: section name, arc position, motif (empty until the form engine runs).
+    let f = &snap.form;
+    if !f.section.is_empty() || !f.motif.is_empty() {
+        spans.push(sep.clone());
+        if !f.section.is_empty() {
+            spans.push(Span::styled(
+                f.section.to_uppercase(),
+                Style::default().fg(Color::Indexed(81)).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(
+            mini_gauge(f.arc, 6),
+            Style::default().fg(Color::Indexed(81)),
+        ));
+        if f.bars_in_section > 0 {
+            spans.push(Span::styled(
+                format!(" {}/{}", f.bar_in_section + 1, f.bars_in_section),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        if !f.motif.is_empty() {
+            spans.push(Span::styled(
+                format!(" motif {}", f.motif),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+    }
     if wide {
         spans.extend([
             sep.clone(),
@@ -209,11 +237,28 @@ fn draw_top(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
             Style::default().fg(Color::Red),
         ));
     }
-    let note = Line::from(Span::styled(
+    // Second line: the conductor's note, the form's note, and the latest caption.
+    let mut note = vec![Span::styled(
         format!(" {}", snap.conductor_note),
         Style::default().fg(Color::DarkGray),
-    ));
-    let text = Text::from(vec![Line::from(spans), note]);
+    )];
+    if !snap.form.note.is_empty() {
+        note.push(sep.clone());
+        note.push(Span::styled(
+            snap.form.note.clone(),
+            Style::default().fg(Color::Indexed(81)),
+        ));
+    }
+    if let Some(cap) = snap.captions.iter().rev().find(|c| !c.text.is_empty()) {
+        note.push(sep);
+        let style = if cap.importance >= 0.8 {
+            Style::default().fg(Color::Indexed(220)).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Indexed(220))
+        };
+        note.push(Span::styled(format!("“{}”", cap.text), style));
+    }
+    let text = Text::from(vec![Line::from(spans), Line::from(note)]);
     let widget = Paragraph::new(text).block(
         Block::default()
             .borders(Borders::BOTTOM)
@@ -710,7 +755,11 @@ fn draw_events(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot, state: 
                 Span::styled(bar, Style::default().fg(Color::Indexed(209))),
                 Span::raw(" "),
                 Span::styled(
-                    summarize_attrs(&ev.attrs, 2),
+                    if ev.label.is_empty() {
+                        summarize_attrs(&ev.attrs, 2)
+                    } else {
+                        ev.label.clone()
+                    },
                     Style::default().fg(Color::Gray),
                 ),
             ])
@@ -819,8 +868,9 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, web_url: Option<&str>) {
         ("[ / ]", "tempo -2 / +2 bpm"),
         ("- / =", "density -0.1 / +0.1"),
         ("k / K", "transpose +1 / -1 semitone"),
-        ("n / N", "next / previous mode"),
+        ("o / O", "next / previous mode"),
         ("c", "force chord change"),
+        ("n", "jump to the next form section"),
         ("w", "open the web UI in a browser"),
         ("Ctrl-S", "save the current scene to <scene>.toml"),
         ("?", "toggle this help"),
@@ -962,6 +1012,18 @@ mod tests {
                 brightness: 0.8,
             },
             conductor_note: "energy 0.62 (driven by traffic.density), tension rising".into(),
+            form: sonder_core::FormSnapshot {
+                section: "build".into(),
+                bar_in_section: 3,
+                bars_in_section: 16,
+                arc: 0.4,
+                motif: "B".into(),
+                note: "build · motif B".into(),
+            },
+            captions: vec![
+                sonder_core::Caption { at: 10.0, layer: Some(LayerId(2)), text: "older".into(), importance: 0.2 },
+                sonder_core::Caption { at: 12.0, layer: Some(LayerId(2)), text: "a 4.1 off Honshu rang the bell".into(), importance: 0.9 },
+            ],
             layers: vec![
                 mk_layer(0, "traffic", Role::Pad, "pad.glass", "density", 0.4),
                 mk_layer(1, "headlights", Role::Pluck, "pluck.nylon", "rate", 0.7),
@@ -1035,6 +1097,11 @@ mod tests {
         assert!(text.contains("12.3"), "{text}");
         assert!(text.contains("62 bpm"), "{text}");
         assert!(text.contains("3 underruns"), "{text}");
+        assert!(text.contains("BUILD"), "{text}");
+        assert!(text.contains("4/16"), "{text}");
+        assert!(text.contains("motif B"), "{text}");
+        assert!(text.contains("a 4.1 off Honshu"), "{text}");
+        assert!(text.contains("n section"), "{text}");
         for name in ["traffic", "headlights", "quakes"] {
             assert!(text.contains(name), "missing layer {name}\n{text}");
         }

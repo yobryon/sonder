@@ -106,9 +106,10 @@ pub fn map_key(key: &KeyEvent) -> Action {
         }
         KeyCode::Char('k') => Action::Command(UserCommand::Transpose { semitones: 1 }),
         KeyCode::Char('K') => Action::Command(UserCommand::Transpose { semitones: -1 }),
-        KeyCode::Char('n') => Action::Command(UserCommand::NextMode { backwards: false }),
-        KeyCode::Char('N') => Action::Command(UserCommand::NextMode { backwards: true }),
+        KeyCode::Char('o') => Action::Command(UserCommand::NextMode { backwards: false }),
+        KeyCode::Char('O') => Action::Command(UserCommand::NextMode { backwards: true }),
         KeyCode::Char('c') => Action::Command(UserCommand::NextChord),
+        KeyCode::Char('n') => Action::Command(UserCommand::NextSection),
         KeyCode::Char('m') => Action::MuteSelected,
         KeyCode::Char('s') => Action::SoloSelected,
         KeyCode::Char('w') => Action::OpenWeb,
@@ -333,8 +334,16 @@ mod tests {
             Action::Command(UserCommand::Transpose { semitones: -1 })
         );
         assert_eq!(
-            map_key(&press(KeyCode::Char('N'), KeyModifiers::SHIFT)),
+            map_key(&press(KeyCode::Char('O'), KeyModifiers::SHIFT)),
             Action::Command(UserCommand::NextMode { backwards: true })
+        );
+        assert_eq!(
+            map_key(&press(KeyCode::Char('o'), KeyModifiers::NONE)),
+            Action::Command(UserCommand::NextMode { backwards: false })
+        );
+        assert_eq!(
+            map_key(&press(KeyCode::Char('n'), KeyModifiers::NONE)),
+            Action::Command(UserCommand::NextSection)
         );
         assert_eq!(
             map_key(&press(KeyCode::Char(' '), KeyModifiers::NONE)),

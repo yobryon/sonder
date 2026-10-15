@@ -5,7 +5,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use sonder_core::{Chorus, Drum, Effects, Instrument, LayerId, LayerParam, NoteId, Osc, SynthCommand, Table, Wave};
+use sonder_core::{AudioChunk, Chorus, Drum, Effects, Instrument, LayerId, LayerParam, NoteId, Osc, SynthCommand, Table, Wave};
 use sonder_dsp::{presets, Synth};
 
 struct Counting;
@@ -52,9 +52,16 @@ fn render_does_not_allocate_or_free() {
     // Make sure the chorus insert and every wavetable are live on some layer.
     synth.handle(SynthCommand::SetInstrument { layer: LayerId(0), instrument: Box::new(presets::get("pad.chorus").unwrap()) });
     synth.handle(SynthCommand::SetInstrument { layer: LayerId(1), instrument: Box::new(presets::get("keys.organ").unwrap()) });
+    // v2 waves: granular (two layers, one fed at a foreign rate), string and modal.
+    for (l, name) in [(2, "grain.ocean"), (3, "grain.voice"), (4, "string.steel"), (5, "modal.bell"), (6, "modal.membrane")] {
+        synth.handle(SynthCommand::SetInstrument { layer: LayerId(l), instrument: Box::new(presets::get(name).unwrap()) });
+    }
     synth.handle(SynthCommand::SetEffects(Box::<Effects>::default()));
     let mut out = vec![0.0f32; 512 * 2];
     synth.render(&mut out);
+    let chunk = |rate: u32, frames: usize, hz: f32| -> Box<AudioChunk> {
+        Box::new(AudioChunk { rate, samples: (0..frames).map(|i| (i as f32 / rate as f32 * hz * std::f32::consts::TAU).sin() * 0.4).collect() })
+    };
 
     // Pre-build every command and instrument box outside the counted region.
     let total_blocks = (10.0 * sr / 512.0) as usize;
@@ -111,6 +118,21 @@ fn render_does_not_allocate_or_free() {
         if b % 400 == 399 {
             v.push(SynthCommand::AllNotesOff { layer });
         }
+        // Live audio for the granular layers (a 48 kHz feed and a 44.1 kHz one that must
+        // be resampled), plus a chunk to a nonexistent layer and an empty chunk.
+        if b % 3 == 0 {
+            v.push(SynthCommand::AudioChunk { layer: LayerId(2), chunk: chunk(48_000, 1536, 110.0 + (b % 7) as f32 * 30.0) });
+            v.push(SynthCommand::AudioChunk { layer: LayerId(3), chunk: chunk(44_100, 1411, 220.0) });
+        }
+        if b % 101 == 0 {
+            v.push(SynthCommand::AudioChunk { layer: LayerId(200), chunk: chunk(48_000, 64, 220.0) });
+            v.push(SynthCommand::AudioChunk { layer: LayerId(3), chunk: Box::new(AudioChunk { rate: 0, samples: Vec::new() }) });
+        }
+        if b % 83 == 0 {
+            // Cycle the v2 presets across layers so every new wave gets fresh notes.
+            let v2 = ["grain.ocean", "grain.voice", "string.nylon", "string.steel", "modal.bar", "modal.bell", "modal.membrane"];
+            v.push(SynthCommand::SetInstrument { layer: LayerId(((b / 83) % layers) as u16), instrument: Box::new(presets::get(v2[(b / 83) % v2.len()]).unwrap()) });
+        }
         if b == total_blocks / 2 {
             v.push(SynthCommand::Panic);
         }
@@ -119,6 +141,7 @@ fn render_does_not_allocate_or_free() {
     // Room to park recycled boxes without freeing them inside the counted region.
     let mut recycled: Vec<Box<Instrument>> = Vec::with_capacity(1024);
     let mut recycled_fx: Vec<Box<Effects>> = Vec::with_capacity(1024);
+    let mut recycled_audio: Vec<Box<AudioChunk>> = Vec::with_capacity(4096);
     let mut feedback_count = 0usize;
 
     ALLOCS.store(0, Ordering::SeqCst);
@@ -139,6 +162,9 @@ fn render_does_not_allocate_or_free() {
         while let Some(b) = synth.take_recycled_effects() {
             recycled_fx.push(b);
         }
+        while let Some(b) = synth.take_recycled_audio() {
+            recycled_audio.push(b);
+        }
     }
     COUNTING.store(false, Ordering::SeqCst);
     let allocs = ALLOCS.load(Ordering::SeqCst);
@@ -151,6 +177,8 @@ fn render_does_not_allocate_or_free() {
     assert!(feedback_count > 0);
     assert!(!recycled.is_empty());
     assert!(!recycled_fx.is_empty());
+    assert!(recycled_audio.len() >= total_blocks / 3 * 2, "audio boxes must all come back ({})", recycled_audio.len());
     assert_eq!(synth.leaked_boxes(), 0);
+    assert!(synth.master_lufs().is_finite());
     assert!(out.iter().all(|s| s.is_finite()));
 }

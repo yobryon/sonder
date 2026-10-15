@@ -9,6 +9,7 @@ default = ["BTC/USD"]
 
 [spec]
 kind = "websocket"
+caption = "{size} {product} {side} on Kraken"
 url = "wss://ws.kraken.com/v2"
 subscribe = { method = "subscribe", params = { channel = "trade", symbol = "{symbols}" } }
 filter = ".channel==trade"

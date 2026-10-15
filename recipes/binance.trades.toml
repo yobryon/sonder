@@ -15,6 +15,7 @@ default = "stream.binance.com:9443"
 
 [spec]
 kind = "websocket"
+caption = "{size} {product} on Binance"
 url = "wss://{host}/stream?streams={symbols:%s@trade|/}"
 data_path = ".data"
 events_on = "every"

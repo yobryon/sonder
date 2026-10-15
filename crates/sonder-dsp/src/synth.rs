@@ -3,11 +3,12 @@
 //! [`Synth::new`]; [`Synth::handle`] and [`Synth::render`] never allocate,
 //! lock or panic on bad input.
 
-use sonder_core::{Effects, Instrument, LayerId, LayerParam, Meter, NoteId, SynthCommand, SynthFeedback};
+use sonder_core::{AudioChunk, Effects, Instrument, LayerId, LayerParam, Meter, NoteId, SynthCommand, SynthFeedback, Wave};
 
 use crate::chorus::Chorus;
 use crate::delay::StereoDelay;
 use crate::drums::{DrumHit, DrumVoice};
+use crate::grain::AudioRing;
 use crate::master::MasterChain;
 use crate::math::{onepole_coef, pan_gains, sane};
 use crate::reverb::Plate;
@@ -22,6 +23,7 @@ pub const DRUM_VOICES: usize = 16;
 const FEEDBACK_CAPACITY: usize = 1024;
 const RECYCLE_CAPACITY: usize = 512;
 const EFFECTS_RECYCLE_CAPACITY: usize = 64;
+const AUDIO_RECYCLE_CAPACITY: usize = 1024;
 /// Meter ballistics: per-block decay of the displayed value (~300 ms fall at 48 kHz).
 const METER_DECAY_SECONDS: f32 = 0.3;
 /// Mute fade time.
@@ -71,6 +73,10 @@ struct Layer {
     last_midi: Option<f32>,
     /// Layer-bus chorus insert (bypassed unless the instrument asks for it).
     chorus: Chorus,
+    /// Live audio for `Wave::Grain` voices.
+    ring: AudioRing,
+    /// Does the current patch read the ring (pitch tracking only runs when needed)?
+    uses_grain: bool,
 }
 
 impl Layer {
@@ -78,6 +84,8 @@ impl Layer {
         let patch = Patch::default();
         Self {
             chorus: Chorus::new(sr),
+            ring: AudioRing::new(sr),
+            uses_grain: false,
             instrument: None,
             gain: Smoothed::new(1.0),
             pan: Smoothed::new(0.5),
@@ -197,6 +205,7 @@ pub struct Synth {
     feedback: FeedbackQueue,
     recycle: RecycleRing<Instrument>,
     recycle_fx: RecycleRing<Effects>,
+    recycle_audio: RecycleRing<AudioChunk>,
     age: u64,
     seed: u32,
     smooth_coef: f32,
@@ -213,7 +222,7 @@ impl Synth {
         let sr = if sample_rate.is_finite() { sample_rate.clamp(8000.0, 384_000.0) } else { 48_000.0 };
         let max_layers = max_layers.clamp(1, 256);
         let mut voices = Vec::with_capacity(MAX_VOICES);
-        voices.resize_with(MAX_VOICES, Voice::default);
+        voices.resize_with(MAX_VOICES, || Voice::new(sr));
         let mut drums = Vec::with_capacity(DRUM_VOICES);
         drums.resize_with(DRUM_VOICES, DrumVoice::default);
         let mut layers = Vec::with_capacity(max_layers);
@@ -243,6 +252,7 @@ impl Synth {
             feedback: FeedbackQueue::new(FEEDBACK_CAPACITY),
             recycle: RecycleRing::new(RECYCLE_CAPACITY),
             recycle_fx: RecycleRing::new(EFFECTS_RECYCLE_CAPACITY),
+            recycle_audio: RecycleRing::new(AUDIO_RECYCLE_CAPACITY),
             age: 0,
             seed: 0x2545_F491,
             smooth_coef: onepole_coef(0.02, block_rate),
@@ -275,6 +285,17 @@ impl Synth {
         self.master_meter.clone()
     }
 
+    /// Short-term (3 s) loudness of the master output, LUFS
+    /// ([`crate::master::SILENCE_LUFS`] when silent).
+    pub fn master_lufs(&self) -> f32 {
+        self.master.lufs()
+    }
+
+    /// Estimated source pitch of a layer's live audio ring, Hz (220 when empty).
+    pub fn layer_source_pitch(&self, layer: LayerId) -> f32 {
+        self.layers.get(layer.0 as usize).map(|l| l.ring.pitch_hz()).unwrap_or(crate::grain::FALLBACK_PITCH_HZ)
+    }
+
     pub fn layer_meter(&self, layer: LayerId) -> Meter {
         self.layers.get(layer.0 as usize).map(|l| l.meter.clone()).unwrap_or_default()
     }
@@ -296,9 +317,14 @@ impl Synth {
         self.recycle_fx.pop()
     }
 
+    /// Audio-chunk boxes the control thread should drop (or refill and resend).
+    pub fn take_recycled_audio(&mut self) -> Option<Box<AudioChunk>> {
+        self.recycle_audio.pop()
+    }
+
     /// Boxes leaked because the recycle rings overflowed (diagnostic).
     pub fn leaked_boxes(&self) -> u32 {
-        self.recycle.leaked + self.recycle_fx.leaked
+        self.recycle.leaked + self.recycle_fx.leaked + self.recycle_audio.leaked
     }
 
     /// Feedback messages dropped because the queue overflowed (diagnostic).
@@ -383,6 +409,7 @@ impl Synth {
                 match self.layers.get_mut(layer.0 as usize) {
                     Some(l) => {
                         l.patch = Patch::from_instrument(&instrument);
+                        l.uses_grain = l.patch.osc.iter().take(l.patch.n_osc).any(|o| o.wave == Wave::Grain);
                         l.chorus.configure(&instrument.chorus);
                         if let Some(old) = l.instrument.replace(instrument) {
                             self.recycle.push(old);
@@ -416,10 +443,11 @@ impl Synth {
                     self.recycle_fx.push(old);
                 }
             }
-            // Placeholder until the granular ring lands (v2): nothing sends these yet, and
-            // the box must not be freed on the audio thread, so it is leaked, not dropped.
-            SynthCommand::AudioChunk { chunk, .. } => {
-                std::mem::forget(chunk);
+            SynthCommand::AudioChunk { layer, chunk } => {
+                if let Some(l) = self.layers.get_mut(layer.0 as usize) {
+                    l.ring.write(chunk.rate, &chunk.samples);
+                }
+                self.recycle_audio.push(chunk);
             }
             SynthCommand::Panic => {
                 for v in self.voices.iter_mut() {
@@ -539,6 +567,9 @@ impl Synth {
         // Smooth layer params and build per-layer modulation.
         let coef = self.smooth_coef;
         for l in &mut self.layers {
+            if l.uses_grain {
+                l.ring.update_pitch();
+            }
             l.gain.step(coef);
             l.pan.step(coef);
             l.cutoff_oct.step(coef);
@@ -562,7 +593,7 @@ impl Synth {
             let l = &self.layers[li];
             let m = LayerMod { cutoff_octaves: l.cutoff_oct.cur, resonance: l.resonance, texture: l.texture.cur };
             let bus = &mut self.layer_bus[li * frames2..(li + 1) * frames2];
-            if !v.render(bus, &m) {
+            if !v.render(bus, &m, &l.ring) {
                 self.feedback.push(SynthFeedback::NoteEnded { layer: v.layer, note: v.note });
             }
         }

@@ -66,6 +66,14 @@ enum Cmd {
     Show { scene: String },
     /// List MIDI output ports (for --midi).
     MidiPorts,
+    /// Compose a scene from a prompt with Claude (needs ANTHROPIC_API_KEY).
+    Compose(ComposeArgs),
+    /// Print the composer catalog (source kinds, recipes, presets, system prompt).
+    Catalog {
+        /// JSON (what `scripts/build-site.sh` writes to site/catalog.json); default: the system prompt as text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -252,6 +260,15 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Cmd::Compose(args) => rt.block_on(compose(args)),
+        Cmd::Catalog { json } => {
+            if json {
+                println!("{}", catalog_json_native());
+            } else {
+                print!("{}", system_prompt_native());
+            }
+            Ok(())
+        }
         Cmd::Show { scene } => {
             let (_, src) = sonder_engine::scenes::BUILTIN_SCENE_SOURCES
                 .iter()
@@ -397,4 +414,412 @@ fn init_logging(filter: &str, file: Option<&std::path::Path>, tui: bool) -> anyh
         None => tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init(),
     }
     Ok(())
+}
+
+// ── compose: LLM scene composer ──────────────────────────────────────────────────────
+
+use sonder_engine::compose_prompt::{self, ParamLike, SourceInfoLike};
+
+/// The model `sonder compose` uses unless `--model` says otherwise.
+const DEFAULT_COMPOSE_MODEL: &str = "claude-opus-5-5";
+const MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Models that accept the server-side refusal fallback (`fallbacks: "default"`).
+const FALLBACK_MODELS: &[&str] = &["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"];
+
+#[derive(Args, Clone)]
+struct ComposeArgs {
+    /// What to compose, e.g. "a slow, dark piece from live earthquakes and the solar wind".
+    prompt: String,
+    /// Write the scene here (default: print to stdout).
+    #[arg(long, short)]
+    out: Option<PathBuf>,
+    /// Claude model id.
+    #[arg(long, default_value = DEFAULT_COMPOSE_MODEL)]
+    model: String,
+    /// Start playing the composed scene (TUI + web UI) once it validates.
+    #[arg(long)]
+    play: bool,
+    /// How many times to send validation errors back for a fix.
+    #[arg(long, default_value_t = 3)]
+    retries: u32,
+    /// Don't request the server-side refusal fallback (enabled by default on models that support it).
+    #[arg(long)]
+    no_fallback: bool,
+}
+
+/// The live source registry in prompt form.
+fn source_catalog() -> Vec<SourceInfoLike> {
+    sonder_engine::live::registry()
+        .catalog()
+        .into_iter()
+        .map(|i| SourceInfoLike {
+            kind: i.kind.to_string(),
+            summary: i.summary.to_string(),
+            params: i.params.iter().map(|p| ParamLike::new(p.name, p.summary, p.default.map(str::to_string))).collect(),
+            channels: i.channels.iter().map(|c| c.to_string()).collect(),
+            events: i.events.iter().map(|e| e.to_string()).collect(),
+            network: i.network,
+        })
+        .collect()
+}
+
+fn catalog_json_native() -> String {
+    compose_prompt::catalog_json(&source_catalog())
+}
+
+fn system_prompt_native() -> String {
+    compose_prompt::system_prompt(&source_catalog(), &compose_prompt::recipes_catalog(), &compose_prompt::presets_catalog())
+}
+
+/// Pull the scene out of a model reply: the first fenced ```toml block, else the first fenced
+/// block of any language, else the whole text if it looks like a scene.
+fn extract_toml_block(text: &str) -> Option<String> {
+    let mut best: Option<(bool, String)> = None;
+    let mut rest = text;
+    while let Some(start) = rest.find("```") {
+        let after = &rest[start + 3..];
+        let nl = after.find('\n')?;
+        let lang = after[..nl].trim().to_ascii_lowercase();
+        let body = &after[nl + 1..];
+        let Some(end) = body.find("```") else { break };
+        let inner = body[..end].trim_end().to_string() + "\n";
+        let is_toml = lang == "toml";
+        if is_toml {
+            return Some(inner);
+        }
+        if best.is_none() {
+            best = Some((false, inner));
+        }
+        rest = &body[end + 3..];
+    }
+    if let Some((_, b)) = best {
+        return Some(b);
+    }
+    let t = text.trim();
+    (t.contains("[[layer]]") && t.contains("[conductor]")).then(|| format!("{t}\n"))
+}
+
+/// The follow-up user message that asks for a fix.
+fn retry_message(errs: &[String]) -> String {
+    let mut m = String::from("The scene did not validate. Fix every error below and return the WHOLE corrected scene as a single ```toml block, nothing else.\n\nErrors:\n");
+    for e in errs {
+        m.push_str("- ");
+        m.push_str(e);
+        m.push('\n');
+    }
+    m
+}
+
+/// Parse + full validation, with parse errors in the same `Vec<String>` shape.
+fn validate_toml(toml_src: &str) -> Result<Scene, Vec<String>> {
+    let scene = sonder_engine::parse_scene(toml_src).map_err(|e| vec![format!("{e:#}")])?;
+    sonder_engine::validate(&scene)?;
+    Ok(scene)
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct Usage {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+}
+
+impl Usage {
+    fn add(&mut self, o: Usage) {
+        self.input += o.input;
+        self.output += o.output;
+        self.cache_read += o.cache_read;
+        self.cache_write += o.cache_write;
+    }
+}
+
+/// (input, output) USD per million tokens, first-party API list prices.
+fn price_per_mtok(model: &str) -> Option<(f64, f64)> {
+    Some(match model {
+        "claude-opus-5-5" => (4.0, 20.0),
+        "claude-fable-5-1" | "claude-fable-5" | "claude-mythos-5-1" => (10.0, 50.0),
+        "claude-opus-5" | "claude-opus-4-8" | "claude-opus-4-7" | "claude-opus-4-6" => (5.0, 25.0),
+        "claude-sonnet-5-5" | "claude-sonnet-5" => (2.0, 10.0),
+        "claude-sonnet-4-6" => (3.0, 15.0),
+        "claude-haiku-4-5" => (1.0, 5.0),
+        _ => return None,
+    })
+}
+
+/// Cost estimate in USD. Cache writes bill at 1.25× input, cache reads at ~0.1× (0.05× on the
+/// 5.x models; this errs high).
+fn cost_estimate(model: &str, u: &Usage) -> Option<f64> {
+    let (i, o) = price_per_mtok(model)?;
+    let m = 1e-6;
+    Some(u.input as f64 * i * m + u.cache_write as f64 * i * 1.25 * m + u.cache_read as f64 * i * 0.1 * m + u.output as f64 * o * m)
+}
+
+/// A parsed Messages API reply.
+struct Reply {
+    text: String,
+    stop_reason: String,
+    usage: Usage,
+    /// `stop_details.explanation` on a refusal.
+    refusal: Option<String>,
+}
+
+fn parse_reply(v: &serde_json::Value) -> Reply {
+    let text = v["content"]
+        .as_array()
+        .map(|blocks| blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(""))
+        .unwrap_or_default();
+    let u = &v["usage"];
+    let n = |k: &str| u[k].as_u64().unwrap_or(0);
+    Reply {
+        text,
+        stop_reason: v["stop_reason"].as_str().unwrap_or("").to_string(),
+        usage: Usage { input: n("input_tokens"), output: n("output_tokens"), cache_read: n("cache_read_input_tokens"), cache_write: n("cache_creation_input_tokens") },
+        refusal: v["stop_details"]["explanation"].as_str().map(str::to_string),
+    }
+}
+
+fn request_body(model: &str, system: &str, messages: &[serde_json::Value], fallback: bool) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": model,
+        "max_tokens": 16000,
+        "system": [{ "type": "text", "text": system, "cache_control": { "type": "ephemeral" } }],
+        "messages": messages,
+    });
+    if fallback {
+        body["fallbacks"] = serde_json::Value::String("default".into());
+    }
+    body
+}
+
+async fn call_messages(client: &reqwest::Client, key: &str, body: &serde_json::Value, fallback: bool) -> anyhow::Result<Reply> {
+    let mut req = client
+        .post(MESSAGES_URL)
+        .header("x-api-key", key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(body);
+    if fallback {
+        req = req.header("anthropic-beta", "server-side-fallback-2026-07-01");
+    }
+    let resp = req.send().await.context("calling the Claude API")?;
+    let status = resp.status();
+    let v: serde_json::Value = resp.json().await.context("reading the Claude API response")?;
+    if !status.is_success() {
+        let msg = v["error"]["message"].as_str().unwrap_or("(no message)");
+        let kind = v["error"]["type"].as_str().unwrap_or("error");
+        anyhow::bail!("Claude API {status}: {kind}: {msg}");
+    }
+    Ok(parse_reply(&v))
+}
+
+async fn compose(args: ComposeArgs) -> anyhow::Result<()> {
+    let key = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .context("ANTHROPIC_API_KEY is not set (export it, or create a key at console.anthropic.com)")?;
+    let fallback = !args.no_fallback && FALLBACK_MODELS.contains(&args.model.as_str());
+    let system = system_prompt_native();
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(600)).build()?;
+    let mut messages = vec![serde_json::json!({ "role": "user", "content": args.prompt })];
+    let mut total = Usage::default();
+    let mut scene_toml: Option<String> = None;
+    let mut last_errs: Vec<String> = Vec::new();
+
+    eprintln!(
+        "sonder compose: {} ({} chars of context{})",
+        args.model,
+        system.len(),
+        if fallback { ", refusal fallback on" } else { "" }
+    );
+    for attempt in 0..=args.retries {
+        if attempt > 0 {
+            eprintln!("sonder compose: attempt {}/{} — sending {} validation error(s) back", attempt + 1, args.retries + 1, last_errs.len());
+        }
+        let body = request_body(&args.model, &system, &messages, fallback);
+        let reply = call_messages(&client, &key, &body, fallback).await?;
+        total.add(reply.usage);
+        if reply.stop_reason == "refusal" {
+            anyhow::bail!("the model declined this request{}", reply.refusal.map(|e| format!(": {e}")).unwrap_or_default());
+        }
+        if reply.stop_reason == "max_tokens" {
+            eprintln!("sonder compose: warning: reply hit max_tokens; the scene may be cut off");
+        }
+        let errs = match extract_toml_block(&reply.text) {
+            None => vec!["reply contained no ```toml block".to_string()],
+            Some(toml_src) => match validate_toml(&toml_src) {
+                Ok(_) => {
+                    scene_toml = Some(toml_src);
+                    break;
+                }
+                Err(errs) => errs,
+            },
+        };
+        for e in &errs {
+            eprintln!("  invalid: {e}");
+        }
+        messages.push(serde_json::json!({ "role": "assistant", "content": reply.text }));
+        messages.push(serde_json::json!({ "role": "user", "content": retry_message(&errs) }));
+        last_errs = errs;
+    }
+
+    let cost = cost_estimate(&args.model, &total).map(|c| format!(" ≈ ${c:.4}")).unwrap_or_else(|| " (no price table for this model)".into());
+    eprintln!(
+        "sonder compose: tokens in {} (cache write {}, read {}), out {}{}",
+        total.input, total.cache_write, total.cache_read, total.output, cost
+    );
+    let Some(toml_src) = scene_toml else {
+        anyhow::bail!("no valid scene after {} attempt(s); last errors:\n  {}", args.retries + 1, last_errs.join("\n  "));
+    };
+
+    let path = match &args.out {
+        Some(p) => {
+            std::fs::write(p, &toml_src).with_context(|| format!("writing {}", p.display()))?;
+            eprintln!("sonder compose: wrote {}  —  sonder play {}", p.display(), p.display());
+            Some(p.clone())
+        }
+        None if args.play => {
+            let p = std::env::temp_dir().join(format!("sonder-compose-{}.toml", std::process::id()));
+            std::fs::write(&p, &toml_src)?;
+            eprintln!("sonder compose: scene saved to {}", p.display());
+            Some(p)
+        }
+        None => {
+            print!("{toml_src}");
+            None
+        }
+    };
+    if args.play {
+        let scene = path.expect("a path when playing").to_string_lossy().into_owned();
+        play(
+            PlayArgs {
+                scene,
+                web: 7777,
+                bind: "127.0.0.1".into(),
+                open: false,
+                no_audio: false,
+                pcm_stdout: false,
+                sample_rate: 48000,
+                seed: None,
+                midi: None,
+                source: SourceOverride::default(),
+            },
+            true,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod compose_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_toml_block_variants() {
+        let reply = "Here you go:\n\n```toml\nname = \"x\"\n[conductor]\nkey = \"D\"\n```\n\nEnjoy.";
+        assert_eq!(extract_toml_block(reply).unwrap(), "name = \"x\"\n[conductor]\nkey = \"D\"\n");
+        // A toml block wins over an earlier unlabelled one.
+        let two = "```\nnot it\n```\ntext\n```toml\nname = \"y\"\n```";
+        assert_eq!(extract_toml_block(two).unwrap(), "name = \"y\"\n");
+        // Unlabelled fence is accepted when there is nothing better.
+        assert_eq!(extract_toml_block("```\nname = \"z\"\n```").unwrap(), "name = \"z\"\n");
+        // Bare TOML that looks like a scene is accepted; prose is not.
+        assert!(extract_toml_block("[conductor]\nkey = \"D\"\n[[layer]]\nname = \"a\"").is_some());
+        assert!(extract_toml_block("Sorry, I cannot do that.").is_none());
+        assert!(extract_toml_block("```toml\nunterminated").is_none());
+    }
+
+    #[test]
+    fn retry_message_lists_errors() {
+        let m = retry_message(&["layer `a`: unknown instrument `pad.x`".into(), "conductor.mode `zz` is not a known mode".into()]);
+        assert!(m.starts_with("The scene did not validate."));
+        assert!(m.contains("- layer `a`: unknown instrument `pad.x`\n"));
+        assert!(m.contains("- conductor.mode `zz` is not a known mode\n"));
+        assert!(m.contains("```toml"));
+    }
+
+    #[test]
+    fn canned_reply_parses_and_validates() {
+        let canned = serde_json::json!({
+            "id": "msg_01", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "x"},
+                {"type": "text", "text": "```toml\nname = \"Test\"\n[conductor]\nkey = \"D\"\nmode = \"dorian\"\ntempo = 70\n\n[[layer]]\nname = \"bed\"\nrole = \"pad\"\ninstrument = \"pad.warm\"\nsource = { kind = \"synthetic.freeway\" }\nsignals.flow = \"norm(smooth(rate(event('*'), 20), 4))\"\nmap.energy = \"flow\"\n```"}
+            ],
+            "stop_reason": "end_turn", "stop_details": null,
+            "usage": {"input_tokens": 120, "output_tokens": 80, "cache_creation_input_tokens": 9000, "cache_read_input_tokens": 0}
+        });
+        let r = parse_reply(&canned);
+        assert_eq!(r.stop_reason, "end_turn");
+        assert_eq!(r.usage, Usage { input: 120, output: 80, cache_read: 0, cache_write: 9000 });
+        assert!(r.refusal.is_none());
+        let toml_src = extract_toml_block(&r.text).unwrap();
+        let scene = validate_toml(&toml_src).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(scene.layers.len(), 1);
+        // A bad scene produces errors we would send back.
+        let errs = validate_toml("[[layer]]\nname = \"a\"\ninstrument = \"nope\"\n").unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("unknown instrument")));
+        // Cost: 120·4 + 9000·4·1.25 + 80·20 per million.
+        let c = cost_estimate("claude-opus-5-5", &r.usage).unwrap();
+        assert!((c - (120.0 * 4.0 + 9000.0 * 5.0 + 80.0 * 20.0) * 1e-6).abs() < 1e-12);
+        assert!(cost_estimate("claude-unknown", &r.usage).is_none());
+    }
+
+    #[test]
+    fn refusal_reply_is_detected() {
+        let v = serde_json::json!({
+            "content": [], "stop_reason": "refusal",
+            "stop_details": {"type": "refusal", "category": "cyber", "explanation": "nope"},
+            "usage": {"input_tokens": 1, "output_tokens": 0}
+        });
+        let r = parse_reply(&v);
+        assert_eq!(r.stop_reason, "refusal");
+        assert_eq!(r.refusal.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn request_body_shape() {
+        let msgs = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        let b = request_body("claude-opus-5-5", "SYS", &msgs, true);
+        assert_eq!(b["model"], "claude-opus-5-5");
+        assert_eq!(b["system"][0]["text"], "SYS");
+        assert_eq!(b["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(b["fallbacks"], "default");
+        assert!(b.get("thinking").is_none(), "thinking is left to the model's adaptive default");
+        let b = request_body("claude-haiku-4-5", "SYS", &msgs, false);
+        assert!(b.get("fallbacks").is_none());
+    }
+
+    #[test]
+    fn catalog_json_has_live_registry() {
+        let v: serde_json::Value = serde_json::from_str(&catalog_json_native()).unwrap();
+        let kinds: Vec<&str> = v["sources"].as_array().unwrap().iter().filter_map(|s| s["kind"].as_str()).collect();
+        assert!(kinds.contains(&"synthetic.freeway") && kinds.contains(&"usgs.earthquakes"), "{kinds:?}");
+        assert!(v["system_prompt"].as_str().unwrap().contains("usgs.earthquakes"));
+    }
+
+    /// Real call. `cargo test -p sonder -- --ignored` with ANTHROPIC_API_KEY set.
+    #[test]
+    #[ignore]
+    fn live_compose_once() {
+        if std::env::var("ANTHROPIC_API_KEY").map(|k| k.is_empty()).unwrap_or(true) {
+            eprintln!("ANTHROPIC_API_KEY not set; skipping");
+            return;
+        }
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let out = std::env::temp_dir().join("sonder-live-compose-test.toml");
+        rt.block_on(compose(ComposeArgs {
+            prompt: "a calm two-layer piece from simulated freeway traffic; one pad, one pluck".into(),
+            out: Some(out.clone()),
+            model: DEFAULT_COMPOSE_MODEL.into(),
+            play: false,
+            retries: 2,
+            no_fallback: false,
+        }))
+        .unwrap();
+        let text = std::fs::read_to_string(&out).unwrap();
+        validate_toml(&text).unwrap();
+    }
 }

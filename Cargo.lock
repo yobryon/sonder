@@ -3047,6 +3047,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "reqwest",
  "serde_json",
  "sonder-core",
  "sonder-dsp",
@@ -3238,6 +3239,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sonder-core",
+ "sonder-engine",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",

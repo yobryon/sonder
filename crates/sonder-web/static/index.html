@@ -28,6 +28,11 @@
         <span id="key" class="key dim">—</span>
         <span id="degrees" class="degrees" title="pitch classes: lit = in scale, bright = in chord"></span>
       </div>
+      <div id="form" class="form" title="musical form: section · position along the arc · motif (n = next section)" hidden>
+        <div class="frow"><span id="section" class="section">—</span><span id="bars" class="bars mono dim"></span></div>
+        <div class="arcbar"><i id="arc"></i></div>
+        <span id="motif" class="motif dim" hidden></span>
+      </div>
     </div>
 
     <div class="mood" title="mood: energy / tension / brightness">
@@ -49,18 +54,24 @@
       <span id="dot" class="dot connecting"></span>
       <span id="conn-label" class="dim">connecting</span>
       <span id="mode" class="mode" title="no Sonder server behind this page: the engine runs as WebAssembly in a Web Worker and JS adapters fetch the live data" hidden>no server — running in your browser</span>
+      <button id="share" class="btn ghost" title="copy a link that carries this scene">share</button>
+      <button id="edit" class="btn ghost" title="scene editor (e)">edit</button>
       <button id="help" class="btn ghost" title="keyboard shortcuts (?)">?</button>
     </div>
   </header>
 
-  <div id="note" class="caption">…</div>
+  <div id="note" class="caption"><span id="cnote">…</span><span id="fnote" class="fnote" hidden></span></div>
   <div id="banner" class="banner" hidden></div>
 
   <main id="stage">
     <canvas id="viz"></canvas>
     <canvas id="overlay"></canvas>
     <div id="vizlabel" class="vizlabel mono"></div>
+    <div id="captions" class="captions" aria-live="polite"></div>
+    <div id="tip" class="tip" hidden></div>
   </main>
+
+  <aside id="editor" hidden></aside>
 
   <aside id="layers" class="panel">
     <h2>Layers <span class="hint dim">1–9 mute · ⇧ solo</span></h2>
@@ -88,10 +99,15 @@
       <tr><td><kbd>k</kbd> / <kbd>K</kbd></td><td>transpose +1 / −1</td></tr>
       <tr><td><kbd>m</kbd> / <kbd>M</kbd></td><td>next / previous mode</td></tr>
       <tr><td><kbd>c</kbd></td><td>next chord</td></tr>
+      <tr><td><kbd>n</kbd></td><td>next form section</td></tr>
+      <tr><td><kbd>e</kbd></td><td>scene editor</td></tr>
+      <tr><td>hover / click a note</td><td>what caused it; click an event → its notes</td></tr>
       <tr><td><kbd>?</kbd></td><td>toggle this legend</td></tr>
     </table>
   </div>
 </div>
 <script type="module" src="./app.js"></script>
+<!-- Optional LLM scene composer (compose.js registers window.sonderComposer). A missing file must not break the page. -->
+<script type="module">import('./compose.js').catch(() => {});</script>
 </body>
 </html>

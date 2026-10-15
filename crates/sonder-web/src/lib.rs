@@ -7,7 +7,9 @@
 //! GET  /app.css       embedded stylesheet
 //! GET  /worklet.js    embedded AudioWorklet processor
 //! GET  /transport.js  embedded transport module (app.js imports it; picks ws here)
+//! GET  /*.js, /coastlines.json  the other UI modules app.js imports (see `assets::FILES`)
 //! GET  /api/snapshot  latest `EngineSnapshot` as JSON
+//! POST /api/validate  `{"toml": "..."}` → `{"errors": []}` (scene validation for the editor)
 //! WS   /ws            server → snapshot JSON on every change (coalesced);
 //!                     client → `UserCommand` JSON (`{"cmd":"toggle_mute","layer":0}`)
 //! WS   /audio         server → one text header `{"sample_rate","channels","format":"s16le"}`
@@ -28,8 +30,9 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
 use sonder_core::{EngineSnapshot, UserCommand};
 use tokio::sync::{mpsc, watch};
 
@@ -56,14 +59,9 @@ pub(crate) struct AppState {
 
 /// Build the axum router (exposed for tests and embedding).
 fn router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/", get(assets::index))
-        .route("/index.html", get(assets::index))
-        .route("/app.js", get(assets::app_js))
-        .route("/app.css", get(assets::app_css))
-        .route("/worklet.js", get(assets::worklet_js))
-        .route("/transport.js", get(assets::transport_js))
+    assets::routes(Router::new().route("/", get(assets::index)))
         .route("/api/snapshot", get(api_snapshot))
+        .route("/api/validate", post(api_validate))
         .route("/ws", get(ws::snapshot_ws))
         .route("/audio", get(audio::audio_ws))
         .with_state(state)
@@ -72,6 +70,30 @@ fn router(state: Arc<AppState>) -> Router {
 async fn api_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let snap = state.snapshot.borrow().clone();
     Json(snap)
+}
+
+#[derive(Deserialize)]
+struct ValidateRequest {
+    toml: String,
+}
+
+#[derive(Serialize)]
+struct ValidateResponse {
+    errors: Vec<String>,
+}
+
+/// Validate a scene TOML for the in-browser editor; the same checks the wasm
+/// `validate_scene` runs. Always 200: errors are data, not failures.
+async fn api_validate(Json(req): Json<ValidateRequest>) -> Json<ValidateResponse> {
+    Json(ValidateResponse { errors: validate_scene_toml(&req.toml) })
+}
+
+/// Parse + validate a scene TOML; empty when valid.
+pub fn validate_scene_toml(toml_src: &str) -> Vec<String> {
+    match sonder_engine::parse_scene(toml_src) {
+        Err(e) => vec![format!("{e:#}")],
+        Ok(scene) => sonder_engine::validate(&scene).err().unwrap_or_default(),
+    }
 }
 
 /// Serve the UI on `addr` until the engine ends (snapshot sender dropped).
@@ -162,6 +184,19 @@ mod tests {
         assert!(assets::INDEX_HTML.contains("/app.js"));
         assert!(assets::INDEX_HTML.contains("/app.css"));
         assert!(assets::APP_JS.contains("/worklet.js"));
+        // Every module app.js / editor.js import must be served in ws mode.
+        for m in ["scene-url.js", "captions.js", "roll.js", "geo.js", "editor.js", "coastlines.json"] {
+            assert!(assets::FILES.iter().any(|(p, _, _)| p.trim_start_matches('/') == m), "{m} not embedded");
+        }
+        for (_, body, _) in assets::FILES {
+            assert!(!body.is_empty());
+        }
+    }
+
+    #[test]
+    fn validate_scene_toml_reports_errors() {
+        assert!(!validate_scene_toml("not toml at all = [").is_empty());
+        assert!(validate_scene_toml("name = \"x\"\n[[layer]]\nname = \"a\"\nrole = \"pad\"\ninstrument = \"pad.warm\"\n").is_empty());
     }
 
     /// Extract a top-level `function name(...) { ... }` from app.js by brace matching.

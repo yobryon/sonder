@@ -12,6 +12,11 @@
 'use strict';
 
 import { connect } from './transport.js';
+import { decodeScene, scenePayloadFromHash, sceneLink } from './scene-url.js';
+import { newCaptions, liveCaptions, isBig } from './captions.js';
+import { noteRect, hitNote, causedBy, pitchName, causeText, attrSummary } from './roll.js';
+import { project, eventLatLon, sunPosition, nightPolygon } from './geo.js';
+import { createEditor, sceneTitle } from './editor.js';
 // The source-adapter registry is only needed in worker mode and is not served by the
 // native server, so it is imported lazily (a 404 would otherwise sink this whole module).
 let registry = null;
@@ -45,6 +50,14 @@ const state = {
   layerSig: '',
   sourceSig: '',
   tickerDirty: true,
+  captions: [],           // live captions {at,text,importance,wall,life,key}
+  seenCaptions: new Set(),
+  geoSeen: false,         // any event with lat/lon so far → map mode is sensible
+  noteRects: [],          // rects drawn by the last roll frame, for hover hit-testing
+  hover: null,            // {kind:'note'|'ping', ...} under the pointer
+  pinned: null,           // note key whose tooltip is pinned (click)
+  hlEvent: null,          // ticker event whose notes are highlighted (click)
+  pointer: { x: 0, y: 0, inside: false },
 };
 
 function engineNow() {
@@ -73,7 +86,8 @@ function pushHist(h, v) {
 function eventPosition(e, snap) {
   const a = e.attrs || {};
   const num = (k) => (typeof a[k] === 'number' ? a[k] : null);
-  if (num('lon01') !== null && num('lat01') !== null) return { x: num('lon01'), y: 1 - num('lat01') };
+  const ll = eventLatLon(a);
+  if (ll) return { x: (ll.lon + 180) / 360, y: (90 - ll.lat) / 180 };
   const x = num('x');
   let y = num('y');
   if (y === null && num('lane') !== null) {
@@ -140,10 +154,13 @@ function ingest(snap) {
     state.events.push({ ...e, wall });
     state.tickerDirty = true;
     const p = eventPosition(e, snap);
-    const ring = { x: p.x, y: p.y, layer: e.layer, t0: performance.now(), intensity: clamp(e.intensity ?? 0.5, 0, 1.5) };
+    const ring = { x: p.x, y: p.y, layer: e.layer, t0: performance.now(), intensity: clamp(e.intensity ?? 0.5, 0, 1.5), event: e };
     state.rings.push(ring);
-    if (e.attrs && typeof e.attrs.lat01 === 'number') state.pings.push(ring);
+    if (eventLatLon(e.attrs)) { state.pings.push(ring); state.geoSeen = true; }
   }
+  if (state.pings.length > 400) state.pings.splice(0, state.pings.length - 400);
+  pushCaptions(newCaptions(snap.captions, state.seenCaptions, wall));
+  if (state.seenCaptions.size > 2000) state.seenCaptions = new Set(state.captions.map((c) => c.key));
   if (state.events.length > 200) state.events.splice(0, state.events.length - 200);
   if (state.seenEvents.size > 4000) state.seenEvents = countEvents(state.events);
 
@@ -207,7 +224,46 @@ function updateHeader(s) {
   $('#m-energy').style.width = `${clamp(m.energy ?? 0, 0, 1) * 100}%`;
   $('#m-tension').style.width = `${clamp(m.tension ?? 0, 0, 1) * 100}%`;
   $('#m-brightness').style.width = `${clamp(m.brightness ?? 0, 0, 1) * 100}%`;
-  setText($('#note'), s.conductor_note || ' ');
+  setText($('#cnote'), s.conductor_note || ' ');
+  const f = s.form || {};
+  const formEl = $('#form');
+  const hasForm = !!(f.section || f.motif || f.note);
+  formEl.hidden = !hasForm;
+  if (hasForm) {
+    setText($('#section'), f.section || '—');
+    $('#arc').style.width = `${clamp(f.arc ?? 0, 0, 1) * 100}%`;
+    const bars = f.bars_in_section ? `bar ${(f.bar_in_section ?? 0) + 1}/${f.bars_in_section}` : '';
+    setText($('#bars'), bars);
+    const motifEl = $('#motif');
+    motifEl.hidden = !f.motif;
+    setText(motifEl, f.motif ? `motif ${f.motif}` : '');
+  }
+  const fn = $('#fnote');
+  fn.hidden = !f.note;
+  setText(fn, f.note || '');
+}
+
+// ---------------------------------------------------------------------------
+// Captions strip: DOM items with a CSS fade whose duration is the caption's life.
+// ---------------------------------------------------------------------------
+function pushCaptions(list) {
+  if (!list.length) return;
+  const root = $('#captions');
+  state.captions.push(...list);
+  for (const c of list) {
+    const el = document.createElement('div');
+    el.className = `cap${isBig(c) ? ' big' : ''}`;
+    el.style.setProperty('--life', `${c.life}s`);
+    if (c.layer !== null && c.layer !== undefined) el.style.borderColor = col(c.layer, 0.9);
+    el.textContent = c.text;
+    el.dataset.key = c.key;
+    root.prepend(el);
+    setTimeout(() => el.remove(), c.life * 1000 + 100);
+  }
+  // Keep the strip short: the newest few only.
+  const live = new Set(liveCaptions(state.captions, Date.now()).map((c) => c.key));
+  for (const el of [...root.children]) if (!live.has(el.dataset.key)) el.remove();
+  state.captions = state.captions.filter((c) => live.has(c.key));
 }
 
 // ---------------------------------------------------------------------------
@@ -361,20 +417,41 @@ function fmtAttr(v) {
   return s.length > 14 ? s.slice(0, 13) + '…' : s;
 }
 
+const esc = (v) => String(v).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+// The event a pinned/hovered note points at, if it is in our buffer.
+function eventForNote(n) {
+  if (!n || !n.cause) return null;
+  for (let i = state.events.length - 1; i >= 0; i--) if (causedBy(n, state.events[i])) return state.events[i];
+  return null;
+}
+
 function updateTicker() {
   const list = $('#event-list');
   const recent = state.events.slice(-12).reverse();
   const layers = state.snap?.layers || [];
-  list.innerHTML = recent.map((e) => {
+  const pinnedEv = eventForNote(state.pinned ? state.notes.get(state.pinned) : null);
+  list.innerHTML = recent.map((e, i) => {
     const l = layers.find((x) => x.id === e.layer);
-    const attrs = Object.entries(e.attrs || {}).slice(0, 3).map(([k, v]) => `${k}=${fmtAttr(v)}`).join(' ');
+    const attrs = e.label ? e.label : Object.entries(e.attrs || {}).slice(0, 3).map(([k, v]) => `${k}=${fmtAttr(v)}`).join(' ');
     const c = col(e.layer);
-    return `<li><span>${hhmmss(e.wall)}</span><span class="edot" style="background:${c}"></span>` +
-      `<span class="ename">${l ? l.name : 'L' + e.layer} · ${e.name}</span>` +
+    const idx = state.events.length - 1 - i;
+    const cls = [state.hlEvent === e ? 'sel' : '', pinnedEv === e ? 'hl' : ''].filter(Boolean).join(' ');
+    return `<li class="${cls}" data-idx="${idx}" title="click: highlight the notes this event caused"><span>${hhmmss(e.wall)}</span><span class="edot" style="background:${c}"></span>` +
+      `<span class="ename">${esc(l ? l.name : 'L' + e.layer)} · ${esc(e.name)}</span>` +
       `<span class="ebar"><i style="width:${clamp(e.intensity ?? 0, 0, 1) * 100}%;background:${c}"></i></span>` +
-      `<span class="eattrs" title="${attrs}">${attrs}</span></li>`;
+      `<span class="eattrs${e.label ? ' label' : ''}" title="${esc(attrs)}">${esc(attrs)}</span></li>`;
   }).join('') || '<li class="empty">waiting for events…</li>';
 }
+
+$('#event-list').addEventListener('click', (ev) => {
+  const li = ev.target.closest('li[data-idx]');
+  if (!li) return;
+  const e = state.events[+li.dataset.idx];
+  state.hlEvent = state.hlEvent === e ? null : e || null;
+  state.tickerDirty = true;
+  updateTicker(); state.tickerDirty = false;
+});
 
 // ---------------------------------------------------------------------------
 // Stage: canvases
@@ -391,6 +468,7 @@ function resize() {
   const w = stage.clientWidth, h = stage.clientHeight;
   if (w === W && h === H && vizCanvas.width === Math.round(w * dpr)) return;
   W = w; H = h;
+  $('#captions').style.bottom = `${clamp(H * 0.26, 80, 220) + 10}px`;
   for (const c of [vizCanvas, ovCanvas]) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
   vg.setTransform(dpr, 0, 0, dpr, 0, 0);
   og.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -406,7 +484,7 @@ function pickViz(s) {
   }
   if (findViz(s, 'cars')) return 'freeway';
   if (findViz(s, 'blobs')) return 'camera';
-  if ((s.events || []).some((e) => e.attrs && typeof e.attrs.lat01 === 'number')) return 'map';
+  if (state.geoSeen || findViz(s, 'strikes') || (s.events || []).some((e) => eventLatLon(e.attrs))) return 'map';
   return 'generic';
 }
 
@@ -482,17 +560,98 @@ function drawCamera(s, Hv) {
   og.restore();
 }
 
-// --- map -----------------------------------------------------------------
-function drawMap(_s, Hv, now) {
+// --- map: Live Earth ------------------------------------------------------
+// Equirectangular world: embedded low-res coastlines (Natural Earth 110m, simplified),
+// graticule, the night side from the current UTC time, every geo-tagged event as an
+// expanding ring in its layer colour, lightning `strikes` as flashes.
+let coast = null;        // {lines: [[lon,lat,lon,lat,…], …]} once fetched
+let coastCache = null;   // offscreen canvas of coast + graticule at the current size
+let coastFetching = false;
+function loadCoast() {
+  if (coast || coastFetching) return;
+  coastFetching = true;
+  fetch(new URL('./coastlines.json', import.meta.url)).then((r) => (r.ok ? r.json() : null))
+    .then((j) => { coast = j && Array.isArray(j.lines) ? j : { lines: [] }; coastCache = null; })
+    .catch(() => { coast = { lines: [] }; });
+}
+
+function coastLayer(Hv) {
+  const dpr = window.devicePixelRatio || 1;
+  if (coastCache && coastCache.W === W && coastCache.Hv === Hv && coastCache.dpr === dpr) return coastCache.c;
+  const c = document.createElement('canvas');
+  c.width = Math.round(W * dpr); c.height = Math.round(Hv * dpr);
+  const g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Graticule every 30°, equator & prime meridian brighter.
+  g.lineWidth = 1;
+  for (let lon = -180; lon <= 180; lon += 30) {
+    const [x] = project(lon, 0, W, Hv);
+    g.strokeStyle = lon === 0 ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.045)';
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, Hv); g.stroke();
+  }
+  for (let lat = -60; lat <= 60; lat += 30) {
+    const [, y] = project(0, lat, W, Hv);
+    g.strokeStyle = lat === 0 ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.045)';
+    g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+  }
+  // Coastlines.
+  g.strokeStyle = 'rgba(150,180,210,0.42)'; g.lineWidth = Math.max(0.8, Math.min(1.4, W / 1100)); g.lineJoin = 'round';
+  g.beginPath();
+  for (const line of (coast && coast.lines) || []) {
+    for (let i = 0; i + 1 < line.length; i += 2) {
+      const [x, y] = project(line[i], line[i + 1], W, Hv);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+  }
+  g.stroke();
+  coastCache = { c, W, Hv, dpr };
+  return c;
+}
+
+let lastSun = { at: 0, sun: null };
+function drawMap(s, Hv, now) {
+  loadCoast();
+  og.drawImage(coastLayer(Hv), 0, 0, W, Hv);
+
+  // Night side, recomputed once a minute.
+  if (!lastSun.sun || now - lastSun.at > 60000) lastSun = { at: now, sun: sunPosition(new Date()) };
+  const poly = nightPolygon(lastSun.sun, 120);
   og.save();
-  og.strokeStyle = 'rgba(255,255,255,0.05)'; og.lineWidth = 1;
-  for (let i = 0; i <= 12; i++) { const x = (i / 12) * W; og.beginPath(); og.moveTo(x, 0); og.lineTo(x, Hv); og.stroke(); }
-  for (let i = 0; i <= 6; i++) { const y = (i / 6) * Hv; og.beginPath(); og.moveTo(0, y); og.lineTo(W, y); og.stroke(); }
-  // Equator and prime meridian a touch brighter.
-  og.strokeStyle = 'rgba(255,255,255,0.1)';
-  og.beginPath(); og.moveTo(0, Hv / 2); og.lineTo(W, Hv / 2); og.stroke();
-  og.beginPath(); og.moveTo(W / 2, 0); og.lineTo(W / 2, Hv); og.stroke();
+  og.beginPath();
+  poly.forEach(([lon, lat], i) => { const [x, y] = project(lon, lat, W, Hv); if (i === 0) og.moveTo(x, y); else og.lineTo(x, y); });
+  og.closePath();
+  og.fillStyle = 'rgba(2,4,14,0.42)';
+  og.fill();
+  og.strokeStyle = 'rgba(232,200,138,0.18)'; og.lineWidth = 1;
+  og.beginPath();
+  for (let i = 0; i < poly.length - 2; i++) { const [x, y] = project(poly[i][0], poly[i][1], W, Hv); if (i === 0) og.moveTo(x, y); else og.lineTo(x, y); }
+  og.stroke();
+  // Subsolar point.
+  const [sx, sy] = project(lastSun.sun.lon, lastSun.sun.decl, W, Hv);
+  og.fillStyle = 'rgba(232,200,138,0.5)';
+  og.beginPath(); og.arc(sx, sy, 2.5, 0, Math.PI * 2); og.fill();
   og.restore();
+
+  // Lightning: viz.*.strikes [{lat01, lon01, age_s}] as fading flashes on the glow canvas.
+  for (const v of Object.values(s.viz || {})) {
+    if (!v || !Array.isArray(v.strikes)) continue;
+    vg.save(); vg.globalCompositeOperation = 'lighter';
+    for (const st of v.strikes) {
+      const ll = eventLatLon(st);
+      if (!ll) continue;
+      const a = clamp(1 - (st.age_s ?? 0) / 5, 0, 1);
+      if (a <= 0) continue;
+      const [x, y] = project(ll.lon, ll.lat, W, Hv);
+      const r = 2 + 5 * a;
+      const grad = vg.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0, `rgba(255,255,255,${0.1 * a})`);
+      grad.addColorStop(0.3, `rgba(220,230,255,${0.08 * a})`);
+      grad.addColorStop(1, 'rgba(180,200,255,0)');
+      vg.fillStyle = grad;
+      vg.beginPath(); vg.arc(x, y, r, 0, Math.PI * 2); vg.fill();
+    }
+    vg.restore();
+  }
 
   const LIFE = 10000;
   state.pings = state.pings.filter((p) => now - p.t0 < LIFE);
@@ -502,12 +661,23 @@ function drawMap(_s, Hv, now) {
     const x = p.x * W, y = p.y * Hv;
     const rMax = 10 + p.intensity * 70;
     const r = 3 + Math.pow(age, 0.5) * rMax;
-    og.strokeStyle = col(p.layer, (1 - age) * 0.8); og.lineWidth = 1.5;
+    const hot = state.hover && state.hover.kind === 'ping' && state.hover.ping === p;
+    og.strokeStyle = col(p.layer, (1 - age) * (hot ? 1 : 0.8)); og.lineWidth = hot ? 2.5 : 1.5;
     og.beginPath(); og.arc(x, y, r, 0, Math.PI * 2); og.stroke();
-    og.fillStyle = col(p.layer, (1 - age) * 0.9, 75);
-    og.beginPath(); og.arc(x, y, 2.5, 0, Math.PI * 2); og.fill();
+    og.fillStyle = col(p.layer, hot ? 1 : (1 - age) * 0.9, 75);
+    og.beginPath(); og.arc(x, y, hot ? 4 : 2.5, 0, Math.PI * 2); og.fill();
   }
   og.restore();
+}
+
+/** Nearest live ping within `r` px of a stage point, for hover labels. */
+function pingAt(x, y, Hv, r = 14) {
+  let best = null, bd = r * r;
+  for (const p of state.pings) {
+    const dx = p.x * W - x, dy = p.y * Hv - y, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
 }
 
 // --- generic signal field -------------------------------------------------
@@ -596,21 +766,30 @@ function drawRollAndSpectrum(s, top, rh, now) {
     og.beginPath(); og.moveTo(0, y); og.lineTo(W, y); og.stroke();
   }
 
-  // Notes scroll right → left; newest at the right edge.
+  // Notes scroll right → left; newest at the right edge. Every rect drawn is remembered
+  // so the pointer can be hit-tested against the list instead of redrawing.
   const pxPerSec = W / ROLL_WINDOW;
   const noteH = Math.max(2.5, rh / (MIDI_HI - MIDI_LO) * 1.6);
+  const geom = { now, W, top, rh, pxPerSec, noteH, midiLo: MIDI_LO, midiHi: MIDI_HI };
+  const rects = state.noteRects;
+  rects.length = 0;
+  const hl = state.hlEvent;
+  const hoverKey = state.hover && state.hover.kind === 'note' ? state.hover.key : null;
   for (const [k, n] of state.notes) {
-    const start = now - n.at;                 // seconds ago the note began
-    const dur = n.duration ?? (n.active ? start : 0.3);
-    const x1 = W - start * pxPerSec;
-    const w = Math.max(3, dur * pxPerSec);
-    if (x1 + w < 0) { if (!n.active) state.notes.delete(k); continue; }
-    if (x1 > W) continue;
-    const y = top + (1 - clamp((n.midi - MIDI_LO) / (MIDI_HI - MIDI_LO), 0, 1)) * rh - noteH / 2;
+    const r = noteRect(n, geom);
+    if (!r) { if (!n.active && now - n.at > ROLL_WINDOW) state.notes.delete(k); continue; }
     const vel = clamp(n.velocity ?? 0.7, 0, 1);
     og.fillStyle = col(n.layer, 0.45 + 0.55 * vel, 45 + vel * 30);
     if (n.active) { og.shadowBlur = 14; og.shadowColor = col(n.layer, 0.9, 70); } else { og.shadowBlur = 0; }
-    og.fillRect(x1, y, Math.min(w, W - x1 + 2), noteH);
+    og.fillRect(r.x, r.y, r.w, r.h);
+    r.key = k; r.note = n;
+    rects.push(r);
+    if ((hl && causedBy(n, hl)) || k === state.pinned || k === hoverKey) {
+      og.shadowBlur = 0;
+      og.strokeStyle = k === hoverKey || k === state.pinned ? 'rgba(255,255,255,0.95)' : 'rgba(232,200,138,0.95)';
+      og.lineWidth = 1.5;
+      og.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
+    }
   }
   og.shadowBlur = 0;
   // Playhead.
@@ -644,8 +823,85 @@ function frame() {
     else drawGeneric(s, Hv);
     drawRings(Hv, now);
     drawRollAndSpectrum(s, Hv, rh, engineNow());
+    updateHover(Hv);
   }
   requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------------------
+// Attribution: hover a note → what made it; click pins; map pings show their caption.
+// ---------------------------------------------------------------------------
+const tip = $('#tip');
+let tipSig = '';
+function showTip(html, x, y, pinned) {
+  if (tipSig !== html) { tipSig = html; tip.innerHTML = html; }
+  tip.hidden = false;
+  tip.classList.toggle('pinned', !!pinned);
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  tip.style.left = `${clamp(x + 14, 4, Math.max(4, W - tw - 4))}px`;
+  tip.style.top = `${clamp(y - th - 10, 4, Math.max(4, H - th - 4))}px`;
+}
+function hideTip() { if (!tip.hidden) { tip.hidden = true; tipSig = ''; } }
+
+function noteTipHtml(n) {
+  const layers = state.snap?.layers || [];
+  const l = layers.find((x) => x.id === n.layer);
+  const rows = [
+    `<b style="color:${col(n.layer, 1, 70)}">${esc(l ? l.name : 'L' + n.layer)}</b> <span class="mono">${esc(pitchName(n.midi))}</span> <span class="dim">vel ${(n.velocity ?? 0).toFixed(2)}</span>`,
+  ];
+  if (n.reason) rows.push(`<span class="dim">${esc(n.reason)}</span>`);
+  if (n.cause) {
+    const txt = causeText(n.cause) || n.cause.event;
+    rows.push(`<span class="cause">↳ ${esc(txt)}</span>`);
+    if (!n.cause.label && !attrSummary(n.cause.attrs)) rows.push(`<span class="dim">event ${esc(n.cause.event)}</span>`);
+  } else if (!n.reason) rows.push('<span class="dim">conductor</span>');
+  return rows.join('<br>');
+}
+
+function updateHover(Hv) {
+  const pt = state.pointer;
+  let hover = null;
+  if (pt.inside) {
+    if (pt.y >= Hv) {
+      const r = hitNote(state.noteRects, pt.x, pt.y);
+      if (r) hover = { kind: 'note', key: r.key, note: r.note, rect: r };
+    } else if (vizKindShown === 'map') {
+      const p = pingAt(pt.x, pt.y, Hv);
+      if (p) hover = { kind: 'ping', ping: p };
+    }
+  }
+  state.hover = hover;
+  $('#stage').classList.toggle('hit', !!hover);
+
+  if (state.pinned) {
+    const r = state.noteRects.find((x) => x.key === state.pinned);
+    if (!r) { state.pinned = null; state.tickerDirty = true; }
+    else { showTip(noteTipHtml(r.note), r.x + r.w / 2, r.y, true); return; }
+  }
+  if (!hover) { hideTip(); return; }
+  if (hover.kind === 'note') showTip(noteTipHtml(hover.note), pt.x, pt.y, false);
+  else {
+    const e = hover.ping.event;
+    const layers = state.snap?.layers || [];
+    const l = layers.find((x) => x.id === e.layer);
+    showTip(`<b style="color:${col(e.layer, 1, 70)}">${esc(l ? l.name : 'L' + e.layer)}</b> · ${esc(e.name)}<br><span class="cause">${esc(causeText(e) || e.name)}</span>`, pt.x, pt.y, false);
+  }
+}
+
+{
+  const stage = $('#stage');
+  const pos = (ev) => { const b = stage.getBoundingClientRect(); return { x: ev.clientX - b.left, y: ev.clientY - b.top }; };
+  stage.addEventListener('pointermove', (ev) => { const p = pos(ev); state.pointer.x = p.x; state.pointer.y = p.y; state.pointer.inside = true; });
+  stage.addEventListener('pointerleave', () => { state.pointer.inside = false; });
+  stage.addEventListener('click', (ev) => {
+    if (ev.target.closest('#captions, #tip, button, .campreview')) return;
+    const p = pos(ev);
+    const r = hitNote(state.noteRects, p.x, p.y);
+    state.pinned = r && r.key !== state.pinned ? r.key : null;
+    state.tickerDirty = true;
+    const li = state.pinned ? eventForNote(r.note) : null;
+    if (li) { updateTicker(); state.tickerDirty = false; $('#event-list li.hl')?.scrollIntoView({ block: 'nearest' }); }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -678,9 +934,12 @@ function send(cmd) { if (transport) transport.send(cmd); }
 function resetClient() {
   state.snap = null; state.hist = new Map(); state.events = []; state.seenEvents = new Map(); state.notes = new Map();
   state.rings = []; state.pings = []; state.laneY = new Map(); state.layerSig = ''; state.sourceSig = ''; state.tickerDirty = true;
+  state.captions = []; state.seenCaptions = new Set(); state.geoSeen = false; state.noteRects = [];
+  state.hover = null; state.pinned = null; state.hlEvent = null;
   textCache.clear();
+  hideTip();
   vg.clearRect(0, 0, W, H); og.clearRect(0, 0, W, H);
-  $('#layer-list').innerHTML = ''; $('#source-list').innerHTML = ''; $('#event-list').innerHTML = '';
+  $('#layer-list').innerHTML = ''; $('#source-list').innerHTML = ''; $('#event-list').innerHTML = ''; $('#captions').innerHTML = '';
 }
 
 function stopMainAdapters() {
@@ -760,8 +1019,9 @@ function buildScenePicker(scenes) {
   sel.hidden = false;
   $('#scene').hidden = true;
   sel.onchange = () => {
+    if (sel.value === '__custom') return;
     const s = transport.scenes.find((x) => x.name === sel.value);
-    if (s) startScene(s, params.get('seed'));
+    if (s) { sel.querySelector('option[value="__custom"]')?.remove(); startScene(s, params.get('seed')); }
   };
 }
 
@@ -790,10 +1050,78 @@ function startScene(scene, seed) {
   transport.start(scene.toml, currentSeed, audio.srcRate);
   // Drop whatever the old engine had queued in the worklet so latency doesn't stack.
   if (audio.node) audio.node.port.postMessage({ type: 'config', srcRate: audio.srcRate, targetMs: 200, maxMs: 500 });
-  $('#scene-pick').value = scene.name;
+  const pick = $('#scene-pick');
+  if (scene.custom) {
+    let o = pick.querySelector('option[value="__custom"]');
+    if (!o) { o = document.createElement('option'); o.value = '__custom'; pick.prepend(o); }
+    o.textContent = `✎ ${scene.title || sceneTitle(scene.toml)}`;
+  }
+  pick.value = scene.custom ? '__custom' : scene.name;
   const u = new URL(location.href);
-  u.searchParams.set('scene', scene.name);
+  if (scene.custom) { u.searchParams.delete('scene'); } else { u.searchParams.set('scene', scene.name); if (!scene.keepHash) u.hash = ''; }
   history.replaceState(null, '', u);
+  if (editor) editor.setToml(scene.toml, scene.custom ? '' : scene.name);
+}
+
+// --- scene editor, share links, URL scenes ---------------------------------
+let editor = null;
+const customScene = (toml, extra = {}) => ({ name: '__custom', title: sceneTitle(toml), toml, custom: true, tags: [], ...extra });
+
+async function validateToml(toml) {
+  if (transport && transport.mode === 'ws') {
+    const r = await fetch('api/validate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ toml }) });
+    if (!r.ok) throw new Error(`server said ${r.status}`);
+    return (await r.json()).errors || [];
+  }
+  if (transport && transport.validate) return transport.validate(toml);
+  throw new Error('no engine to validate with yet');
+}
+
+async function applyToml(toml) {
+  if (!transport) throw new Error('not connected');
+  if (transport.mode === 'ws') { send({ cmd: 'load_scene', toml }); return; }
+  startScene(customScene(toml), params.get('seed'));
+}
+
+function currentToml() {
+  if (editor && editor.visible && editor.getToml().trim()) return editor.getToml();
+  return currentScene ? currentScene.toml : (editor ? editor.getToml() : '');
+}
+
+async function shareToml(toml) {
+  const url = await sceneLink(location.href, toml);
+  history.replaceState(null, '', url);
+  try { await navigator.clipboard.writeText(url); } catch (_) { /* no clipboard permission: the link is shown anyway */ }
+  return url;
+}
+
+async function shareCurrent() {
+  const toml = currentToml();
+  if (!toml.trim()) { banner('nothing to share yet'); return; }
+  try {
+    const url = await shareToml(toml);
+    editor.show();
+    editor.showLink(url);
+    editor.flash('link copied to the clipboard');
+  } catch (e) { banner(`share failed: ${e.message || e}`, true); }
+}
+
+function setupEditor() {
+  editor = createEditor($('#editor'), {
+    validate: validateToml,
+    apply: applyToml,
+    share: shareToml,
+    builtins: () => (transport && transport.scenes) || [],
+  });
+  $('#edit').addEventListener('click', () => editor.toggle());
+  $('#share').addEventListener('click', shareCurrent);
+}
+
+/** The scene carried in `#s=` (decoded TOML) or null. */
+async function urlScene() {
+  const payload = scenePayloadFromHash(location.hash);
+  if (!payload) return null;
+  try { return await decodeScene(payload); } catch (e) { banner(`could not read the scene in this link: ${e.message || e}`, true); return null; }
 }
 
 async function boot() {
@@ -807,8 +1135,21 @@ async function boot() {
   });
   transport.on('audio-error', (msg) => { setText($('#buf'), msg); $('#buf').className = 'buf mono bad'; });
 
+  setupEditor();
+  const linked = await urlScene();
+
   if (transport.mode === 'ws') {
     if (transport.probe && !state.snap) ingest(transport.probe);
+    if (linked) {
+      // A link with a scene in it asks the native engine to hot-reload into that scene.
+      editor.setToml(linked, '');
+      const errs = await validateToml(linked).catch(() => []);
+      if (errs.length) { editor.show(); banner('the linked scene has errors; see the editor', true); }
+      else {
+        let sent = false;
+        transport.on('status', (st) => { if (st === 'live' && !sent) { sent = true; send({ cmd: 'load_scene', toml: linked }); } });
+      }
+    }
     return;
   }
 
@@ -819,7 +1160,14 @@ async function boot() {
     console.info(`sonder wasm ${version}: ${scenes.length} scenes`);
     transport.scenes = await addWebcamVariants(scenes);
     buildScenePicker(transport.scenes);
-    startScene(pickScene(transport.scenes, params.get('scene')), params.get('seed'));
+    if (linked) {
+      const errs = await transport.validate(linked);
+      if (errs.length) {
+        editor.setToml(linked, ''); editor.show();
+        banner('the linked scene has errors; see the editor', true);
+        startScene(pickScene(transport.scenes, params.get('scene')), params.get('seed'));
+      } else startScene(customScene(linked, { keepHash: true }), params.get('seed'));
+    } else startScene(pickScene(transport.scenes, params.get('scene')), params.get('seed'));
   });
   transport.on('started', async ({ seed, mainSpecs, specs }) => {
     const { ADAPTERS } = await loadRegistry();
@@ -856,8 +1204,10 @@ window.addEventListener('keydown', (e) => {
     case 'm': send({ cmd: 'next_mode', backwards: false }); break;
     case 'M': send({ cmd: 'next_mode', backwards: true }); break;
     case 'c': send({ cmd: 'next_chord' }); break;
+    case 'n': send({ cmd: 'next_section' }); break;
+    case 'e': if (editor) editor.toggle(); break;
     case '?': toggleLegend(); break;
-    case 'Escape': $('#legend').hidden = true; break;
+    case 'Escape': $('#legend').hidden = true; if (editor) editor.hide(); state.pinned = null; state.hlEvent = null; state.tickerDirty = true; break;
     default: return;
   }
 });

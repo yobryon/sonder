@@ -9,6 +9,7 @@ default = ["BTC-USDT"]
 
 [spec]
 kind = "websocket"
+caption = "{size} {product} {side} on OKX"
 url = "wss://ws.okx.com:8443/ws/v5/public"
 subscribe = { op = "subscribe", args = "{symbols:{\"channel\":\"trades\",\"instId\":\"%s\"}}" }
 each = ".data"

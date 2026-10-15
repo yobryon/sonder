@@ -1,6 +1,7 @@
 //! Live mode: real clock, sources on tokio, control loop on its own thread, audio on a
 //! backend thread.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -53,6 +54,9 @@ pub struct EngineHandle {
     /// Resolves when the engine stops (quit command or fatal error).
     pub done: tokio::sync::oneshot::Receiver<anyhow::Result<()>>,
     shutdown: tokio::sync::watch::Sender<bool>,
+    source_tasks_alive: Arc<AtomicUsize>,
+    /// Scene reloads applied so far (`LoadScene`).
+    reloads: Arc<AtomicUsize>,
 }
 
 impl EngineHandle {
@@ -63,6 +67,50 @@ impl EngineHandle {
     }
     pub fn subscribe_audio(&self) -> Option<WebAudio> {
         self.audio.as_ref().map(|a| a.subscribe())
+    }
+    /// Source tasks still running (updated every control tick).
+    pub fn source_tasks_alive(&self) -> usize {
+        self.source_tasks_alive.load(Ordering::Relaxed)
+    }
+    /// Number of `LoadScene` reloads that have been applied.
+    pub fn reloads(&self) -> usize {
+        self.reloads.load(Ordering::Relaxed)
+    }
+}
+
+/// Spare layer slots the synth is built with, so a hot-reloaded scene may grow.
+const MIN_LAYER_SLOTS: usize = 12;
+
+/// One scene's worth of running sources.
+struct Generation {
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    sample_rx: tokio::sync::mpsc::Receiver<Sample>,
+    shutdown: tokio::sync::watch::Sender<bool>,
+}
+
+impl Generation {
+    fn spawn(
+        registry: &sonder_sources::Registry,
+        scene: &Scene,
+        clock: Arc<dyn Clock>,
+        seed: u64,
+        rt: &tokio::runtime::Handle,
+    ) -> anyhow::Result<Self> {
+        let (sample_tx, sample_rx) = tokio::sync::mpsc::channel::<Sample>(4096);
+        let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+        let specs = ControlLoop::source_specs(scene);
+        let _guard = rt.enter();
+        let tasks = spawn_sources(registry, &specs, sample_tx, clock, shutdown_rx, seed)?;
+        Ok(Self { tasks, sample_rx, shutdown })
+    }
+    fn alive(&self) -> usize {
+        self.tasks.iter().filter(|t| !t.is_finished()).count()
+    }
+    fn stop(self) {
+        let _ = self.shutdown.send(true);
+        for t in self.tasks {
+            t.abort();
+        }
     }
 }
 
@@ -101,6 +149,13 @@ pub fn apply_overrides(scene: &mut Scene, overrides: &[(String, SourceSpec)]) ->
 }
 
 /// Start the engine on the current tokio runtime.
+///
+/// `UserCommand::LoadScene { toml }` on the command channel hot-reloads: the TOML is
+/// parsed and validated, the old sources are stopped, the control loop is rebuilt around
+/// the same synth (all notes off, instruments/effects/tempo re-sent) and the new scene's
+/// sources are spawned; the snapshot channel is kept. An invalid scene is logged, surfaces
+/// as a caption, and leaves the old one running. `--source` overrides apply to the
+/// initial scene only.
 pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<EngineHandle> {
     apply_overrides(&mut scene, &opts.source_overrides)?;
     if let Err(errs) = crate::validate(&scene) {
@@ -108,7 +163,7 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
     }
     let seed = opts.seed.or(scene.conductor.seed).unwrap_or_else(rand::random::<u64>);
     let requested_sr = if opts.sample_rate == 0 { 48_000 } else { opts.sample_rate };
-    let max_layers = scene.layers.len().max(1);
+    let max_layers = scene.layers.len().max(MIN_LAYER_SLOTS);
 
     // Audio first, so we know the real sample rate.
     let tap_cfg = if opts.web_tap { Some(sonder_audio::TapConfig::default()) } else { None };
@@ -118,15 +173,16 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
 
     let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(Arc::new(EngineSnapshot::default()));
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<UserCommand>(64);
-    let (sample_tx, mut sample_rx) = tokio::sync::mpsc::channel::<Sample>(4096);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let web_audio_tx = if opts.web_tap { Some(tokio::sync::broadcast::channel::<Arc<Vec<f32>>>(64).0) } else { None };
+    let alive = Arc::new(AtomicUsize::new(0));
+    let reloads = Arc::new(AtomicUsize::new(0));
 
     let clock: Arc<dyn Clock> = Arc::new(WallClock::new());
-    let specs = ControlLoop::source_specs(&scene);
     let registry = registry();
-    let source_tasks = spawn_sources(&registry, &specs, sample_tx, clock.clone(), shutdown_rx.clone(), seed)?;
+    let rt = tokio::runtime::Handle::current();
+    let mut generation = Generation::spawn(&registry, &scene, clock.clone(), seed, &rt)?;
 
     let perc_layers: Vec<bool> = scene.layers.iter().map(|l| l.role == Role::Perc).collect();
     let mut control = ControlLoop::new(scene, seed, controller, tap, web_audio_tx.clone(), backend_name.clone(), snapshot_tx)
@@ -150,6 +206,9 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
     // Control thread.
     let mut shutdown_watch = shutdown_rx.clone();
     let shutdown_for_thread = shutdown_tx.clone();
+    let alive_for_thread = alive.clone();
+    let reloads_for_thread = reloads.clone();
+    let fixed_seed = opts.seed;
     std::thread::Builder::new()
         .name("sonder-control".into())
         .spawn(move || {
@@ -163,9 +222,28 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
                 while let Ok(cmd) = cmd_rx.try_recv() {
                     control.command(cmd);
                 }
+                if let Some(toml_src) = control.take_load_request() {
+                    match reload(&mut control, &toml_src, fixed_seed) {
+                        Ok(new_seed) => {
+                            let scene = control.scene();
+                            match Generation::spawn(&registry, scene, clock.clone(), new_seed, &rt) {
+                                Ok(g) => {
+                                    std::mem::replace(&mut generation, g).stop();
+                                    reloads_for_thread.fetch_add(1, Ordering::Relaxed);
+                                    tracing::info!(scene = %scene.name, "scene reloaded");
+                                }
+                                Err(e) => {
+                                    tracing::error!("reloaded scene `{}` but its sources failed to start: {e:#}", scene.name);
+                                    std::mem::replace(&mut generation, Generation::empty()).stop();
+                                }
+                            }
+                        }
+                        Err(e) => tracing::error!("scene reload rejected: {e:#}"),
+                    }
+                }
                 // Bound the per-tick drain so a firehose can't starve the tick.
                 let mut drained = 0;
-                while let Ok(sample) = sample_rx.try_recv() {
+                while let Ok(sample) = generation.sample_rx.try_recv() {
                     control.ingest(sample);
                     drained += 1;
                     if drained > 20_000 {
@@ -173,6 +251,7 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
                     }
                 }
                 control.tick(clock.now());
+                alive_for_thread.store(generation.alive(), Ordering::Relaxed);
                 for path in control.take_save_requests() {
                     let scene = control.current_scene();
                     let path = if path.is_empty() { format!("{}.toml", slug(&scene.name)) } else { path };
@@ -200,12 +279,11 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
                     next = now;
                 }
             };
-            // Shutdown order: sources (they also saw the watch flip), then the control
-            // loop with its sinks (MIDI sends its note-offs on drop), then the audio
-            // stream (joins the backend thread). Only then is the engine `done`.
-            for t in source_tasks {
-                t.abort();
-            }
+            // Shutdown order: sources, then the control loop with its sinks (MIDI sends its
+            // note-offs on drop), then the audio stream (joins the backend thread). Only
+            // then is the engine `done`.
+            generation.stop();
+            alive_for_thread.store(0, Ordering::Relaxed);
             drop(control);
             drop(_stream);
             let _ = done_tx.send(result);
@@ -221,7 +299,29 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
         midi_port: midi_name,
         done: done_rx,
         shutdown: shutdown_tx,
+        source_tasks_alive: alive,
+        reloads,
     })
+}
+
+impl Generation {
+    fn empty() -> Self {
+        let (_, sample_rx) = tokio::sync::mpsc::channel(1);
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        Self { tasks: Vec::new(), sample_rx, shutdown }
+    }
+}
+
+/// Parse, validate and apply a `LoadScene` TOML to the control loop. Returns the seed the
+/// new scene runs with. On error the old scene keeps running and a caption says why.
+fn reload(control: &mut ControlLoop, toml_src: &str, fixed_seed: Option<u64>) -> anyhow::Result<u64> {
+    let scene = crate::parse_scene(toml_src)?;
+    if let Err(errs) = crate::validate(&scene) {
+        anyhow::bail!("scene `{}` is invalid:\n  {}", scene.name, errs.join("\n  "));
+    }
+    let seed = fixed_seed.or(scene.conductor.seed).unwrap_or_else(rand::random::<u64>);
+    control.rebuild(scene, seed)?;
+    Ok(seed)
 }
 
 type Opened = (sonder_audio::SynthController, AudioStream, String);
@@ -293,6 +393,67 @@ mod tests {
         let res = tokio::time::timeout(Duration::from_secs(5), &mut handle.done).await.expect("done never resolved");
         res.unwrap().unwrap();
         tokio::time::timeout(Duration::from_secs(5), control_thread_exited(rx)).await.expect("control thread still running");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn load_scene_swaps_scene_and_sources_in_place() {
+        let scene = crate::load_scene("night-freeway").unwrap();
+        let mut handle = start(scene, null_opts()).await.unwrap();
+        let mut rx = handle.snapshot.clone();
+        // Night-freeway: one synthetic source running.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while handle.source_tasks_alive() != 1 {
+                rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("initial sources never came up");
+        assert_eq!(rx.borrow().scene_name, "Night Freeway");
+
+        // An invalid scene is rejected and leaves everything running.
+        handle.commands.send(UserCommand::LoadScene { toml: "name = 'x'\n[[layer]]\nname = 'a'\nrole = 'pad'\ninstrument = 'nope'".into() }).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(handle.reloads(), 0);
+        assert_eq!(rx.borrow().scene_name, "Night Freeway");
+        assert_eq!(handle.source_tasks_alive(), 1);
+
+        // A scene with no sources replaces it: the name, the layers and the sources change.
+        let bare = "name = \"Bare\"\n[[layer]]\nname = \"drone\"\nrole = \"pad\"\ninstrument = \"pad.glass\"\n";
+        handle.commands.send(UserCommand::LoadScene { toml: bare.into() }).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while rx.borrow().scene_name != "Bare" {
+                rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("scene name never changed");
+        assert_eq!(handle.reloads(), 1);
+        let snap = rx.borrow().clone();
+        assert_eq!(snap.layers.len(), 1);
+        assert!(snap.sources.is_empty());
+        assert!(snap.captions.iter().any(|c| c.text == "scene: Bare"), "{:?}", snap.captions);
+        // The old scene's source task was stopped.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while handle.source_tasks_alive() != 0 {
+                rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("old sources still running");
+        // And a scene with more layers than the first one still fits (spare slots).
+        let (_, big) = crate::scenes::BUILTIN_SCENE_SOURCES.iter().find(|(n, _)| *n == "midnight-walk").unwrap();
+        handle.commands.send(UserCommand::LoadScene { toml: big.to_string() }).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while rx.borrow().scene_name == "Bare" {
+                rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("second reload never applied");
+        assert_eq!(handle.reloads(), 2);
+        // Still ticking and still quits cleanly.
+        handle.commands.send(UserCommand::Quit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), &mut handle.done).await.expect("done").unwrap().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

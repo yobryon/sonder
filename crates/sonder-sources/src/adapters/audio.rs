@@ -32,10 +32,14 @@
 //! (refractory 100 ms; attrs `centroid`, `centroid01`, `flux`, `rms`), `loud` when `rms`
 //! rises through 0.6. The reader runs on a detached thread so a blocked `read` on stdin
 //! never holds up runtime shutdown.
+//!
+//! With `stream_audio = true` (the default) the source also forwards the audio itself as
+//! [`Datum::Audio`] chunks of ~50 ms — mono, at the source rate, decimated to at most
+//! 48 kHz — so layers reading it can play it through a granular instrument.
 
 use std::collections::VecDeque;
 
-use sonder_core::{SourceSpec, SourceState};
+use sonder_core::{Datum, SourceSpec, SourceState};
 
 use crate::registry::{ParamInfo, SourceInfo};
 use crate::util::{self, clamp01, Attrs, Emitter};
@@ -361,6 +365,52 @@ pub struct Config {
     pub format: Format,
     pub rate: u32,
     pub channels: usize,
+    /// Forward the audio as `Datum::Audio` chunks for granular layers.
+    pub stream_audio: bool,
+}
+
+/// Maximum rate of forwarded audio; higher source rates are decimated by an integer factor.
+pub const MAX_STREAM_RATE: u32 = 48_000;
+/// Length of a forwarded chunk.
+pub const STREAM_CHUNK_S: f64 = 0.05;
+
+/// Batches mono samples into ~50 ms `Datum::Audio` chunks, decimating to ≤ 48 kHz.
+#[derive(Debug)]
+pub struct Streamer {
+    factor: usize,
+    out_rate: u32,
+    chunk: usize,
+    buf: Vec<f32>,
+    phase: usize,
+    acc: f32,
+}
+
+impl Streamer {
+    pub fn new(rate: u32) -> Self {
+        let factor = (rate as usize).div_ceil(MAX_STREAM_RATE as usize).max(1);
+        let out_rate = rate / factor as u32;
+        let chunk = ((out_rate as f64 * STREAM_CHUNK_S).round() as usize).max(1);
+        Self { factor, out_rate, chunk, buf: Vec::with_capacity(chunk), phase: 0, acc: 0.0 }
+    }
+    pub fn out_rate(&self) -> u32 {
+        self.out_rate
+    }
+    /// Feed samples; every completed chunk is appended to `out`.
+    pub fn push(&mut self, samples: &[f32], out: &mut Vec<Datum>) {
+        for &s in samples {
+            // Box-filter decimation: average `factor` input samples per output sample.
+            self.acc += if s.is_finite() { s } else { 0.0 };
+            self.phase += 1;
+            if self.phase == self.factor {
+                self.buf.push(self.acc / self.factor as f32);
+                self.acc = 0.0;
+                self.phase = 0;
+                if self.buf.len() >= self.chunk {
+                    out.push(Datum::Audio { rate: self.out_rate, samples: std::mem::replace(&mut self.buf, Vec::with_capacity(self.chunk)) });
+                }
+            }
+        }
+    }
 }
 
 enum Chunk {
@@ -433,6 +483,8 @@ impl Source for AudioSource {
         Box::pin(async move {
             let mut em = Emitter::new(ctx);
             let mut an = Analyzer::new(self.cfg.rate);
+            let mut streamer = self.cfg.stream_audio.then(|| Streamer::new(self.cfg.rate));
+            let mut chunks = Vec::new();
             let reading_every = ((0.1 / HOP_S).round() as u64).max(1);
             let mut rng = util::rng_from_seed(util::instance_seed(em.ctx.seed, em.ctx.id.as_str(), None));
             let mut attempt = 0u32;
@@ -453,6 +505,13 @@ impl Source for AudioSource {
                             em.status(SourceState::Live, "live").await;
                             out.clear();
                             an.push(&samples, &mut out);
+                            if let Some(st) = streamer.as_mut() {
+                                chunks.clear();
+                                st.push(&samples, &mut chunks);
+                                for d in chunks.drain(..) {
+                                    em.datum(d).await;
+                                }
+                            }
                             for o in &out {
                                 match *o {
                                     Out::Frame(f) => {
@@ -512,6 +571,7 @@ pub fn info() -> SourceInfo {
             ParamInfo { name: "format", summary: "s16le | f32le", default: Some("s16le") },
             ParamInfo { name: "rate", summary: "Sample rate (Hz)", default: Some("48000") },
             ParamInfo { name: "channels", summary: "Interleaved channels (mixed down to mono)", default: Some("1") },
+            ParamInfo { name: "stream_audio", summary: "Also forward the audio (~50 ms mono chunks, ≤ 48 kHz) to granular layers", default: Some("true") },
         ],
         channels: vec!["rms", "peak", "centroid", "flux", "zcr", "low", "mid", "high"],
         events: vec!["onset", "loud"],
@@ -531,6 +591,7 @@ pub fn factory(spec: &SourceSpec) -> Result<Box<dyn Source>, SourceError> {
             format,
             rate: util::param_f64_in(spec, "rate", 48000.0, 1000.0, 384_000.0)? as u32,
             channels: util::param_f64_in(spec, "channels", 1.0, 1.0, 32.0)? as usize,
+            stream_audio: util::param_bool(spec, "stream_audio", true)?,
         },
     }))
 }
@@ -671,7 +732,7 @@ mod tests {
         stx.send(true).unwrap();
         tokio::time::timeout(Duration::from_secs(2), task).await.expect("stops on shutdown").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        let (mut readings, mut loud, mut idle) = (0, 0, false);
+        let (mut readings, mut loud, mut idle, mut audio_samples) = (0, 0, false, 0usize);
         while let Ok(s) = rx.try_recv() {
             match s.datum {
                 Datum::Reading { values } => {
@@ -680,11 +741,36 @@ mod tests {
                 }
                 Datum::Event { name, .. } if name == "loud" => loud += 1,
                 Datum::Status { state: SourceState::Idle, .. } => idle = true,
+                Datum::Audio { rate, samples } => {
+                    assert_eq!(rate, 48000);
+                    assert_eq!(samples.len(), 2400);
+                    audio_samples += samples.len();
+                }
                 _ => {}
             }
         }
         assert_eq!(readings, 10);
         assert_eq!(loud, 1);
         assert!(idle);
+        assert_eq!(audio_samples, 48000, "one second of audio forwarded in 50 ms chunks");
+    }
+
+    #[test]
+    fn streamer_decimates_to_48k_in_50ms_chunks() {
+        let mut st = Streamer::new(96_000);
+        assert_eq!(st.out_rate(), 48_000);
+        let mut out = Vec::new();
+        st.push(&vec![0.5f32; 9600], &mut out); // 100 ms at 96 kHz
+        assert_eq!(out.len(), 2);
+        assert!(matches!(&out[0], Datum::Audio { rate: 48_000, samples } if samples.len() == 2400 && samples.iter().all(|s| (*s - 0.5).abs() < 1e-6)));
+        let mut st = Streamer::new(44_100);
+        assert_eq!(st.out_rate(), 44_100);
+        let mut out = Vec::new();
+        st.push(&vec![0.0f32; 2204], &mut out);
+        assert!(out.is_empty());
+        st.push(&[0.0], &mut out);
+        assert_eq!(out.len(), 1);
+        let cfg = factory(&SourceSpec::new("audio.features").with("stream_audio", false));
+        assert!(cfg.is_ok());
     }
 }

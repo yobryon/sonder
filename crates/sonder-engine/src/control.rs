@@ -12,6 +12,7 @@ use sonder_core::*;
 use sonder_dsp::Analyzer;
 use sonder_expr::LayerPipeline;
 
+use crate::captions::Captioner;
 use crate::{SNAPSHOT_EVERY_TICKS, TICK_SECONDS};
 
 /// Bounded history lengths for the snapshot.
@@ -59,6 +60,82 @@ pub struct ControlLoop {
     save_requests: Vec<String>,
     sinks: Vec<Box<dyn crate::sink::CommandSink>>,
     mappings: HashMap<SourceId, crate::mapping::SourceMapping>,
+    captioner: Captioner,
+    /// `LoadScene` TOML waiting for the live runner (which owns the sources).
+    load_request: Option<String>,
+    /// Recycled audio-chunk boxes, reused for `Datum::Audio` routing.
+    audio_pool: Vec<Box<AudioChunk>>,
+}
+
+/// The per-scene state `new` and `rebuild` both construct before touching the synth.
+struct Parts {
+    composer: Composer,
+    pipelines: Vec<Option<LayerPipeline>>,
+    layer_source: Vec<Option<SourceId>>,
+    readers: HashMap<SourceId, Vec<usize>>,
+    sources: BTreeMap<SourceId, SourceStatus>,
+    mappings: HashMap<SourceId, crate::mapping::SourceMapping>,
+    captioner: Captioner,
+    instruments: Vec<(Instrument, String)>,
+}
+
+impl Parts {
+    fn build(scene: &Scene, seed: u64) -> anyhow::Result<Self> {
+        let composer = Composer::new(scene, seed).map_err(|e| anyhow::anyhow!("composer: {e}"))?;
+        let mut pipelines = Vec::with_capacity(scene.layers.len());
+        let mut layer_source = Vec::with_capacity(scene.layers.len());
+        let mut readers: HashMap<SourceId, Vec<usize>> = HashMap::new();
+        let mut sources = BTreeMap::new();
+        let mut instruments = Vec::with_capacity(scene.layers.len());
+        let mut mappings: HashMap<SourceId, crate::mapping::SourceMapping> = HashMap::new();
+        let mut expanded: HashMap<SourceId, SourceSpec> = HashMap::new();
+
+        for (i, layer) in scene.layers.iter().enumerate() {
+            let pipeline = LayerPipeline::compile(&layer.signals, &layer.map, seed ^ (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+                .map_err(|e| anyhow::anyhow!("layer `{}`: {e}", layer.name))?;
+            pipelines.push(Some(pipeline));
+            let owner = scene.source_owner(layer);
+            let sid = owner.map(|o| SourceId::new(&o.name));
+            if let (Some(sid), Some(owner)) = (&sid, owner) {
+                readers.entry(sid.clone()).or_default().push(i);
+                if let LayerSource::Spec(spec) = &owner.source {
+                    if !mappings.contains_key(sid) {
+                        let ex = crate::recipes::expand(spec).map_err(|e| anyhow::anyhow!("source `{sid}`: {e}"))?;
+                        if let Some(m) =
+                            crate::mapping::SourceMapping::from_spec(&ex).map_err(|e| anyhow::anyhow!("source `{sid}`: {e}"))?
+                        {
+                            mappings.insert(sid.clone(), m);
+                        }
+                        expanded.insert(sid.clone(), ex);
+                    }
+                    sources.entry(sid.clone()).or_insert_with(|| SourceStatus {
+                        kind: spec.kind.clone(),
+                        state: SourceState::Connecting,
+                        message: String::new(),
+                        readings: BTreeMap::new(),
+                        last_sample_at: None,
+                        recent: VecDeque::new(),
+                    });
+                }
+            }
+            layer_source.push(sid);
+            instruments.push(crate::instruments::resolve(scene, layer));
+        }
+        let captioner = Captioner::new(scene, |i| layer_source[i].as_ref().and_then(|sid| expanded.get(sid).cloned()));
+        Ok(Self { composer, pipelines, layer_source, readers, sources, mappings, captioner, instruments })
+    }
+
+    /// Push instruments, effects and tempo to the synth.
+    fn send_setup(&self, scene: &Scene, synth: &mut SynthController) -> Vec<String> {
+        let mut names = Vec::with_capacity(self.instruments.len());
+        for (i, (inst, name)) in self.instruments.iter().enumerate() {
+            synth.send(SynthCommand::SetInstrument { layer: LayerId(i as u16), instrument: Box::new(inst.clone()) });
+            names.push(name.clone());
+        }
+        synth.send(SynthCommand::SetEffects(Box::new(scene.effects.clone())));
+        synth.send(SynthCommand::SetTempo { bpm: scene.conductor.tempo as f32 });
+        names
+    }
 }
 
 impl ControlLoop {
@@ -72,59 +149,17 @@ impl ControlLoop {
         audio_backend: String,
         snapshot_tx: tokio::sync::watch::Sender<Arc<EngineSnapshot>>,
     ) -> anyhow::Result<Self> {
-        let composer = Composer::new(&scene, seed).map_err(|e| anyhow::anyhow!("composer: {e}"))?;
-        let mut pipelines = Vec::with_capacity(scene.layers.len());
-        let mut layer_source = Vec::with_capacity(scene.layers.len());
-        let mut readers: HashMap<SourceId, Vec<usize>> = HashMap::new();
-        let mut sources = BTreeMap::new();
-        let mut instrument_names = Vec::with_capacity(scene.layers.len());
-        let mut mappings: HashMap<SourceId, crate::mapping::SourceMapping> = HashMap::new();
-
-        for (i, layer) in scene.layers.iter().enumerate() {
-            let pipeline = LayerPipeline::compile(&layer.signals, &layer.map, seed ^ (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
-                .map_err(|e| anyhow::anyhow!("layer `{}`: {e}", layer.name))?;
-            pipelines.push(Some(pipeline));
-            let owner = scene.source_owner(layer);
-            let sid = owner.map(|o| SourceId::new(&o.name));
-            if let (Some(sid), Some(owner)) = (&sid, owner) {
-                readers.entry(sid.clone()).or_default().push(i);
-                if let LayerSource::Spec(spec) = &owner.source {
-                    if !mappings.contains_key(sid) {
-                        let expanded = crate::recipes::expand(spec).map_err(|e| anyhow::anyhow!("source `{sid}`: {e}"))?;
-                        if let Some(m) = crate::mapping::SourceMapping::from_spec(&expanded)
-                            .map_err(|e| anyhow::anyhow!("source `{sid}`: {e}"))?
-                        {
-                            mappings.insert(sid.clone(), m);
-                        }
-                    }
-                    sources.entry(sid.clone()).or_insert_with(|| SourceStatus {
-                        kind: spec.kind.clone(),
-                        state: SourceState::Connecting,
-                        message: String::new(),
-                        readings: BTreeMap::new(),
-                        last_sample_at: None,
-                        recent: VecDeque::new(),
-                    });
-                }
-            }
-            layer_source.push(sid);
-
-            let (inst, name) = crate::instruments::resolve(&scene, layer);
-            synth.send(SynthCommand::SetInstrument { layer: LayerId(i as u16), instrument: Box::new(inst) });
-            instrument_names.push(name);
-        }
-        synth.send(SynthCommand::SetEffects(Box::new(scene.effects.clone())));
-        synth.send(SynthCommand::SetTempo { bpm: scene.conductor.tempo as f32 });
-
+        let parts = Parts::build(&scene, seed)?;
+        let instrument_names = parts.send_setup(&scene, &mut synth);
         let analyzer = Analyzer::new(synth.sample_rate(), 48);
         let n = scene.layers.len();
         Ok(Self {
             scene,
-            composer,
-            pipelines,
-            layer_source,
-            readers,
-            sources,
+            composer: parts.composer,
+            pipelines: parts.pipelines,
+            layer_source: parts.layer_source,
+            readers: parts.readers,
+            sources: parts.sources,
             instrument_names,
             synth,
             analyzer,
@@ -144,8 +179,66 @@ impl ControlLoop {
             quit_requested: false,
             save_requests: Vec::new(),
             sinks: Vec::new(),
-            mappings,
+            mappings: parts.mappings,
+            captioner: parts.captioner,
+            load_request: None,
+            audio_pool: Vec::new(),
         })
+    }
+
+    /// Replace the running scene in place, keeping the synth, the tap, the snapshot
+    /// channel and the command sinks. Every old layer gets `AllNotesOff`; instruments,
+    /// effects and tempo are re-sent. Fails (leaving the old scene running) when the new
+    /// scene does not build or needs more layers than the synth has slots for. The caller
+    /// must stop the old sources and start `source_specs(&scene)` itself.
+    pub fn rebuild(&mut self, scene: Scene, seed: u64) -> anyhow::Result<()> {
+        if let Err(errs) = crate::validate(&scene) {
+            anyhow::bail!("scene `{}` is invalid:\n  {}", scene.name, errs.join("\n  "));
+        }
+        let max = self.synth.max_layers();
+        if scene.layers.len() > max {
+            anyhow::bail!("scene `{}` has {} layers but this engine was started with {max} slots", scene.name, scene.layers.len());
+        }
+        let parts = Parts::build(&scene, seed)?;
+        for i in 0..self.scene.layers.len() {
+            let cmd = SynthCommand::AllNotesOff { layer: LayerId(i as u16) };
+            for sink in &mut self.sinks {
+                sink.on_command(&cmd);
+            }
+            self.synth.send(cmd);
+        }
+        for sink in &mut self.sinks {
+            sink.flush();
+        }
+        self.instrument_names = parts.send_setup(&scene, &mut self.synth);
+        let n = scene.layers.len();
+        let mut captioner = parts.captioner;
+        captioner.inherit(&self.captioner);
+        captioner.push(self.last_now.unwrap_or(0.0), None, format!("scene: {}", scene.name), 0.7);
+        self.scene = scene;
+        self.composer = parts.composer;
+        self.pipelines = parts.pipelines;
+        self.layer_source = parts.layer_source;
+        self.readers = parts.readers;
+        self.sources = parts.sources;
+        self.mappings = parts.mappings;
+        self.captioner = captioner;
+        self.events.clear();
+        self.notes.clear();
+        self.viz.clear();
+        self.pending_events.clear();
+        self.layer_inputs = (0..n).map(|_| LayerInput { params: BTreeMap::new(), signals: BTreeMap::new() }).collect();
+        Ok(())
+    }
+
+    /// The scene currently running (as loaded, without runtime tweaks).
+    pub fn scene(&self) -> &Scene {
+        &self.scene
+    }
+
+    /// TOML handed to `LoadScene` since the last call, if any (newest wins).
+    pub fn take_load_request(&mut self) -> Option<String> {
+        self.load_request.take()
     }
 
     /// The names of the sources this scene needs started, with their specs — recipes
@@ -250,24 +343,64 @@ impl ControlLoop {
                     });
                 }
                 if let Some(&first) = readers.first() {
+                    let layer = LayerId(first as u16);
+                    let label = self.captioner.label(layer, &name, intensity, &attrs);
+                    if let Some(importance) = self.captioner.salience(layer, &name, intensity, now) {
+                        let text = if label.is_empty() { format!("{name} on {}", self.scene.layers[first].name) } else { label.clone() };
+                        self.captioner.push(now, Some(layer), text, importance);
+                    }
                     push_bounded(
                         &mut self.events,
-                        EventSnapshot { at: now, layer: LayerId(first as u16), name, intensity, attrs: trim_attrs(attrs), label: String::new() },
+                        EventSnapshot { at: now, layer, name, intensity, attrs: trim_attrs(attrs), label },
                         MAX_EVENTS,
                     );
                 }
             }
             Datum::Status { state, message } => {
                 if let Some(st) = self.sources.get_mut(&sample.source) {
+                    let was = st.state;
                     st.state = state;
-                    st.message = message;
+                    st.message = message.clone();
+                    if was != state {
+                        let name = sample.source.as_str();
+                        let layer = readers.first().map(|&i| LayerId(i as u16));
+                        match state {
+                            SourceState::Live => self.captioner.push(now, layer, format!("{name} is live"), 0.4),
+                            SourceState::Failed => self.captioner.push(now, layer, format!("{name} failed: {message}"), 0.9),
+                            SourceState::Reconnecting => self.captioner.push(now, layer, format!("{name} reconnecting"), 0.5),
+                            _ => {}
+                        }
+                    }
                 }
             }
             Datum::Viz { payload } => {
                 self.viz.insert(sample.source.to_string(), payload);
             }
-            // Routed to granular layers by the v2 live-audio work; dropped until then.
-            Datum::Audio { .. } => {}
+            Datum::Audio { rate, samples } => {
+                if let Some(st) = self.sources.get_mut(&sample.source) {
+                    if st.state == SourceState::Connecting {
+                        st.state = SourceState::Live;
+                    }
+                }
+                // One box per reading layer; the synth copies it into the layer's ring and
+                // hands the box back (see `recycle_audio`).
+                for &i in &readers {
+                    let mut chunk = self.audio_pool.pop().unwrap_or_default();
+                    chunk.rate = rate;
+                    chunk.samples.clear();
+                    chunk.samples.extend_from_slice(&samples);
+                    self.synth.send(SynthCommand::AudioChunk { layer: LayerId(i as u16), chunk });
+                }
+            }
+        }
+    }
+
+    /// Reclaim audio-chunk boxes the synth has finished with.
+    fn recycle_audio(&mut self) {
+        while let Some(chunk) = RecycledAudio::take_recycled_audio(&mut self.synth) {
+            if self.audio_pool.len() < 64 {
+                self.audio_pool.push(chunk);
+            }
         }
     }
 
@@ -276,6 +409,7 @@ impl ControlLoop {
         match &cmd {
             UserCommand::Quit => self.quit_requested = true,
             UserCommand::SaveScene { path } => self.save_requests.push(path.clone()),
+            UserCommand::LoadScene { toml } => self.load_request = Some(toml.clone()),
             _ => self.composer.handle(&cmd),
         }
     }
@@ -302,9 +436,10 @@ impl ControlLoop {
                     intensity: f.intensity,
                     attrs: BTreeMap::new(),
                 });
+                let label = self.captioner.label(LayerId(i as u16), &f.name, f.intensity, &BTreeMap::new());
                 push_bounded(
                     &mut self.events,
-                    EventSnapshot { at: now, layer: LayerId(i as u16), name: f.name, intensity: f.intensity, attrs: BTreeMap::new(), label: String::new() },
+                    EventSnapshot { at: now, layer: LayerId(i as u16), name: f.name, intensity: f.intensity, attrs: BTreeMap::new(), label },
                     MAX_EVENTS,
                 );
             }
@@ -327,11 +462,17 @@ impl ControlLoop {
         for sink in &mut self.sinks {
             sink.flush();
         }
-        for n in out.notes {
+        for mut n in out.notes {
+            if let Some(cause) = n.cause.as_mut() {
+                if cause.label.is_empty() {
+                    cause.label = self.cause_label(n.layer, cause);
+                }
+            }
             push_bounded(&mut self.notes, n, MAX_NOTES);
         }
 
         // Audio-side housekeeping.
+        self.recycle_audio();
         while let Some(old) = self.synth.take_recycled() {
             drop(old);
         }
@@ -359,6 +500,17 @@ impl ControlLoop {
         }
     }
 
+    /// Label for a note's cause: the matching recent event's label (same layer, name and
+    /// time), else freshly formatted from the cause's own attrs.
+    fn cause_label(&self, layer: LayerId, cause: &NoteCause) -> String {
+        if let Some(e) = self.events.iter().rev().find(|e| e.layer == layer && e.name == cause.event && (e.at - cause.at).abs() < 0.05) {
+            if !e.label.is_empty() {
+                return e.label.clone();
+            }
+        }
+        self.captioner.label(layer, &cause.event, 0.0, &cause.attrs)
+    }
+
     fn publish_snapshot(&mut self, now: Seconds) {
         let mut snap = EngineSnapshot {
             scene_name: self.scene.name.clone(),
@@ -367,6 +519,9 @@ impl ControlLoop {
             ..Default::default()
         };
         self.composer.fill_snapshot(&mut snap);
+        self.captioner.note_section(now, &snap.form.section, &snap.form.note);
+        self.captioner.note_key(now, &snap.harmony.key_name, &snap.harmony.mode);
+        snap.captions = self.captioner.captions().cloned().collect();
         // The composer fills harmony/mood/transport and may pre-populate layers; make sure
         // every layer exists and carries our signal/meter data.
         if snap.layers.len() != self.scene.layers.len() {
@@ -418,6 +573,19 @@ impl ControlLoop {
         snap.underruns = self.underruns.saturating_add(self.synth.underruns());
         snap.audio_backend = self.audio_backend.clone();
         let _ = self.snapshot_tx.send(Arc::new(snap));
+    }
+}
+
+/// Audio-chunk recycling. `sonder-audio` is growing `SynthController::take_recycled_audio`
+/// alongside the granular instrument; until it lands the synth drops chunks itself and
+/// the pool simply stays empty (every chunk is a fresh allocation).
+trait RecycledAudio {
+    fn take_recycled_audio(&mut self) -> Option<Box<AudioChunk>>;
+}
+
+impl RecycledAudio for SynthController {
+    fn take_recycled_audio(&mut self) -> Option<Box<AudioChunk>> {
+        None
     }
 }
 

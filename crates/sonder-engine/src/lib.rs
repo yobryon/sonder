@@ -11,6 +11,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod compose_prompt;
+pub mod captions;
 pub mod control;
 pub mod instruments;
 pub mod mapping;

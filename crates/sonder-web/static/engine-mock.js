@@ -90,6 +90,9 @@ export class Engine {
     this.notes = [];
     this.sources = new Map(this.scene.specs.map((s) => [s.name, { name: s.name, kind: s.kind, state: s.builtin ? 'live' : 'connecting', message: s.builtin ? 'simulated' : '', rate: 0, last_sample_at: null, readings: {}, times: [] }]));
     this.viz = {};
+    this.captions = [];
+    this.section = 0;
+    this.sectionAt = 0;
     this.cars = [];
     this.lastBeat = -1;
     this.rng = Number(this.seed % 2147483647n) || 1;
@@ -109,10 +112,23 @@ export class Engine {
     else if (d.type === 'reading') Object.assign(s.readings, d.values);
     else if (d.type === 'event') {
       const layer = this.layerFor(source);
-      this.events.push({ at: this.t, layer, name: d.name, intensity: d.intensity, attrs: d.attrs || {} });
-      this.notes.push({ at: this.t, layer, midi: 48 + Math.floor(this.rand() * 36), velocity: 0.3 + 0.6 * Math.min(1, d.intensity), pan: 0.5, duration: 0.3 + 2 * Math.min(1, d.intensity), active: true });
+      this.emitEvent(layer, d.name, d.intensity, d.attrs || {});
     } else if (d.type === 'viz') this.viz[source] = d.payload;
     else throw new Error(`bad sample type ${d.type}`);
+  }
+  // An event → ticker row (with a caption label) → a note that remembers its cause; the
+  // salient ones also become captions.
+  emitEvent(layer, name, intensity, attrs) {
+    const at = this.t;
+    const first = Object.keys(attrs).slice(0, 2).map((k) => `${k} ${typeof attrs[k] === 'number' ? attrs[k].toFixed(2) : attrs[k]}`).join(', ');
+    const label = `${name}${first ? ` · ${first}` : ''} on ${this.scene.layers[layer]?.name || 'L' + layer}`;
+    this.events.push({ at, layer, name, intensity, attrs, label });
+    const cause = { event: name, at, label, attrs };
+    this.notes.push({ at, layer, midi: 48 + Math.floor(this.rand() * 36), velocity: 0.3 + 0.6 * Math.min(1, intensity), pan: 0.5, duration: 0.3 + 2 * Math.min(1, intensity), active: true, cause, reason: 'trigger' });
+    if (intensity > 0.55 || this.rand() < 0.08) {
+      this.captions.push({ at, layer, text: intensity > 0.85 ? `${label} — the loudest in a while` : label, importance: Math.min(1, intensity) });
+      if (this.captions.length > 16) this.captions.splice(0, this.captions.length - 16);
+    }
   }
   push_frame(source, gray, w, h) {
     if (!(gray instanceof Uint8Array) || gray.length !== w * h) throw new Error('bad frame');
@@ -129,6 +145,8 @@ export class Engine {
       case 'toggle_solo': this.solo = this.solo === c.layer ? null : c.layer; break;
       case 'toggle_pause': this.paused = !this.paused; break;
       case 'nudge_tempo': this.bpm = Math.max(40, Math.min(200, this.bpm + c.delta)); break;
+      case 'next_section': this.section++; this.sectionAt = this.t; break;
+      case 'load_scene': break;
       case 'nudge_density': case 'transpose': case 'next_mode': case 'next_chord': case 'set_layer_gain': case 'save_scene': case 'quit': break;
       default: throw new Error(`unknown command ${c.cmd}`);
     }
@@ -153,11 +171,26 @@ export class Engine {
         for (const c of this.cars) { c.y += c.v * dt; c.x += (c.lane / 3 - 0.5) * 0.02 * dt; }
         const gone = this.cars.filter((c) => c.y >= 1);
         this.cars = this.cars.filter((c) => c.y < 1);
-        for (const c of gone) this.events.push({ at: this.t, layer: 1, name: 'car', intensity: Math.min(1, 0.5 * c.size * c.bright), attrs: { lane: c.lane, x: c.x, size: c.size, speed: c.v * 6, brightness: c.bright } });
+        for (const c of gone) this.emitEvent(1, 'car', Math.min(1, 0.5 * c.size * c.bright), { lane: c.lane, x: c.x, size: c.size, speed: c.v * 6, brightness: c.bright });
         const src = this.sources.get('traffic');
         if (src) { src.readings = { count: this.cars.length, mean_speed: 0.5 + 0.2 * Math.sin(this.t / 7) }; src.times.push(this.t); }
         this.viz.traffic = { cars: this.cars.map((c) => ({ x: c.x, y: c.y, lane: c.lane, size: c.size, bright: c.bright })) };
       }
+    }
+      // Map scenes: fake geo events (quakes along the ring of fire-ish) and lightning strikes so
+      // Live Earth has something to draw without the network.
+      if (this.scene.viz === 'map') {
+        if (this.rand() < dt * 0.7) {
+          const lat = -40 + this.rand() * 90, lon = this.rand() < 0.5 ? 100 + this.rand() * 60 : -130 + this.rand() * 60;
+          const mag = 1 + this.rand() * 5;
+          this.emitEvent(Math.min(2, this.scene.layers.length - 1), 'quake', Math.min(1, mag / 6), { mag: Math.round(mag * 10) / 10, lat: Math.round(lat * 100) / 100, lon: Math.round(lon * 100) / 100, lat01: (lat + 90) / 180, lon01: (lon + 180) / 360, place: 'somewhere wet' });
+        }
+        this.strikes = (this.strikes || []).filter((s) => this.t - s.t < 5);
+        if (this.rand() < dt * 6) { const lat = -20 + this.rand() * 40, lon = -70 + this.rand() * 120; this.strikes.push({ t: this.t, lat01: (lat + 90) / 180, lon01: (lon + 180) / 360 }); }
+        this.viz.lightning = { strikes: this.strikes.map((s) => ({ lat01: s.lat01, lon01: s.lon01, age_s: this.t - s.t })) };
+      }
+      // Form: sections cycle every 16 bars (or on next_section).
+      if ((this.beats - this.sectionAt * this.bpm / 60) / 4 >= 16) { this.section++; this.sectionAt = this.t; }
     }
     for (const n of this.notes) if (n.active && this.t - n.at > n.duration) n.active = false;
     if (this.notes.length > 256) this.notes.splice(0, this.notes.length - 256);
@@ -185,6 +218,13 @@ export class Engine {
       transport: { bar: Math.floor(beatsTotal / bpb), beat: beatsTotal % bpb, bpm: this.bpm, beats_per_bar: bpb },
       harmony: { tonic: 2, key_name: 'D', mode: 'lydian', scale: [2, 4, 6, 8, 9, 11, 1], chord: [2, 6, 9, 1], chord_name: 'Dmaj7', chord_degree: 1, beats_to_change: 8 - (beatsTotal % 8) },
       mood, conductor_note: `mock engine · energy ${mood.energy.toFixed(2)} drifting on a sine · seed ${this.seed}`,
+      form: (() => {
+        const names = ['intro', 'build', 'peak', 'release'];
+        const section = names[this.section % names.length];
+        const barsIn = Math.floor((this.beats - this.sectionAt * this.bpm / 60) / bpb);
+        return { section, bar_in_section: Math.max(0, barsIn), bars_in_section: 16, arc: Math.min(1, Math.max(0, barsIn / 16)), motif: this.section % 2 ? 'B' : 'A', note: `${section} · motif ${this.section % 2 ? 'B' : 'A'} · ${this.section % 4 === 2 ? 'answering the loudest layer' : 'listening'}` };
+      })(),
+      captions: this.captions,
       layers, sources, events: this.events, notes: this.notes,
       master: { rms: this.paused ? 0 : 0.03, peak: this.paused ? 0 : 0.05 },
       spectrum: Array.from({ length: 48 }, (_, i) => Math.max(0, 0.6 * Math.exp(-((i - 8) ** 2) / 20) * (0.7 + 0.3 * Math.sin(t * 3 + i)))),

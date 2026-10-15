@@ -9,6 +9,7 @@ default = 600
 
 [spec]
 kind = "http-json"
+caption = "GB grid carbon {actual} gCO2/kWh"
 url = "https://api.carbonintensity.org.uk/intensity"
 interval = "{interval}"
 data_path = ".data[0].intensity"

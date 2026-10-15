@@ -116,6 +116,33 @@ async fn end_to_end() {
     assert_eq!(snap["scene_name"], "Night Freeway");
     assert_eq!(snap["harmony"]["chord_name"], "Dmaj7");
 
+    // --- /api/validate ---
+    let v: serde_json::Value = client
+        .post(format!("{base}/api/validate"))
+        .json(&serde_json::json!({ "toml": "name = \"t\"\n[[layer]]\nname = \"a\"\nrole = \"pad\"\ninstrument = \"pad.warm\"\n" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["errors"], serde_json::json!([]));
+    let v: serde_json::Value = client
+        .post(format!("{base}/api/validate"))
+        .json(&serde_json::json!({ "toml": "name = \"t\"\n[[layer]]\nname = \"a\"\n[[layer]]\nname = \"a\"\n" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!v["errors"].as_array().unwrap().is_empty(), "{v}");
+    // The helper modules app.js imports are served too.
+    for path in ["/scene-url.js", "/editor.js", "/geo.js", "/coastlines.json"] {
+        let r = client.get(format!("{base}{path}")).send().await.unwrap();
+        assert!(r.status().is_success(), "{path}");
+    }
+
     // --- /ws: receive snapshot JSON, send a command ---
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await.unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(2), ws.next()).await.unwrap().unwrap().unwrap();

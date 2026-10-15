@@ -6,9 +6,11 @@ use sonder_core::{Adsr, Filter, FilterKind, Instrument, LayerId, Lfo as LfoCfg, 
 
 use crate::env::Envelope;
 use crate::filter::{Svf, SvfCoefs};
+use crate::grain::{AudioRing, GrainPlayer};
 use crate::lfo::Lfo;
 use crate::math::{hz_to_midi, lerp, onepole_coef, pan_gains, saturate, Rng};
 use crate::osc::{osc_ratio, OscParams, OscState};
+use crate::physical::{KarplusStrong, ModalBank};
 use crate::BLOCK;
 
 /// Plain-data copy of the parts of an [`Instrument`] a voice needs. `Clone` of
@@ -88,6 +90,11 @@ pub struct Voice {
     pub age: u64,
     pub patch: Patch,
     osc: [OscState; 2],
+    /// Physical-model and granular state per oscillator slot (used when the slot's
+    /// wave is `String` / `Modal` / `Grain`).
+    string: [KarplusStrong; 2],
+    modal: [ModalBank; 2],
+    grains: [GrainPlayer; 2],
     filt: [Svf; 2],
     coefs: SvfCoefs,
     coefs_ready: bool,
@@ -110,6 +117,13 @@ pub struct Voice {
 
 impl Default for Voice {
     fn default() -> Self {
+        Self::new(48_000.0)
+    }
+}
+
+impl Voice {
+    /// A silent voice whose physical-model buffers are sized for `sample_rate`.
+    pub fn new(sample_rate: f32) -> Self {
         Self {
             active: false,
             layer: LayerId(0),
@@ -117,6 +131,9 @@ impl Default for Voice {
             age: 0,
             patch: Patch::default(),
             osc: [OscState::default(); 2],
+            string: [KarplusStrong::new(sample_rate), KarplusStrong::new(sample_rate)],
+            modal: [ModalBank::new(sample_rate), ModalBank::new(sample_rate)],
+            grains: [GrainPlayer::default(), GrainPlayer::default()],
             filt: [Svf::default(); 2],
             coefs: SvfCoefs::default(),
             coefs_ready: false,
@@ -131,7 +148,7 @@ impl Default for Voice {
             glide_coef: 1.0,
             gain_l: 0.0,
             gain_r: 0.0,
-            sample_rate: 48_000.0,
+            sample_rate,
             tables: crate::wavetable::tables(),
         }
     }
@@ -171,10 +188,18 @@ impl Voice {
             _ => target,
         };
         self.glide_coef = onepole_coef(self.patch.glide / 3.0, sr / BLOCK as f32);
+        let base_hz = 440.0 * 2f32.powf((self.midi_cur - 69.0) / 12.0);
         for (k, o) in self.osc.iter_mut().enumerate() {
-            o.reset(s.seed.wrapping_add(k as u32 * 7919));
-            if matches!(self.patch.osc[k].wave, Wave::Supersaw) {
-                o.randomize_phases();
+            let seed = s.seed.wrapping_add(k as u32 * 7919);
+            o.reset(seed);
+            let cfg = &self.patch.osc[k];
+            let hz = base_hz * osc_ratio(cfg);
+            match cfg.wave {
+                Wave::Supersaw => o.randomize_phases(),
+                Wave::String => self.string[k].trigger(&cfg.model, hz, seed),
+                Wave::Modal => self.modal[k].trigger(&cfg.model, hz, seed),
+                Wave::Grain => self.grains[k].reset(seed),
+                _ => {}
             }
         }
         for f in &mut self.filt {
@@ -223,8 +248,9 @@ impl Voice {
     }
 
     /// Render one block, *adding* into `out` (interleaved stereo, `BLOCK` frames).
-    /// Returns `false` when the voice has finished and should be freed.
-    pub fn render(&mut self, out: &mut [f32], m: &LayerMod) -> bool {
+    /// `ring` is the layer's live audio for `Wave::Grain`. Returns `false` when the
+    /// voice has finished and should be freed.
+    pub fn render(&mut self, out: &mut [f32], m: &LayerMod, ring: &AudioRing) -> bool {
         debug_assert!(out.len() >= BLOCK * 2);
         let sr = self.sample_rate;
         let dt_block = BLOCK as f32 / sr;
@@ -301,6 +327,12 @@ impl Voice {
             p.table = o.table;
             levels[k] = o.level.clamp(0.0, 1.0);
             waves[k] = o.wave;
+            match o.wave {
+                Wave::String => self.string[k].set_freq(p.freq_hz),
+                Wave::Modal => self.modal[k].set_freq(p.freq_hz),
+                Wave::Grain => self.grains[k].configure(&o.grain, p.freq_hz, ring, sr),
+                _ => {}
+            }
         }
         let noise_floor = texture * 0.04;
 
@@ -321,7 +353,18 @@ impl Voice {
             let mut l = 0.0;
             let mut r = 0.0;
             for k in 0..n_osc {
-                let (ol, or) = self.osc[k].render(waves[k], &params[k]);
+                let (ol, or) = match waves[k] {
+                    Wave::String => {
+                        let s = self.string[k].tick();
+                        (s, s)
+                    }
+                    Wave::Modal => {
+                        let s = self.modal[k].tick();
+                        (s, s)
+                    }
+                    Wave::Grain => self.grains[k].tick(ring),
+                    w => self.osc[k].render(w, &params[k]),
+                };
                 l += ol * levels[k];
                 r += or * levels[k];
             }

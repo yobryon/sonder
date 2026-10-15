@@ -93,6 +93,59 @@ pub struct Osc {
     pub fm_index_env: f32,
     /// Which built-in table [`Wave::Wavetable`] reads.
     pub table: Table,
+    /// Granular settings for [`Wave::Grain`].
+    pub grain: Grain,
+    /// Physical-model settings for [`Wave::String`] and [`Wave::Modal`].
+    pub model: Model,
+}
+
+/// Settings for [`Wave::Grain`]: granular playback of the layer's live audio ring.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Grain {
+    /// How much recent audio the grains may reach back into, seconds (capped at 8).
+    pub ring_seconds: f32,
+    /// Grain length in milliseconds (Hann window).
+    pub size_ms: f32,
+    /// Grains started per second per voice.
+    pub density: f32,
+    /// Random start-position spread back into the ring, seconds.
+    pub spray: f32,
+    /// 0..1: how much the playback rate retunes the source's estimated pitch to the
+    /// note (0 = play at the original speed, 1 = fully pitched to the note).
+    pub pitch_follow: f32,
+    /// Random per-grain pitch jitter in cents.
+    pub jitter_cents: f32,
+    /// 0..1 stereo spread of grain positions.
+    pub width: f32,
+}
+
+impl Default for Grain {
+    fn default() -> Self {
+        Self { ring_seconds: 4.0, size_ms: 80.0, density: 20.0, spray: 0.5, pitch_follow: 1.0, jitter_cents: 0.0, width: 0.5 }
+    }
+}
+
+/// Settings for the physical models [`Wave::String`] and [`Wave::Modal`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Model {
+    /// 0..1 loss: 0 rings for seconds, 1 dies almost at once.
+    pub damping: f32,
+    /// 0..1 excitation brightness (noise-burst / strike colour).
+    pub brightness: f32,
+    /// 0..1 pick / strike position along the string or bar (0.5 = middle).
+    pub position: f32,
+    /// 0..1 partial series for [`Wave::Modal`]: 0 = harmonic, 1 = bell-like inharmonic.
+    pub stiffness: f32,
+    /// Number of resonators for [`Wave::Modal`], 1..32.
+    pub modes: u8,
+}
+
+impl Default for Model {
+    fn default() -> Self {
+        Self { damping: 0.3, brightness: 0.7, position: 0.2, stiffness: 0.0, modes: 12 }
+    }
 }
 
 impl Default for Osc {
@@ -109,6 +162,8 @@ impl Default for Osc {
             fm_index: 1.0,
             fm_index_env: 0.0,
             table: Table::Organ,
+            grain: Grain::default(),
+            model: Model::default(),
         }
     }
 }

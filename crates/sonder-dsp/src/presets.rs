@@ -1,7 +1,7 @@
 //! Built-in instrument library. Every preset is a plain [`Instrument`] value
 //! with musical defaults; scenes can override any field inline.
 
-use sonder_core::{Adsr, Chorus, Filter, FilterKind, Instrument, Lfo, LfoShape, Osc, Role, Table, Wave};
+use sonder_core::{Adsr, Chorus, Filter, FilterKind, Grain, Instrument, Lfo, LfoShape, Model, Osc, Role, Table, Wave};
 
 /// `(name, description, constructor)` for every preset, in display order.
 type Builder = fn() -> Instrument;
@@ -34,6 +34,13 @@ const PRESETS: &[(&str, &str, Builder)] = &[
     ("texture.wind", "Wind texture: pink noise through a wandering band-pass", texture_wind),
     ("texture.grain", "Grainy texture: sample-and-hold filtered noise", texture_grain),
     ("texture.noise", "Dark noise bed: low-passed white noise, very slow envelope", texture_noise),
+    ("grain.ocean", "Granular wash of the layer's live audio: long sprayed grains, loosely pitched to the note", grain_ocean),
+    ("grain.voice", "Granular live audio pitched to the note: short dense grains, tight spray", grain_voice),
+    ("string.nylon", "Karplus–Strong nylon string: warm pluck, quick damping", string_nylon),
+    ("string.steel", "Karplus–Strong steel string: bright pluck that rings, octave shimmer", string_steel),
+    ("modal.bar", "Struck bar (marimba/vibes): harmonic-ish resonator bank, soft mallet", modal_bar),
+    ("modal.bell", "Bell: inharmonic resonator bank with a long shimmering decay", modal_bell),
+    ("modal.membrane", "Membrane / drum head: dark stretched partials, fast decay", modal_membrane),
 ];
 
 /// Look up a preset by name.
@@ -59,8 +66,8 @@ pub fn default_for_role(role: Role) -> &'static str {
         Role::Bass => "bass.sub",
         Role::Lead => "lead.soft",
         Role::Arp => "arp.pulse",
-        Role::Pluck => "pluck.nylon",
-        Role::Bells => "bells.fm",
+        Role::Pluck => "string.nylon",
+        Role::Bells => "modal.bell",
         Role::Perc => "perc.kit",
         Role::Texture => "texture.wind",
     }
@@ -535,6 +542,121 @@ fn texture_noise() -> Instrument {
     }
 }
 
+fn grain_ocean() -> Instrument {
+    Instrument {
+        osc: vec![Osc {
+            level: 0.9,
+            grain: Grain { ring_seconds: 6.0, size_ms: 180.0, density: 24.0, spray: 3.0, pitch_follow: 0.6, jitter_cents: 25.0, width: 0.9 },
+            ..osc(Wave::Grain)
+        }],
+        filter: Filter { lfo_amount: 0.4, ..lp(3500.0, 0.15, 0.0) },
+        amp_env: adsr(1.5, 1.0, 1.0, 3.0),
+        lfo: Lfo { rate_hz: 0.05, shape: LfoShape::Triangle, ..Lfo::default() },
+        gain: 0.6,
+        width: 0.9,
+        reverb_send: 0.5,
+        delay_send: 0.15,
+        polyphony: 4,
+        velocity_to_amp: 0.4,
+        ..base("Granular ocean")
+    }
+}
+
+fn grain_voice() -> Instrument {
+    Instrument {
+        osc: vec![Osc {
+            level: 1.0,
+            grain: Grain { ring_seconds: 2.0, size_ms: 30.0, density: 90.0, spray: 0.08, pitch_follow: 1.0, jitter_cents: 4.0, width: 0.3 },
+            ..osc(Wave::Grain)
+        }],
+        filter: Filter { key_track: 0.3, ..lp(6000.0, 0.1, 0.0) },
+        amp_env: adsr(0.03, 0.2, 0.9, 0.4),
+        gain: 0.7,
+        width: 0.3,
+        reverb_send: 0.3,
+        polyphony: 6,
+        velocity_to_amp: 0.5,
+        ..base("Granular voice")
+    }
+}
+
+fn string_nylon() -> Instrument {
+    Instrument {
+        osc: vec![Osc { level: 0.9, model: Model { damping: 0.45, brightness: 0.45, position: 0.22, ..Model::default() }, ..osc(Wave::String) }],
+        filter: Filter { key_track: 0.5, velocity_amount: 0.8, ..lp(2800.0, 0.1, 0.0) },
+        amp_env: adsr(0.001, 0.5, 1.0, 0.5),
+        gain: 0.55,
+        reverb_send: 0.35,
+        delay_send: 0.1,
+        polyphony: 12,
+        velocity_to_amp: 0.8,
+        ..base("Nylon string")
+    }
+}
+
+fn string_steel() -> Instrument {
+    Instrument {
+        osc: vec![
+            Osc { level: 0.85, model: Model { damping: 0.15, brightness: 0.9, position: 0.13, ..Model::default() }, ..osc(Wave::String) },
+            Osc { level: 0.25, octave: 1, model: Model { damping: 0.35, brightness: 0.8, position: 0.2, ..Model::default() }, ..osc(Wave::String) },
+        ],
+        filter: Filter { key_track: 0.4, ..lp(7000.0, 0.05, 0.0) },
+        amp_env: adsr(0.001, 0.8, 1.0, 0.8),
+        gain: 0.5,
+        width: 0.3,
+        reverb_send: 0.4,
+        delay_send: 0.2,
+        polyphony: 12,
+        velocity_to_amp: 0.75,
+        ..base("Steel string")
+    }
+}
+
+fn modal_bar() -> Instrument {
+    Instrument {
+        osc: vec![Osc { level: 0.9, model: Model { damping: 0.35, brightness: 0.4, position: 0.3, stiffness: 0.15, modes: 8 }, ..osc(Wave::Modal) }],
+        filter: Filter { key_track: 0.5, ..lp(6000.0, 0.05, 0.0) },
+        amp_env: adsr(0.001, 0.5, 1.0, 0.6),
+        gain: 0.6,
+        reverb_send: 0.3,
+        polyphony: 10,
+        velocity_to_amp: 0.8,
+        ..base("Struck bar")
+    }
+}
+
+fn modal_bell() -> Instrument {
+    Instrument {
+        osc: vec![
+            Osc { level: 0.8, model: Model { damping: 0.08, brightness: 0.75, position: 0.17, stiffness: 1.0, modes: 12 }, ..osc(Wave::Modal) },
+            Osc { level: 0.2, octave: 2, model: Model { damping: 0.3, brightness: 0.6, position: 0.25, stiffness: 1.0, modes: 6 }, ..osc(Wave::Modal) },
+        ],
+        filter: Filter { kind: FilterKind::Hp, cutoff: 200.0, ..Filter::default() },
+        amp_env: adsr(0.001, 3.0, 1.0, 3.0),
+        lfo: Lfo { rate_hz: 0.3, to_pan: 0.3, ..Lfo::default() },
+        gain: 0.45,
+        width: 0.4,
+        reverb_send: 0.6,
+        delay_send: 0.25,
+        polyphony: 12,
+        velocity_to_amp: 0.7,
+        ..base("Bell")
+    }
+}
+
+fn modal_membrane() -> Instrument {
+    Instrument {
+        osc: vec![Osc { level: 1.0, model: Model { damping: 0.7, brightness: 0.25, position: 0.4, stiffness: 0.6, modes: 10 }, ..osc(Wave::Modal) }],
+        filter: lp(2500.0, 0.2, 0.0),
+        amp_env: adsr(0.001, 0.4, 1.0, 0.3),
+        gain: 0.7,
+        reverb_send: 0.25,
+        polyphony: 8,
+        velocity_to_amp: 0.9,
+        ..base("Membrane")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,5 +691,19 @@ mod tests {
         for n in ["pad.wavetable", "pad.chorus", "keys.organ", "lead.vox"] {
             assert!(describe(n).is_some());
         }
+    }
+
+    #[test]
+    fn v2_presets_use_the_new_waves() {
+        let uses = |name: &str, w: Wave| get(name).unwrap().osc.iter().any(|o| o.wave == w);
+        assert!(uses("grain.ocean", Wave::Grain) && uses("grain.voice", Wave::Grain));
+        assert!(uses("string.nylon", Wave::String) && uses("string.steel", Wave::String));
+        for n in ["modal.bar", "modal.bell", "modal.membrane"] {
+            assert!(uses(n, Wave::Modal), "{n}");
+            assert!(get(n).unwrap().osc.iter().all(|o| (1..=32).contains(&o.model.modes)), "{n}");
+        }
+        assert!(get("grain.voice").unwrap().osc[0].grain.density > get("grain.ocean").unwrap().osc[0].grain.density);
+        assert!(default_for_role(Role::Pluck).starts_with("string."));
+        assert!(default_for_role(Role::Bells).starts_with("modal."));
     }
 }

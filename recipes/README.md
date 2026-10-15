@@ -22,6 +22,7 @@ subscribe = { method = "subscribe", params = { channel = "trade", symbol = "{sym
 filter = ".channel==trade"
 each = ".data"
 events_on = "every"
+caption = "{size} {product} {side} on Kraken"   # caption template for the UI (event attrs; not recipe params)
 
 [spec.event]                      # engine-side mapping (see docs/ARCHITECTURE.md "Source mapping")
 name = "trade"

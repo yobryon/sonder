@@ -3,8 +3,9 @@
 //! The audio thread owns a [`Synth`]: it feeds it [`sonder_core::SynthCommand`]s
 //! via [`Synth::handle`] and pulls interleaved stereo via [`Synth::render`].
 //! Both are allocation- and lock-free after construction. Anything that must be
-//! freed (instrument / effects boxes) is handed back through
-//! [`Synth::take_recycled`] / [`Synth::take_recycled_effects`].
+//! freed (instrument / effects / audio-chunk boxes) is handed back through
+//! [`Synth::take_recycled`] / [`Synth::take_recycled_effects`] /
+//! [`Synth::take_recycled_audio`].
 //!
 //! The control thread uses [`presets`] to build instruments and [`Analyzer`] to
 //! compute a spectrum for the UI from tapped audio.
@@ -17,10 +18,12 @@ pub mod delay;
 pub mod drums;
 pub mod env;
 pub mod filter;
+pub mod grain;
 pub mod lfo;
 pub mod master;
 pub mod math;
 pub mod osc;
+pub mod physical;
 pub mod presets;
 pub mod reverb;
 pub mod synth;

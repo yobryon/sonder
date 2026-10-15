@@ -48,5 +48,9 @@ echo "+ copy static files"
 cp -r crates/sonder-web/static/. "$OUT/"
 touch "$OUT/.nojekyll"
 
+echo "+ catalog.json (sources, recipes, presets + composer system prompt)"
+# Native build of the CLI (default features) just to print the catalog.
+cargo run --quiet --release -p sonder -- catalog --json > "$OUT/catalog.json"
+
 du -sh "$OUT/pkg/sonder_wasm_bg.wasm" | sed 's/^/wasm: /'
 echo "site built in $OUT/ — serve with: python3 -m http.server -d $OUT"

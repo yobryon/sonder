@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use sonder_core::{LayerId, NoteId, SynthCommand, SynthFeedback};
+use sonder_core::{AudioChunk, LayerId, NoteId, SynthCommand, SynthFeedback};
 use sonder_audio::{render_offline, synth_pair, AudioStream, Backend, TapConfig};
 use sonder_dsp::presets;
 
@@ -49,6 +49,50 @@ fn controller_to_host_round_trip_renders_sound() {
     ctl.send(SynthCommand::SetInstrument { layer: LayerId(0), instrument: Box::new(presets::get("pad.warm").unwrap()) });
     host.render(&mut out);
     assert!(ctl.take_recycled().is_some());
+}
+
+#[test]
+fn audio_chunks_round_trip_and_recycle() {
+    let (mut ctl, mut host) = synth_pair(48_000.0, 2, None);
+    assert_eq!(ctl.master_lufs(), sonder_dsp::master::SILENCE_LUFS);
+    assert!(ctl.send(SynthCommand::SetInstrument { layer: LayerId(0), instrument: Box::new(presets::get("grain.voice").unwrap()) }));
+    let samples: Vec<f32> = (0..48_000).map(|i| (i as f32 / 48_000.0 * 220.0 * std::f32::consts::TAU).sin() * 0.5).collect();
+    let chunk = Box::new(AudioChunk { rate: 48_000, samples: samples.clone() });
+    let cap = chunk.samples.capacity();
+    assert!(ctl.send(SynthCommand::AudioChunk { layer: LayerId(0), chunk }));
+    assert!(ctl.send(note(0, 1, 440.0)));
+    let mut out = vec![0.0f32; 512 * 2];
+    for _ in 0..100 {
+        host.render(&mut out);
+    }
+    let rms = (out.iter().map(|s| s * s).sum::<f32>() / out.len() as f32).sqrt();
+    assert!(rms > 0.005, "grains should sound: rms {rms}");
+    assert!(ctl.master_lufs() > -60.0, "lufs {}", ctl.master_lufs());
+    assert_eq!(ctl.lufs(), ctl.master_lufs());
+    // The chunk box comes back intact (its Vec can be reused for the next chunk).
+    let back = ctl.take_recycled_audio().expect("audio box recycled");
+    assert_eq!(back.samples, samples);
+    assert_eq!(back.samples.capacity(), cap);
+    assert!(ctl.take_recycled_audio().is_none());
+    // Many small chunks: every box returns, in order, through the pending-recycle path.
+    for i in 0..300u32 {
+        assert!(ctl.send(SynthCommand::AudioChunk { layer: LayerId(0), chunk: Box::new(AudioChunk { rate: 44_100, samples: vec![i as f32 * 1e-3; 64] }) }));
+    }
+    let mut got = Vec::new();
+    for _ in 0..20 {
+        host.render(&mut out);
+        while let Some(b) = ctl.take_recycled_audio() {
+            got.push(b.samples[0]);
+        }
+    }
+    assert_eq!(got.len(), 300);
+    assert!(got.windows(2).all(|w| w[0] < w[1]), "recycled in send order");
+    assert_eq!(host.synth().leaked_boxes(), 0);
+    // collect_garbage drains audio boxes too.
+    assert!(ctl.send(SynthCommand::AudioChunk { layer: LayerId(0), chunk: Box::new(AudioChunk { rate: 48_000, samples: vec![0.0; 16] }) }));
+    host.render(&mut out);
+    ctl.collect_garbage();
+    assert!(ctl.take_recycled_audio().is_none());
 }
 
 #[test]

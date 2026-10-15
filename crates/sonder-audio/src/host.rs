@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use sonder_core::{Effects, Instrument, LayerId, Meter, SynthCommand, SynthFeedback};
+use sonder_core::{AudioChunk, Effects, Instrument, LayerId, Meter, SynthCommand, SynthFeedback};
 use sonder_dsp::Synth;
 
 /// Capacity of the command ring (commands, not bytes).
@@ -32,6 +32,8 @@ pub(crate) struct Shared {
     sample_rate: f32,
     /// `[rms, peak]` bit-cast f32.
     master: [AtomicU32; 2],
+    /// Short-term master loudness, LUFS, bit-cast f32.
+    master_lufs: AtomicU32,
     layers: Vec<[AtomicU32; 2]>,
     underruns: AtomicU32,
     drops: AtomicU64,
@@ -108,6 +110,7 @@ pub struct SynthController {
     feedback: rtrb::Consumer<SynthFeedback>,
     recycled: rtrb::Consumer<Box<Instrument>>,
     recycled_fx: rtrb::Consumer<Box<Effects>>,
+    recycled_audio: rtrb::Consumer<Box<AudioChunk>>,
     tap: Option<AudioTap>,
     shared: Arc<Shared>,
 }
@@ -132,10 +135,11 @@ impl SynthController {
         }
     }
 
-    /// Drop every recycled instrument/effects box waiting from the audio thread.
+    /// Drop every recycled instrument/effects/audio box waiting from the audio thread.
     pub fn collect_garbage(&mut self) {
         while self.recycled.pop().is_ok() {}
         while self.recycled_fx.pop().is_ok() {}
+        while self.recycled_audio.pop().is_ok() {}
     }
 
     /// Free slots in the command ring.
@@ -164,6 +168,16 @@ impl SynthController {
 
     pub fn master_meter(&self) -> Meter {
         Meter { rms: load_f32(&self.shared.master[0]), peak: load_f32(&self.shared.master[1]) }
+    }
+
+    /// Short-term (3 s) loudness of the master output, LUFS (−100 when silent).
+    pub fn master_lufs(&self) -> f32 {
+        load_f32(&self.shared.master_lufs)
+    }
+
+    /// Alias of [`Self::master_lufs`].
+    pub fn lufs(&self) -> f32 {
+        self.master_lufs()
     }
 
     pub fn layer_meter(&self, layer: LayerId) -> Meter {
@@ -213,6 +227,12 @@ impl SynthController {
         self.recycled_fx.pop().ok()
     }
 
+    /// Take back an audio-chunk box the synth has copied into a layer ring (reuse its
+    /// `Vec` for the next chunk to avoid allocating per chunk).
+    pub fn take_recycled_audio(&mut self) -> Option<Box<AudioChunk>> {
+        self.recycled_audio.pop().ok()
+    }
+
     /// Take the audio tap (once). `None` if no tap was configured or it was already taken.
     pub fn take_tap(&mut self) -> Option<AudioTap> {
         self.tap.take()
@@ -231,8 +251,10 @@ pub struct SynthHost {
     feedback: rtrb::Producer<SynthFeedback>,
     recycled: rtrb::Producer<Box<Instrument>>,
     recycled_fx: rtrb::Producer<Box<Effects>>,
+    recycled_audio: rtrb::Producer<Box<AudioChunk>>,
     pending_recycle: Option<Box<Instrument>>,
     pending_recycle_fx: Option<Box<Effects>>,
+    pending_recycle_audio: Option<Box<AudioChunk>>,
     tap: Option<rtrb::Producer<f32>>,
     shared: Arc<Shared>,
 }
@@ -286,6 +308,7 @@ impl SynthHost {
         let m = self.synth.master_meter();
         store_f32(&self.shared.master[0], m.rms);
         store_f32(&self.shared.master[1], m.peak);
+        store_f32(&self.shared.master_lufs, self.synth.master_lufs());
         for (i, slot) in self.shared.layers.iter().enumerate() {
             let lm = self.synth.layer_meter(LayerId(i as u16));
             store_f32(&slot[0], lm.rms);
@@ -340,6 +363,18 @@ impl SynthHost {
                 }
             }
         }
+        if self.pending_recycle_audio.is_none() {
+            self.pending_recycle_audio = self.synth.take_recycled_audio();
+        }
+        while let Some(b) = self.pending_recycle_audio.take() {
+            match self.recycled_audio.push(b) {
+                Ok(()) => self.pending_recycle_audio = self.synth.take_recycled_audio(),
+                Err(rtrb::PushError::Full(b)) => {
+                    self.pending_recycle_audio = Some(b);
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -360,6 +395,7 @@ pub fn synth_pair(sample_rate: f32, max_layers: usize, tap: Option<TapConfig>) -
     let shared = Arc::new(Shared {
         sample_rate,
         master: [AtomicU32::new(0), AtomicU32::new(0)],
+        master_lufs: AtomicU32::new(sonder_dsp::master::SILENCE_LUFS.to_bits()),
         layers: (0..max_layers).map(|_| [AtomicU32::new(0), AtomicU32::new(0)]).collect(),
         underruns: AtomicU32::new(0),
         drops: AtomicU64::new(0),
@@ -372,6 +408,7 @@ pub fn synth_pair(sample_rate: f32, max_layers: usize, tap: Option<TapConfig>) -
     let (fb_tx, fb_rx) = rtrb::RingBuffer::new(FEEDBACK_CAPACITY);
     let (rc_tx, rc_rx) = rtrb::RingBuffer::new(RECYCLE_CAPACITY);
     let (fx_tx, fx_rx) = rtrb::RingBuffer::new(RECYCLE_CAPACITY / 4);
+    let (au_tx, au_rx) = rtrb::RingBuffer::new(RECYCLE_CAPACITY);
     let (tap_tx, tap_rx) = match tap {
         Some(cfg) => {
             let secs = if cfg.capacity_seconds.is_finite() { cfg.capacity_seconds.clamp(0.05, 60.0) } else { 2.0 };
@@ -386,6 +423,7 @@ pub fn synth_pair(sample_rate: f32, max_layers: usize, tap: Option<TapConfig>) -
         feedback: fb_rx,
         recycled: rc_rx,
         recycled_fx: fx_rx,
+        recycled_audio: au_rx,
         tap: tap_rx.map(|consumer| AudioTap { consumer, shared: shared.clone() }),
         shared: shared.clone(),
     };
@@ -395,8 +433,10 @@ pub fn synth_pair(sample_rate: f32, max_layers: usize, tap: Option<TapConfig>) -
         feedback: fb_tx,
         recycled: rc_tx,
         recycled_fx: fx_tx,
+        recycled_audio: au_tx,
         pending_recycle: None,
         pending_recycle_fx: None,
+        pending_recycle_audio: None,
         tap: tap_tx,
         shared,
     };
