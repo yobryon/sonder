@@ -1,0 +1,20 @@
+# systemd unit for a headless Sonder installation (e.g. a Raspberry Pi above a road).
+# Install: sudo cp deploy/sonder.service /etc/systemd/system/ && sudo systemctl enable --now sonder
+[Unit]
+Description=Sonder — the world as music
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=sonder
+WorkingDirectory=/opt/sonder
+# Scene file lives next to the binary; edit it and `systemctl restart sonder`.
+ExecStart=/opt/sonder/sonder serve /opt/sonder/scene.toml --bind 0.0.0.0 --web 7777 --log info --log-file /opt/sonder/sonder.log
+Restart=always
+RestartSec=3
+# Audio out needs the user in the `audio` group; drop this line for web-only listening.
+SupplementaryGroups=audio
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
