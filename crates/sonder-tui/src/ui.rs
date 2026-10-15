@@ -907,11 +907,12 @@ mod tests {
                 layer: LayerId(i % 3),
                 name: if i % 2 == 0 {
                     "car".into()
-                 label: String::new(), } else {
+                } else {
                     "quake".into()
                 },
                 intensity: 0.1 * i as f64,
                 attrs: attrs.clone(),
+                label: String::new(),
             })
             .collect();
         let notes = (0..30)

@@ -266,6 +266,8 @@ impl ControlLoop {
             Datum::Viz { payload } => {
                 self.viz.insert(sample.source.to_string(), payload);
             }
+            // Routed to granular layers by the v2 live-audio work; dropped until then.
+            Datum::Audio { .. } => {}
         }
     }
 
