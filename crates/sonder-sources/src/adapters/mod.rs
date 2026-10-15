@@ -38,3 +38,15 @@ pub mod walk;
 pub mod websocket;
 #[cfg(feature = "native")]
 pub mod wikipedia;
+#[cfg(feature = "native")]
+pub mod mqtt;
+#[cfg(feature = "native")]
+pub mod blitzortung;
+#[cfg(feature = "native")]
+pub mod ndbc;
+#[cfg(feature = "native")]
+pub mod audio;
+#[cfg(feature = "native")]
+pub mod seedlink;
+#[cfg(feature = "native")]
+pub mod gtfs_rt;

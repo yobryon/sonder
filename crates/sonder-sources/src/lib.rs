@@ -131,6 +131,7 @@ pub fn register_builtins(r: &mut Registry) {
     reg!(
         freeway, walk, system, astro, wikipedia, usgs, opensky, open_meteo, space_weather, coinbase, iss,
         hackernews, github, tides, http_json, sse, websocket, file_tail, stdin,
+        mqtt, blitzortung, ndbc, audio, seedlink, gtfs_rt,
     );
     // `synthetic.random-walk` is the product-doc spelling of `synthetic.walk`.
     let mut alias = walk::info();
