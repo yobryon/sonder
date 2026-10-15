@@ -1,0 +1,81 @@
+# Storm — lightning, wind and waves.
+#
+# Every lightning strike on Earth (Blitzortung) is a crack of percussion placed by longitude;
+# storm clusters swell the pad. Pacific buoys set the swell of the bass; wind at one place
+# is the texture.
+
+name = "Storm"
+description = "Global lightning strikes, ocean buoys and wind — live."
+tags = ["live", "ambient", "weather"]
+viz = "map"
+
+[conductor]
+key = "C"
+mode = "aeolian"
+tempo = 60
+tempo_range = [52, 72]
+drift = "slow"
+progression = "modal"
+bars_per_chord = 2
+mood_smoothing = 30
+
+[effects.reverb]
+size = 0.95
+damping = 0.3
+
+[[layer]]
+name = "lightning"
+role = "perc"
+instrument = "perc.kit"
+source = { kind = "blitzortung.lightning" }
+signals.rate    = "norm(smooth(field('rate'), 5))"
+signals.active  = "norm(smooth(field('active'), 20))"
+map.energy      = "rate"
+map.tension     = "active"
+map.volume      = "0.8"
+on_event.strike.drum     = "snare"
+on_event.strike.velocity = "0.3 + 0.7 * intensity"
+on_event.strike.pan      = "attr('lon01')"
+on_event.strike.chance   = "0.35"
+
+[[layer]]
+name = "thunder"
+role = "bells"
+instrument = "bells.fm"
+source = "lightning"
+on_event.strike.chance   = "step(0.6, intensity) * 0.3"
+on_event.strike.pitch    = "0.1 + 0.3 * (1 - attr('lat01'))"
+on_event.strike.velocity = "0.5 + 0.5 * intensity"
+on_event.strike.pan      = "attr('lon01')"
+on_event.strike.length   = "6"
+
+[[layer]]
+name = "front"
+role = "pad"
+instrument = "pad.strings"
+source = "lightning"
+signals.active = "norm(smooth(field('active'), 30))"
+map.register   = "0.35 + 0.3 * active"
+map.cutoff     = "0.25 + 0.6 * active"
+map.brightness = "active"
+
+[[layer]]
+name = "swell"
+role = "bass"
+instrument = "bass.sub"
+source = { kind = "noaa.buoys", near = [37.7, -122.5], radius_km = 400 }
+signals.waves = "norm(field('wvht_max'), 0, 6)"
+map.register  = "0.1 + 0.4 * waves"
+map.density   = "0.2 + 0.4 * waves"
+on_event.update.pitch = "0.3"
+
+[[layer]]
+name = "wind"
+role = "texture"
+instrument = "texture.wind"
+source = { kind = "open-meteo.weather", lat = 37.77, lon = -122.42 }
+signals.wind = "norm(field('wind_speed_10m'), 0, 60)"
+signals.gust = "norm(field('wind_gusts_10m'), 0, 90)"
+map.texture  = "wind"
+map.cutoff   = "0.2 + 0.6 * gust"
+map.volume   = "0.2 + 0.6 * wind"

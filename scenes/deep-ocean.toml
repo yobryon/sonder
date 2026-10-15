@@ -1,0 +1,79 @@
+# Deep Ocean — a hydrophone in the Salish Sea.
+#
+# Orcasound streams live underwater sound. Feed it in with ffmpeg and the engine listens:
+# the sea's loudness is the drone's filter, spectral centroid picks the register, and every
+# onset — a ship's engine, a click, a call — plucks a note. The tide sets the bass.
+#
+#   ffmpeg -loglevel error -i "$(curl -s https://live.orcasound.net/api/json/feeds | jq -r '.data[0]...')" \
+#          -ac 1 -ar 48000 -f s16le - | sonder play deep-ocean
+#
+# (see `sonder sources audio.features` for the exact manifest URL recipe)
+
+name = "Deep Ocean"
+description = "A live hydrophone (via ffmpeg on stdin) plus the tide and nearby buoys."
+tags = ["live", "ambient", "audio", "stdin"]
+viz = "generic"
+
+[conductor]
+key = "Eb"
+mode = "lydian"
+tempo = 52
+tempo_range = [46, 60]
+drift = "slow"
+progression = "modal"
+bars_per_chord = 4
+mood_smoothing = 40
+
+[effects.reverb]
+size = 0.97
+damping = 0.25
+
+[[layer]]
+name = "sea"
+role = "drone"
+instrument = "drone.sub"
+source = { kind = "audio.features", format = "s16le", rate = 48000, channels = 1 }
+signals.loud     = "smooth(field('rms'), 2)"
+signals.bright   = "norm(smooth(field('centroid'), 3), 100, 4000)"
+map.cutoff       = "0.15 + 0.7 * loud"
+map.texture      = "0.2 + 0.6 * bright"
+map.energy       = "loud"
+map.brightness   = "bright"
+
+[[layer]]
+name = "sounds"
+role = "pluck"
+instrument = "pluck.glass"
+source = "sea"
+on_event.onset.pitch    = "attr('centroid01')"
+on_event.onset.velocity = "0.3 + 0.7 * intensity"
+on_event.onset.pan      = "0.3 + 0.4 * attr('centroid01')"
+on_event.onset.chance   = "0.6"
+on_event.onset.length   = "1"
+
+[[layer]]
+name = "calls"
+role = "bells"
+instrument = "bells.glass"
+source = "sea"
+on_event.loud.pitch    = "0.7"
+on_event.loud.velocity = "0.8"
+on_event.loud.length   = "5"
+
+[[layer]]
+name = "surface"
+role = "pad"
+instrument = "pad.choir"
+source = "sea"
+signals.bright = "norm(smooth(field('centroid'), 10), 100, 4000)"
+map.register   = "0.3 + 0.3 * bright"
+map.volume     = "0.6"
+
+[[layer]]
+name = "tide"
+role = "bass"
+instrument = "bass.sub"
+source = { kind = "noaa.tides", station = "9447130" }
+signals.level = "norm(field('water_level'), -1, 4)"
+map.register  = "0.1 + 0.4 * level"
+map.density   = "0.2"

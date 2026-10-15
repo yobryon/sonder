@@ -1,0 +1,88 @@
+# Social Firehose — everything people are publishing, right now.
+#
+# Bluesky posts (thousands a minute) are rain; replies are softer, images ring. Wikipedia
+# edits are the pulse underneath; Hacker News stories are the occasional bell.
+
+name = "Social Firehose"
+description = "Every public Bluesky post, every Wikipedia edit, every HN story — live."
+tags = ["live", "firehose", "recipes"]
+viz = "generic"
+
+[conductor]
+key = "G"
+mode = "mixolydian"
+tempo = 88
+tempo_range = [76, 104]
+drift = "medium"
+progression = "functional"
+bars_per_chord = 1
+mood_smoothing = 20
+
+[effects.delay]
+beats = 0.5
+feedback = 0.4
+
+[[layer]]
+name = "posts"
+role = "pluck"
+instrument = "pluck.glass"
+source = { kind = "bluesky.firehose" }
+signals.rate    = "norm(smooth(rate(event('post'), 5), 2))"
+signals.chatter = "norm(smooth(sum(event('post'), 10), 3))"
+map.energy      = "rate"
+map.density     = "rate"
+map.brightness  = "chatter"
+on_event.post.chance   = "0.04 + 0.1 * intensity"
+on_event.post.pitch    = "hash(attr('lang')) * 0.5 + 0.5 * intensity"
+on_event.post.velocity = "if(attr('reply') > 0.5, 0.3, 0.6) + 0.3 * intensity"
+on_event.post.pan      = "hash(attr('did'))"
+on_event.post.quantize = "1/16"
+on_event.post.length   = "0.3"
+
+[[layer]]
+name = "images"
+role = "bells"
+instrument = "bells.glass"
+source = "posts"
+on_event.post.chance   = "if(attr('image') > 0.5, 0.25, 0)"
+on_event.post.pitch    = "hash(attr('did'))"
+on_event.post.velocity = "0.6"
+on_event.post.length   = "3"
+on_event.post.quantize = "1/8"
+
+[[layer]]
+name = "edits"
+role = "perc"
+instrument = "perc.kit"
+source = { kind = "wikipedia.recent-changes", include_bots = false }
+signals.rate = "norm(smooth(rate(event('edit'), 10), 3))"
+map.density  = "0.3 + 0.7 * rate"
+map.volume   = "0.5"
+
+[[layer]]
+name = "stories"
+role = "lead"
+instrument = "lead.soft"
+source = { kind = "hackernews.firehose" }
+signals.rate = "norm(smooth(rate(event('item'), 60), 10))"
+map.density  = "0.2 + 0.4 * rate"
+map.register = "0.5 + 0.3 * rate"
+on_event.item.pitch    = "hash(attr('by'))"
+on_event.item.chance   = "if(attr_text('type') == 'story', 1, 0.2)"
+
+[[layer]]
+name = "crowd"
+role = "pad"
+instrument = "pad.warm"
+source = "posts"
+signals.rate = "norm(smooth(rate(event('post'), 20), 6))"
+map.cutoff   = "0.3 + 0.5 * rate"
+map.register = "0.45"
+
+[[layer]]
+name = "floor"
+role = "bass"
+instrument = "bass.pluck"
+source = "posts"
+signals.rate = "norm(smooth(rate(event('post'), 20), 6))"
+map.density  = "0.3 + 0.5 * rate"

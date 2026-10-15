@@ -16,6 +16,12 @@ pub const BUILTIN_SCENE_SOURCES: &[(&str, &str)] = &[
     ("weather-station", include_str!("../../../scenes/weather-station.toml")),
     ("hacker-news", include_str!("../../../scenes/hacker-news.toml")),
     ("orbit", include_str!("../../../scenes/orbit.toml")),
+    ("social-firehose", include_str!("../../../scenes/social-firehose.toml")),
+    ("storm", include_str!("../../../scenes/storm.toml")),
+    ("machines", include_str!("../../../scenes/machines.toml")),
+    ("deep-ocean", include_str!("../../../scenes/deep-ocean.toml")),
+    ("city-transit", include_str!("../../../scenes/city-transit.toml")),
+    ("seismic", include_str!("../../../scenes/seismic.toml")),
 ];
 
 /// Parse a scene from TOML text.

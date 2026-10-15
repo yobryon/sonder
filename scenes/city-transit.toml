@@ -1,0 +1,74 @@
+# City Transit — trains and traffic.
+#
+# A GTFS-Realtime feed turns every train arrival into a pluck placed across the stereo field
+# by where it is; the fleet's lateness is the tension. A Caltrans traffic camera still
+# (refreshed every ~30 s) counts the cars on I-580 for the pad.
+
+name = "City Transit"
+description = "Live transit vehicle positions and a highway camera, as a city at work."
+tags = ["live", "city", "camera"]
+viz = "map"
+
+[conductor]
+key = "A"
+mode = "dorian"
+tempo = 96
+tempo_range = [84, 110]
+drift = "medium"
+progression = "functional"
+bars_per_chord = 2
+mood_smoothing = 20
+
+[[layer]]
+name = "trains"
+role = "pluck"
+instrument = "pluck.marimba"
+source = { kind = "transit.gtfs-rt" }
+signals.fleet   = "norm(smooth(field('vehicles'), 20))"
+signals.late    = "smooth(field('late'), 20)"
+map.energy      = "fleet"
+map.tension     = "late"
+map.density     = "fleet"
+on_event.arrival.pitch    = "hash(attr('route'))"
+on_event.arrival.velocity = "0.4 + 0.5 * intensity"
+on_event.arrival.pan      = "attr('lon01')"
+on_event.arrival.quantize = "1/8"
+on_event.appeared.pitch   = "0.8"
+on_event.appeared.length  = "2"
+
+[[layer]]
+name = "alerts"
+role = "bells"
+instrument = "bells.fm"
+source = "trains"
+on_event.alert.pitch    = "0.2"
+on_event.alert.velocity = "0.9"
+on_event.alert.length   = "6"
+
+[[layer]]
+name = "freeway"
+role = "pad"
+instrument = "pad.glass"
+source = { kind = "camera.jpeg", url = "https://cwwp2.dot.ca.gov/data/d4/cctv/image/tv102i580westofsr24/tv102i580westofsr24.jpg", interval = 15, lanes = 4 }
+signals.traffic = "norm(smooth(field('blobs'), 20))"
+signals.motion  = "norm(smooth(field('motion'), 20))"
+map.register    = "0.35 + 0.3 * traffic"
+map.cutoff      = "0.3 + 0.6 * motion"
+map.brightness  = "traffic"
+
+[[layer]]
+name = "cars"
+role = "arp"
+instrument = "arp.glass"
+source = "freeway"
+signals.traffic = "norm(smooth(field('blobs'), 20))"
+map.density     = "traffic"
+map.volume      = "0.4"
+
+[[layer]]
+name = "floor"
+role = "bass"
+instrument = "bass.pluck"
+source = "trains"
+signals.fleet = "norm(smooth(field('vehicles'), 20))"
+map.density   = "0.3 + 0.5 * fleet"

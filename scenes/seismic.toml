@@ -1,0 +1,62 @@
+# Seismic — the ground, live.
+#
+# A broadband seismometer (IRIS SeedLink) streams ground velocity in real time. Its noise
+# floor is the drone's breath; every STA/LTA trigger — a quake, a truck, a footstep — is a
+# strike. Pair it with USGS so confirmed earthquakes land as sub-bass.
+
+name = "Seismic"
+description = "A live seismometer waveform and confirmed earthquakes."
+tags = ["live", "ambient", "earth"]
+viz = "generic"
+
+[conductor]
+key = "D"
+mode = "phrygian"
+tempo = 56
+tempo_range = [48, 66]
+drift = "slow"
+progression = "modal"
+bars_per_chord = 4
+mood_smoothing = 40
+
+[[layer]]
+name = "ground"
+role = "drone"
+instrument = "drone.saw"
+source = { kind = "seedlink.seismic" }
+signals.level   = "smooth(field('rms'), 3)"
+signals.pitch   = "norm(smooth(field('dominant_hz'), 5), 0.05, 5)"
+map.cutoff      = "0.1 + 0.7 * level"
+map.texture     = "level"
+map.energy      = "level"
+map.brightness  = "pitch"
+
+[[layer]]
+name = "triggers"
+role = "perc"
+instrument = "perc.kit"
+source = "ground"
+on_event.onset.drum     = "tom"
+on_event.onset.velocity = "0.4 + 0.6 * intensity"
+on_event.onset.pitch    = "1 - intensity"
+on_event.tremor.drum    = "noise"
+on_event.tremor.velocity = "0.7"
+
+[[layer]]
+name = "quakes"
+role = "bells"
+instrument = "bells.fm"
+source = { kind = "usgs.earthquakes", feed = "all_hour", min_magnitude = 1.0 }
+on_event.quake.pitch    = "0.1 + 0.3 * (1 - intensity)"
+on_event.quake.velocity = "0.5 + 0.5 * intensity"
+on_event.quake.pan      = "attr('lon01')"
+on_event.quake.length   = "8"
+
+[[layer]]
+name = "crust"
+role = "pad"
+instrument = "pad.strings"
+source = "ground"
+signals.level = "smooth(field('rms'), 10)"
+map.register  = "0.3 + 0.2 * level"
+map.volume    = "0.6"

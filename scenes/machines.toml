@@ -1,0 +1,72 @@
+# Machines — the global IoT firehose.
+#
+# test.mosquitto.org is an open MQTT broker thousands of devices publish to: sensors, GPS
+# trackers, hobby projects, test strings. Every message is a tick; topics decide the pitch;
+# payload size is the velocity. Pure noise, strangely alive.
+
+name = "Machines"
+description = "Thousands of IoT devices publishing to a public MQTT broker — live."
+tags = ["live", "firehose", "iot"]
+viz = "generic"
+
+[conductor]
+key = "F#"
+mode = "dorian"
+tempo = 100
+tempo_range = [88, 120]
+drift = "medium"
+progression = "modal"
+bars_per_chord = 2
+mood_smoothing = 12
+swing = 0.15
+
+[[layer]]
+name = "devices"
+role = "arp"
+instrument = "arp.pulse"
+source = { kind = "mqtt", url = "mqtt://test.mosquitto.org:1883", topics = ["#"], username = "wildcard", max_rate = 40 }
+signals.rate   = "norm(smooth(field('rate'), 3))"
+signals.topics = "norm(smooth(field('topics'), 10))"
+map.energy     = "rate"
+map.density    = "rate"
+map.brightness = "topics"
+map.register   = "0.5 + 0.3 * topics"
+
+[[layer]]
+name = "messages"
+role = "pluck"
+instrument = "pluck.nylon"
+source = "devices"
+on_event.message.chance   = "0.3"
+on_event.message.pitch    = "hash(attr('topic'))"
+on_event.message.velocity = "0.3 + 0.6 * intensity"
+on_event.message.pan      = "hash(attr('topic'))"
+on_event.message.quantize = "1/16"
+on_event.message.length   = "0.3"
+
+[[layer]]
+name = "readings"
+role = "bells"
+instrument = "bells.glass"
+source = "devices"
+on_event.message.chance   = "if(has('value'), 0.3, 0)"
+on_event.message.pitch    = "clamp(abs(attr('value')) / 100, 0, 1)"
+on_event.message.velocity = "0.6"
+on_event.message.length   = "2"
+
+[[layer]]
+name = "bus"
+role = "bass"
+instrument = "bass.fm"
+source = "devices"
+signals.rate = "norm(smooth(field('rate'), 6))"
+map.density  = "0.3 + 0.6 * rate"
+
+[[layer]]
+name = "hum"
+role = "texture"
+instrument = "texture.noise"
+source = "devices"
+signals.bytes = "norm(smooth(field('bytes'), 5))"
+map.texture   = "bytes"
+map.volume    = "0.25 + 0.3 * bytes"
