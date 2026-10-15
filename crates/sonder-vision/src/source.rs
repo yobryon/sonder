@@ -109,10 +109,11 @@ pub fn factory() -> (SourceInfo, Factory) {
     (info(), create)
 }
 
-/// Register `camera.mjpeg` in a registry.
+/// Register `camera.mjpeg` (and the polled-still `camera.jpeg`) in a registry.
 pub fn register(r: &mut Registry) {
     let (i, f) = factory();
     r.register(i, f);
+    crate::jpeg_poll::register(r);
 }
 
 fn create(spec: &SourceSpec) -> Result<Box<dyn Source>, SourceError> {

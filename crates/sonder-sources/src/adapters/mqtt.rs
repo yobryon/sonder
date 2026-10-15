@@ -12,12 +12,23 @@
 //!
 //! # Public brokers
 //!
-//! The default is `test.mosquitto.org`. Its unauthenticated listener refuses the `#`
-//! wildcard; with username `wildcard` (no password) `#` is allowed but the broker
-//! **drops the connection after ~20 s**. The adapter treats that like any other
-//! disconnect and reconnects with exponential backoff (a connection that lived
-//! < 60 s does not reset the backoff, so a `#` firehose settles into bursts every
-//! few seconds to minutes — subscribe to real topics for a steady stream).
+//! The default is `test.mosquitto.org:1883`. Per its documentation the unauthenticated
+//! listener refuses a subscription to the literal `#` (SUBACK 0x80 → the adapter reports
+//! the refusal and retries with backoff) and username `wildcard` allows `#` for 20 s
+//! before the subscription is silently removed. In practice the broker runs experimental
+//! builds and the rules drift: while this was written, `wildcard` was refused outright
+//! (CONNACK 5, also from `mosquitto_sub -u wildcard`) and an hour later `#` was accepted
+//! unauthenticated. The dependable route to the whole hierarchy is the authenticated
+//! listener `mqtt://test.mosquitto.org:1884` with `ro` / `readonly`. Either way `#` on a
+//! public broker is a firehose — `max_rate` samples it; subscribe to real topics for a
+//! steady stream.
+//!
+//! Resilience: a refused CONNECT/SUBSCRIBE or a dropped connection reconnects with
+//! exponential backoff (a connection that lived < 60 s does not reset the backoff).
+//! If a subscription that was delivering goes quiet for 30 s the source reports `Idle`,
+//! and after 60 s it re-sends SUBSCRIBE on the same connection (this is what brings a
+//! removed `wildcard` subscription back); the connection itself is replaced only when
+//! PINGRESPs stop arriving.
 //!
 //! # Output
 //!
@@ -183,7 +194,7 @@ impl Decoder {
     }
 
     /// Next complete packet, `Ok(None)` if more bytes are needed, `Err` on a malformed stream.
-    pub fn next(&mut self) -> Result<Option<Packet>, String> {
+    pub fn next_packet(&mut self) -> Result<Option<Packet>, String> {
         let b = &self.buf[self.pos..];
         if b.is_empty() {
             return Ok(None);
@@ -305,7 +316,7 @@ pub fn parse_url(url: &str) -> Result<Endpoint, String> {
 
 enum Conn {
     Tcp(tokio::net::TcpStream),
-    Ws(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>),
+    Ws(Box<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>),
 }
 
 impl Conn {
@@ -328,7 +339,7 @@ impl Conn {
                         req.headers_mut().insert("User-Agent", v);
                     }
                     let (ws, _) = tokio_tungstenite::connect_async(req).await.map_err(|e| format!("connect failed: {e}"))?;
-                    Ok(Conn::Ws(ws))
+                    Ok(Conn::Ws(Box::new(ws)))
                 }
             }
         };
@@ -370,7 +381,7 @@ impl Conn {
         let _ = tokio::time::timeout(Duration::from_secs(2), async {
             let _ = self.send(encode_disconnect()).await;
             if let Conn::Ws(ws) = &mut self {
-                let _ = ws.close(None).await;
+                let _ = ws.as_mut().close(None).await;
             }
         })
         .await;
@@ -555,7 +566,7 @@ async fn expect<F: FnMut(&Packet) -> bool>(conn: &mut Conn, dec: &mut Decoder, m
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let mut buf = vec![0u8; 16 * 1024];
     loop {
-        while let Some(p) = dec.next()? {
+        while let Some(p) = dec.next_packet()? {
             if want(&p) {
                 return Ok(p);
             }
@@ -609,6 +620,9 @@ async fn session(em: &mut Emitter, cfg: &Config, client_id: &str, stats: &mut St
     let ping_every = keepalive.mul_f64(0.5);
     let mut last_rx = std::time::Instant::now();
     let mut last_tx = std::time::Instant::now();
+    let mut last_pub = std::time::Instant::now();
+    let mut resubscribed = false;
+    let mut sub_id: u16 = 1;
     let mut next_reading = em.now() + 1.0;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
@@ -616,8 +630,22 @@ async fn session(em: &mut Emitter, cfg: &Config, client_id: &str, stats: &mut St
             conn.close().await;
             return Ok(());
         }
-        while let Some(p) = dec.next()? {
+        while let Some(p) = dec.next_packet()? {
+            if matches!(p, Packet::Publish { .. }) {
+                last_pub = std::time::Instant::now();
+                resubscribed = false;
+                em.status(SourceState::Live, "live").await;
+            }
             handle(em, cfg, stats, &mut conn, p).await?;
+        }
+        if stats.total > 0 && last_pub.elapsed() > Duration::from_secs(30) {
+            em.status(SourceState::Idle, "no messages for 30 s").await;
+            if !resubscribed && last_pub.elapsed() > Duration::from_secs(60) {
+                sub_id = sub_id.wrapping_add(1).max(1);
+                conn.send(encode_subscribe(sub_id, &cfg.topics)).await?;
+                resubscribed = true;
+                tracing::debug!(source = %em.ctx.id, "quiet for 60 s; re-sent SUBSCRIBE");
+            }
         }
         let chunk = tokio::select! {
             c = conn.recv(&mut buf) => Some(c),
@@ -676,7 +704,7 @@ pub fn info() -> SourceInfo {
         summary: "MQTT 3.1.1 subscriber (TCP or WebSocket): a `message` event per PUBLISH, rate/topics/bytes readings",
         params: vec![
             ParamInfo { name: "url", summary: "mqtt://host:1883, ws://host:8080/mqtt or wss://host:8081/mqtt", default: Some(DEFAULT_URL) },
-            ParamInfo { name: "topics", summary: "Topic filters (test.mosquitto.org needs username `wildcard` for `#`)", default: Some("[\"#\"]") },
+            ParamInfo { name: "topics", summary: "Topic filters (test.mosquitto.org:1883 refuses `#`; use :1884 with ro/readonly)", default: Some("[\"#\"]") },
             ParamInfo { name: "username", summary: "Optional username", default: None },
             ParamInfo { name: "password", summary: "Optional password", default: None },
             ParamInfo { name: "client_id", summary: "Client id", default: Some("sonder-xxxx (random)") },
@@ -754,7 +782,7 @@ mod tests {
         let mut got = Vec::new();
         for chunk in stream.chunks(3) {
             dec.feed(chunk);
-            while let Some(p) = dec.next().unwrap() {
+            while let Some(p) = dec.next_packet().unwrap() {
                 got.push(p);
             }
         }
@@ -769,11 +797,11 @@ mod tests {
         body.extend_from_slice(b"p");
         let mut dec = Decoder::default();
         dec.feed(&packet(PUBLISH, 0x02, &body));
-        assert!(matches!(dec.next().unwrap(), Some(Packet::Publish { id: Some(7), qos: 1, .. })));
+        assert!(matches!(dec.next_packet().unwrap(), Some(Packet::Publish { id: Some(7), qos: 1, .. })));
         // Malformed: 5-byte remaining length.
         let mut dec = Decoder::default();
         dec.feed(&[0x30, 0xff, 0xff, 0xff, 0xff, 0x01]);
-        assert!(dec.next().is_err());
+        assert!(dec.next_packet().is_err());
     }
 
     #[test]
@@ -790,11 +818,11 @@ mod tests {
         assert_eq!(a["data.temp"].as_f64(), Some(20.0));
         assert_eq!(a["data.nest.hum"].as_f64(), Some(55.0));
         assert_eq!(a["data.nest.name"].as_str(), Some("x"));
-        assert!(a.get("value").is_none());
+        assert!(!a.contains_key("value"));
 
         let (a, i) = message_attrs("bin", &[0xff; 1024]);
         let a = a.into_map();
-        assert!(a.get("text").is_none());
+        assert!(!a.contains_key("text"));
         assert_eq!(i, 1.0);
         // Leaf cap.
         let big: Json = serde_json::from_str(&format!("{{{}}}", (0..40).map(|i| format!("\"k{i}\": {i}")).collect::<Vec<_>>().join(","))).unwrap();
@@ -869,7 +897,7 @@ mod tests {
             body.extend_from_slice(format!("{{\"i\": {i}}}").as_bytes());
             sock.write_all(&packet(PUBLISH, 0, &body)).await.unwrap();
         }
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
         let _ = sock.shutdown().await;
     }
 
@@ -891,7 +919,7 @@ mod tests {
         };
         let src = factory(&SourceSpec::new("mqtt").with("url", format!("mqtt://{addr}")).with("topics", "fake/t")).unwrap();
         let task = tokio::spawn(src.run(ctx));
-        tokio::time::sleep(Duration::from_millis(1200)).await;
+        tokio::time::sleep(Duration::from_millis(2200)).await;
         stx.send(true).unwrap();
         tokio::time::timeout(Duration::from_secs(2), task).await.expect("stops on shutdown").unwrap();
         broker.abort();
@@ -931,7 +959,7 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
         let mut buf = vec![0u8; 64 * 1024];
         let end = loop {
-            while let Some(p) = dec.next().unwrap() {
+            while let Some(p) = dec.next_packet().unwrap() {
                 got.push(p);
             }
             match tokio::time::timeout_at(deadline, conn.recv(&mut buf)).await {
@@ -948,21 +976,35 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_mosquitto_tcp_wildcard_and_ws_topic() {
-        // TCP, `#` with the `wildcard` user: the broker closes after ~20 s.
+        // Unauthenticated 1883 and `#`: documented as refused (SUBACK 0x80), sometimes accepted.
         let cfg = Config {
             endpoint: parse_url(DEFAULT_URL).unwrap(),
             topics: vec!["#".into()],
-            username: Some("wildcard".into()),
+            username: None,
             password: None,
             client_id: None,
             keepalive: 30,
             max_rate: 50.0,
         };
-        let (got, end) = live_collect(cfg, 25).await;
+        let (got, _) = live_collect(cfg, 3).await;
+        eprintln!("1883 `#` unauthenticated: {:?}", got.first());
+        assert!(matches!(got.first(), Some(Packet::SubAck { .. })), "{:?}", got.first());
+
+        // TCP, `#` firehose on the authenticated listener (ro/readonly), 10 s.
+        let cfg = Config {
+            endpoint: parse_url("mqtt://test.mosquitto.org:1884").unwrap(),
+            topics: vec!["#".into()],
+            username: Some("ro".into()),
+            password: Some("readonly".into()),
+            client_id: None,
+            keepalive: 30,
+            max_rate: 50.0,
+        };
+        let (got, end) = live_collect(cfg, 10).await;
         let pubs = got.iter().filter(|p| matches!(p, Packet::Publish { .. })).count();
         let topics: std::collections::HashSet<_> =
             got.iter().filter_map(|p| if let Packet::Publish { topic, .. } = p { Some(topic.clone()) } else { None }).collect();
-        eprintln!("tcp `#`: {pubs} publishes on {} topics; end: {end:?}", topics.len());
+        eprintln!("tcp 1884 `#`: {pubs} publishes on {} topics in 10 s; end: {end:?}", topics.len());
         assert!(got.iter().any(|p| matches!(p, Packet::SubAck { codes, .. } if codes[0] < 0x80)), "{:?}", got.first());
         assert!(pubs > 0);
 

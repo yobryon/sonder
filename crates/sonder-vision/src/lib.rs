@@ -9,7 +9,8 @@
 //! * [`decode_gray`] / [`Decoder`] decode a JPEG to downscaled 8-bit luma;
 //! * [`Tracker`] finds bright or moving blobs, tracks them across frames and
 //!   reports entries, exits and line crossings;
-//! * [`factory`] / [`register`] expose it all as the `camera.mjpeg` source.
+//! * [`factory`] / [`register`] expose it all as the `camera.mjpeg` source;
+//! * [`jpeg_poll`] does the same for still images polled from a URL (`camera.jpeg`).
 //!
 //! The crate is pure Rust (`#![forbid(unsafe_code)]`); the source never panics
 //! on bad input and reports problems as `Datum::Status`.
@@ -18,6 +19,8 @@
 
 #[cfg(feature = "native")]
 pub mod decode;
+#[cfg(feature = "native")]
+pub mod jpeg_poll;
 #[cfg(feature = "native")]
 pub mod mjpeg;
 #[cfg(feature = "native")]
