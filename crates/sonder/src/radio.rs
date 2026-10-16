@@ -208,7 +208,7 @@ pub async fn run(args: RadioArgs) -> anyhow::Result<()> {
                     Ok(Err(e)) => Feed::Fatal(e),
                     Err(_) => Feed::Fatal(anyhow::anyhow!("engine control thread exited unexpectedly")),
                 },
-                _ = tokio::signal::ctrl_c() => break Feed::Done,
+                _ = crate::stop_signal() => break Feed::Done,
                 _ = sleep_until_opt(deadline) => break Feed::Done,
             }
         };
@@ -235,7 +235,7 @@ pub async fn run(args: RadioArgs) -> anyhow::Result<()> {
                 eprintln!("sonder radio: {why}; restarting ffmpeg in {wait}s");
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(wait)) => {}
-                    _ = tokio::signal::ctrl_c() => break 'outer Ok(()),
+                    _ = crate::stop_signal() => break 'outer Ok(()),
                 }
             }
         }

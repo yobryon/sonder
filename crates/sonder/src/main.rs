@@ -127,7 +127,8 @@ struct PlayArgs {
 #[derive(Args, Clone)]
 struct ReplayArgs {
     /// A `.sonder` / `.sonder.gz` data log (from `--record-data` or `sonder record`).
-    log: PathBuf,
+    #[arg(value_name = "LOG")]
+    log_path: PathBuf,
     /// Scene to play the log through (default: the scene named in the log's header, if built in).
     #[arg(long)]
     scene: Option<String>,
@@ -359,7 +360,7 @@ fn scene_needs_network(scene: &Scene) -> bool {
 
 /// `sonder replay`: resolve the scene (the log's own, or `--scene`) and play the log into it.
 async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
-    let log = sonder_engine::datalog::DataLog::open(&args.log).with_context(|| format!("opening data log {}", args.log.display()))?;
+    let log = sonder_engine::datalog::DataLog::open(&args.log_path).with_context(|| format!("opening data log {}", args.log_path.display()))?;
     let header = log.header().clone();
     let scene = match &args.scene {
         Some(s) => sonder_engine::load_scene(s)?,
@@ -386,7 +387,7 @@ async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
     if !log.audio_dropped().is_empty() {
         eprintln!("sonder replay: note: audio from {} was not recorded (logs hold data, not sound)", log.audio_dropped().iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
     }
-    let title = args.log.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| args.log.display().to_string());
+    let title = args.log_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| args.log_path.display().to_string());
     eprintln!(
         "sonder replay: {title} — {} ({}), {} of data, {} samples → scene `{}`{}",
         header.scene,
@@ -519,7 +520,7 @@ async fn play(scene: Scene, args: PlayArgs, tui: bool, replay: Option<sonder_eng
         }
         eprintln!("sonder: Ctrl-C to stop");
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = stop_signal() => {
                 handle.shutdown();
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle.done).await;
             },
@@ -1018,5 +1019,28 @@ mod compose_tests {
         .unwrap();
         let text = std::fs::read_to_string(&out).unwrap();
         validate_toml(&text).unwrap();
+    }
+}
+
+
+/// Resolves on Ctrl-C or SIGTERM (systemd stop, `timeout`), so data logs flush cleanly.
+pub(crate) async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(t) => t,
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = term.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }
