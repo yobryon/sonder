@@ -649,6 +649,8 @@ impl Composer {
             UserCommand::NextSection => self.form.request_next(),
             // Replay transport lives in the engine.
             UserCommand::Seek { .. } | UserCommand::SetSpeed { .. } => {}
+            // Rooms and the DJ live in the engine.
+            UserCommand::Chat { .. } | UserCommand::SetDj { .. } => {}
             UserCommand::HumanNote { key, velocity, on } => {
                 if *key <= 127 && velocity.is_finite() && self.human_queue.len() < 256 {
                     self.human_queue

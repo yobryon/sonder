@@ -142,6 +142,44 @@ pub struct ReplaySnapshot {
     pub scene: String,
 }
 
+/// A chat line in a shared room.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ChatMessage {
+    /// Engine time the message refers to (so it pins to a moment in the music).
+    pub at: Seconds,
+    pub from: String,
+    pub text: String,
+}
+
+/// Shared-listening room state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct RoomSnapshot {
+    pub id: String,
+    /// "host" or "guest".
+    pub role: String,
+    pub listeners: u32,
+    /// Relay URL (host) or the URL guests joined (guest).
+    pub url: String,
+    /// Recent chat, newest last (bounded).
+    pub chat: Vec<ChatMessage>,
+    /// Estimated clock offset to the host in seconds (guests).
+    pub offset: f64,
+}
+
+/// What the DJ (automatic scene switching) is doing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DjSnapshot {
+    pub enabled: bool,
+    /// Rule that chose the current scene ("" when the user picked it).
+    pub rule: String,
+    /// Why, in words.
+    pub reason: String,
+    /// Seconds until the DJ may switch again.
+    pub hold_remaining: f64,
+    /// What it is considering next, if anything.
+    pub candidate: String,
+}
+
 /// Where the piece is in its musical form.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct FormSnapshot {
@@ -178,6 +216,12 @@ pub struct EngineSnapshot {
     /// Present when fed from a data log (time travel).
     #[serde(default)]
     pub replay: Option<ReplaySnapshot>,
+    /// Present when hosting or joined to a shared room.
+    #[serde(default)]
+    pub room: Option<RoomSnapshot>,
+    /// Present when the DJ is on.
+    #[serde(default)]
+    pub dj: Option<DjSnapshot>,
     pub layers: Vec<LayerSnapshot>,
     pub sources: Vec<SourceSnapshot>,
     /// Most recent events, newest last (bounded, ~64).

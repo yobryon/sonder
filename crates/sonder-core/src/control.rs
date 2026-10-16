@@ -32,6 +32,10 @@ pub enum UserCommand {
     Seek { to: f64 },
     /// Replay only: playback speed multiplier (1 = real time, 0 = pause).
     SetSpeed { speed: f64 },
+    /// Say something in the room (pinned to the current engine time).
+    Chat { from: String, text: String },
+    /// Turn the DJ on/off.
+    SetDj { enabled: bool },
     /// A person plays a key (on-screen piano, computer keyboard, Web MIDI). The
     /// composer feeds it to every `Role::Human` layer as a `note` / `note_off`
     /// event; hardware MIDI goes through the `human.midi` source instead.
