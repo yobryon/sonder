@@ -36,6 +36,9 @@ pub struct RadioArgs {
     /// RNG seed (default: scene's, else random).
     #[arg(long)]
     pub seed: Option<u64>,
+    /// Write every ingested sample to this `.sonder` (or `.sonder.gz`) data log, for `sonder replay`.
+    #[arg(long, value_name = "PATH")]
+    pub record_data: Option<PathBuf>,
     #[command(flatten)]
     pub source: super::SourceOverride,
 }
@@ -165,6 +168,8 @@ pub async fn run(args: RadioArgs) -> anyhow::Result<()> {
         web_tap: true,
         source_overrides: args.source.clone().into_overrides()?,
         midi_port: None,
+        replay: None,
+        record_data: args.record_data.clone(),
     };
     let mut handle = sonder_engine::start(scene, opts).await?;
     let mut audio = handle.subscribe_audio().context("engine has no audio tap")?;

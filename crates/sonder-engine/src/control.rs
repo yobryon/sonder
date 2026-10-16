@@ -13,7 +13,11 @@ use sonder_dsp::Analyzer;
 use sonder_expr::LayerPipeline;
 
 use crate::captions::Captioner;
+use crate::replay::Replay;
 use crate::{SNAPSHOT_EVERY_TICKS, TICK_SECONDS};
+
+/// Observer of every ingested sample (data-log recording).
+pub type SampleSink = Box<dyn FnMut(&Sample) + Send>;
 
 /// Bounded history lengths for the snapshot.
 const MAX_EVENTS: usize = 64;
@@ -33,6 +37,7 @@ struct SourceStatus {
 /// Everything the control loop owns.
 pub struct ControlLoop {
     scene: Scene,
+    seed: u64,
     composer: Composer,
     pipelines: Vec<Option<LayerPipeline>>,
     /// Source each layer reads from (None = free-running generator).
@@ -66,6 +71,12 @@ pub struct ControlLoop {
     /// Recycled audio-chunk boxes (allocation and all), reused for `Datum::Audio` routing.
     #[allow(clippy::vec_box)]
     audio_pool: Vec<Box<AudioChunk>>,
+    sample_sinks: Vec<SampleSink>,
+    /// The log being played, if any (time travel). While set, the scene's own sources
+    /// are not run; the log feeds whatever source names the scene has.
+    replay: Option<Replay>,
+    /// A `Seek` waiting for the next tick (needs `now`).
+    pending_seek: Option<f64>,
 }
 
 /// The per-scene state `new` and `rebuild` both construct before touching the synth.
@@ -154,13 +165,19 @@ impl ControlLoop {
         let instrument_names = parts.send_setup(&scene, &mut synth);
         let analyzer = Analyzer::new(synth.sample_rate(), 48);
         let n = scene.layers.len();
+        let replay = Self::replay_from_scene(&scene)?;
+        let mut sources = parts.sources;
+        if replay.is_some() {
+            mark_replayed(&mut sources);
+        }
         Ok(Self {
             scene,
+            seed,
             composer: parts.composer,
             pipelines: parts.pipelines,
             layer_source: parts.layer_source,
             readers: parts.readers,
-            sources: parts.sources,
+            sources,
             instrument_names,
             synth,
             analyzer,
@@ -184,7 +201,55 @@ impl ControlLoop {
             captioner: parts.captioner,
             load_request: None,
             audio_pool: Vec::new(),
+            sample_sinks: Vec::new(),
+            replay,
+            pending_seek: None,
         })
+    }
+
+    /// A `replay.log` source declared in the scene, loaded from its `path` (native only;
+    /// in the browser the bytes arrive through `set_replay`).
+    fn replay_from_scene(scene: &Scene) -> anyhow::Result<Option<Replay>> {
+        let Some(layer) = scene.layers.iter().find(|l| matches!(&l.source, LayerSource::Spec(s) if s.kind == crate::replay::KIND)) else {
+            return Ok(None);
+        };
+        let LayerSource::Spec(spec) = &layer.source else { return Ok(None) };
+        let cfg = crate::replay::ReplayConfig::from_spec(spec).map_err(|e| anyhow::anyhow!("source `{}`: {e}", layer.name))?;
+        #[cfg(feature = "native")]
+        if let Some(path) = spec.get_str("path") {
+            let log = crate::datalog::DataLog::open(std::path::Path::new(path)).map_err(|e| anyhow::anyhow!("source `{}`: {e}", layer.name))?;
+            let title = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+            return Ok(Some(Replay::new(Arc::new(log), title, cfg)));
+        }
+        let _ = cfg;
+        Ok(None)
+    }
+
+    /// Play a data log instead of live sources (or stop playing one with `None`). The
+    /// caller stops/starts the scene's own sources accordingly. Playback starts (or
+    /// resumes) from the replay's `from` on the next tick, after a warm pass.
+    pub fn set_replay(&mut self, replay: Option<Replay>) {
+        let from = replay.as_ref().map(|r| r.config().from);
+        self.replay = replay;
+        if let Some(from) = from {
+            mark_replayed(&mut self.sources);
+            self.pending_seek = Some(from);
+        }
+    }
+
+    pub fn replay(&self) -> Option<&Replay> {
+        self.replay.as_ref()
+    }
+
+    /// Attach an observer of every ingested sample (the data-log recorder).
+    pub fn add_sample_sink(&mut self, sink: SampleSink) {
+        self.sample_sinks.push(sink);
+    }
+
+    /// Scene source names the replay's log actually carries (after `rename`).
+    pub fn replay_fed_sources(&self) -> Vec<String> {
+        let Some(r) = &self.replay else { return Vec::new() };
+        r.log().source_names().into_iter().map(|n| r.rename(&SourceId::new(&n)).to_string()).filter(|n| self.sources.contains_key(&SourceId::new(n))).collect()
     }
 
     /// Replace the running scene in place, keeping the synth, the tap, the snapshot
@@ -201,6 +266,23 @@ impl ControlLoop {
             anyhow::bail!("scene `{}` has {} layers but this engine was started with {max} slots", scene.name, scene.layers.len());
         }
         let parts = Parts::build(&scene, seed)?;
+        let declared = Self::replay_from_scene(&scene)?;
+        let caption = format!("scene: {}", scene.name);
+        self.install(scene, seed, parts, caption);
+        if declared.is_some() {
+            self.set_replay(declared);
+        } else if let Some(r) = self.replay.as_mut() {
+            // Keep playing the same log into the new scene, from where we were.
+            let pos = r.position();
+            mark_replayed(&mut self.sources);
+            self.pending_seek = Some(pos);
+        }
+        Ok(())
+    }
+
+    /// Silence every layer and swap in freshly built per-scene state (shared by scene
+    /// reloads and seeks).
+    fn install(&mut self, scene: Scene, seed: u64, parts: Parts, caption: String) {
         for i in 0..self.scene.layers.len() {
             let cmd = SynthCommand::AllNotesOff { layer: LayerId(i as u16) };
             for sink in &mut self.sinks {
@@ -215,8 +297,9 @@ impl ControlLoop {
         let n = scene.layers.len();
         let mut captioner = parts.captioner;
         captioner.inherit(&self.captioner);
-        captioner.push(self.last_now.unwrap_or(0.0), None, format!("scene: {}", scene.name), 0.7);
+        captioner.push(self.last_now.unwrap_or(0.0), None, caption, 0.7);
         self.scene = scene;
+        self.seed = seed;
         self.composer = parts.composer;
         self.pipelines = parts.pipelines;
         self.layer_source = parts.layer_source;
@@ -229,7 +312,84 @@ impl ControlLoop {
         self.viz.clear();
         self.pending_events.clear();
         self.layer_inputs = (0..n).map(|_| LayerInput { params: BTreeMap::new(), signals: BTreeMap::new() }).collect();
-        Ok(())
+    }
+
+    /// Jump the replay to `to` log seconds: rebuild the musical state with the same seed
+    /// (all notes off), move the log cursor and warm the features on the preceding
+    /// [`crate::replay::WARM_SECONDS`] of samples — ticking the pipelines, rendering nothing.
+    fn do_seek(&mut self, to: f64, now: Seconds) {
+        let Some(replay) = self.replay.as_mut() else { return };
+        let to = to.clamp(0.0, replay.length());
+        let parts = match Parts::build(&self.scene, self.seed) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("seek: rebuilding scene state failed: {e:#}");
+                return;
+            }
+        };
+        let scene = self.scene.clone();
+        let seed = self.seed;
+        let caption = format!("⟲ {}", mmss(to));
+        self.install(scene, seed, parts, caption);
+        mark_replayed(&mut self.sources);
+        let replay = self.replay.as_mut().expect("replay");
+        replay.seek(to);
+        let speed = if replay.speed() > 0.0 { replay.speed() } else { 1.0 };
+        let entries: Vec<(Seconds, SourceId, Datum)> = replay.warm_entries(to).iter().map(|e| (e.t, replay.rename(&e.source), e.datum.clone())).collect();
+        // Warm pass: step log time in ticks up to `to`, stamping samples in engine time
+        // as if they had arrived before `now`.
+        let start = (to - crate::replay::WARM_SECONDS).max(0.0).max(to - now * speed);
+        let transport = self.composer.transport();
+        let mut i = 0;
+        let mut tau = start;
+        while tau < to {
+            let next = (tau + TICK_SECONDS * speed).min(to);
+            let warm_now = now - (to - next) / speed;
+            while i < entries.len() && entries[i].0 < next {
+                let (_, source, datum) = &entries[i];
+                self.warm_feed(Sample { source: source.clone(), at: warm_now, datum: datum.clone() }, transport.beats);
+                i += 1;
+            }
+            for p in self.pipelines.iter_mut().flatten() {
+                let _ = p.tick(warm_now, TICK_SECONDS, transport.beats, transport.bar as f64, transport.bpm);
+            }
+            tau = next;
+        }
+        self.pending_events.clear();
+    }
+
+    /// Feed a sample to the features only (no events, captions or synth): the warm pass.
+    fn warm_feed(&mut self, sample: Sample, beat: f64) {
+        let samples: Vec<Sample> = match self.mappings.get(&sample.source) {
+            Some(m) if matches!(sample.datum, Datum::Event { .. }) => m.apply(sample, beat),
+            _ => vec![sample],
+        };
+        for s in samples {
+            let Some(readers) = self.readers.get(&s.source) else { continue };
+            match &s.datum {
+                Datum::Reading { values } => {
+                    if let Some(st) = self.sources.get_mut(&s.source) {
+                        st.readings.extend(values.iter().map(|(k, v)| (k.clone(), *v)));
+                    }
+                    for &i in readers {
+                        if let Some(p) = self.pipelines[i].as_mut() {
+                            p.push_reading(values);
+                        }
+                    }
+                }
+                Datum::Event { name, intensity, attrs } => {
+                    for &i in readers {
+                        if let Some(p) = self.pipelines[i].as_mut() {
+                            p.push_event(name, *intensity, attrs, s.at);
+                        }
+                    }
+                }
+                Datum::Viz { payload } => {
+                    self.viz.insert(s.source.to_string(), payload.clone());
+                }
+                Datum::Status { .. } | Datum::Audio { .. } => {}
+            }
+        }
     }
 
     /// The scene currently running (as loaded, without runtime tweaks).
@@ -249,6 +409,7 @@ impl ControlLoop {
             .layers
             .iter()
             .filter_map(|l| match &l.source {
+                LayerSource::Spec(spec) if spec.kind == crate::replay::KIND => None,
                 LayerSource::Spec(spec) => {
                     Some((SourceId::new(&l.name), crate::recipes::expand(spec).unwrap_or_else(|_| spec.clone())))
                 }
@@ -284,6 +445,9 @@ impl ControlLoop {
     /// Feed one sample from a source. Sources with a mapping (recipes, `event = {..}`)
     /// have their events reshaped first.
     pub fn ingest(&mut self, sample: Sample) {
+        for sink in &mut self.sample_sinks {
+            sink(&sample);
+        }
         if let Some(m) = self.mappings.get(&sample.source) {
             if matches!(sample.datum, Datum::Event { .. }) {
                 let beat = self.composer.transport().beats;
@@ -361,7 +525,8 @@ impl ControlLoop {
                 if let Some(st) = self.sources.get_mut(&sample.source) {
                     let was = st.state;
                     st.state = state;
-                    st.message = message.clone();
+                    // A replayed status is history, not news: keep the replay marker in front.
+                    st.message = if self.replay.is_some() { format!("replay · {message}") } else { message.clone() };
                     if was != state {
                         let name = sample.source.as_str();
                         let layer = readers.first().map(|&i| LayerId(i as u16));
@@ -411,6 +576,16 @@ impl ControlLoop {
             UserCommand::Quit => self.quit_requested = true,
             UserCommand::SaveScene { path } => self.save_requests.push(path.clone()),
             UserCommand::LoadScene { toml } => self.load_request = Some(toml.clone()),
+            UserCommand::Seek { to } => {
+                if self.replay.is_some() {
+                    self.pending_seek = Some(*to);
+                }
+            }
+            UserCommand::SetSpeed { speed } => {
+                if let Some(r) = self.replay.as_mut() {
+                    r.set_speed(*speed);
+                }
+            }
             _ => self.composer.handle(&cmd),
         }
     }
@@ -423,6 +598,17 @@ impl ControlLoop {
         };
         self.last_now = Some(now);
         self.tick_count = self.tick_count.wrapping_add(1);
+
+        // Time travel: pending seeks first, then whatever the log has for this tick.
+        if let Some(to) = self.pending_seek.take() {
+            self.do_seek(to, now);
+        }
+        if let Some(replay) = self.replay.as_mut() {
+            let due = replay.advance_to(now);
+            for s in due {
+                self.ingest(s);
+            }
+        }
 
         // Features.
         let transport = self.composer.transport();
@@ -557,6 +743,7 @@ impl ControlLoop {
                 readings: st.readings.clone(),
             })
             .collect();
+        snap.replay = self.replay.as_ref().map(|r| r.snapshot());
         snap.events = self.events.iter().cloned().collect();
         snap.notes = self
             .notes
@@ -575,6 +762,22 @@ impl ControlLoop {
         snap.underruns = self.underruns.saturating_add(self.synth.underruns());
         snap.audio_backend = self.audio_backend.clone();
         let _ = self.snapshot_tx.send(Arc::new(snap));
+    }
+}
+
+/// Sources fed by a replay say so in the UI.
+fn mark_replayed(sources: &mut BTreeMap<SourceId, SourceStatus>) {
+    for st in sources.values_mut() {
+        st.message = "replay".into();
+    }
+}
+
+fn mmss(t: f64) -> String {
+    let t = t.max(0.0) as u64;
+    if t >= 3600 {
+        format!("{}:{:02}:{:02}", t / 3600, (t % 3600) / 60, t % 60)
+    } else {
+        format!("{}:{:02}", t / 60, t % 60)
     }
 }
 

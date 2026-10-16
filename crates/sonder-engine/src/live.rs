@@ -37,6 +37,19 @@ pub struct EngineOptions {
     pub source_overrides: Vec<(String, SourceSpec)>,
     /// MIDI output port substring, or "virtual". None = no MIDI.
     pub midi_port: Option<String>,
+    /// Play a data log instead of the scene's sources (time travel).
+    pub replay: Option<ReplayOptions>,
+    /// Write every ingested sample to this `.sonder` / `.sonder.gz` data log.
+    pub record_data: Option<std::path::PathBuf>,
+}
+
+/// A log to play, for [`EngineOptions::replay`].
+#[derive(Debug, Clone)]
+pub struct ReplayOptions {
+    pub log: Arc<crate::datalog::DataLog>,
+    /// Shown in the UI (usually the file name).
+    pub title: String,
+    pub config: crate::replay::ReplayConfig,
 }
 
 /// Rendered audio for the web server: a broadcast of interleaved stereo f32 chunks.
@@ -182,11 +195,28 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
     let clock: Arc<dyn Clock> = Arc::new(WallClock::new());
     let registry = registry();
     let rt = tokio::runtime::Handle::current();
-    let mut generation = Generation::spawn(&registry, &scene, clock.clone(), seed, &rt)?;
 
     let perc_layers: Vec<bool> = scene.layers.iter().map(|l| l.role == Role::Perc).collect();
-    let mut control = ControlLoop::new(scene, seed, controller, tap, web_audio_tx.clone(), backend_name.clone(), snapshot_tx)
+    let mut control = ControlLoop::new(scene.clone(), seed, controller, tap, web_audio_tx.clone(), backend_name.clone(), snapshot_tx)
         .context("building control loop")?;
+    if let Some(r) = &opts.replay {
+        control.set_replay(Some(crate::replay::Replay::new(r.log.clone(), r.title.clone(), r.config.clone())));
+    }
+    // A replay feeds the scene's sources from the log; nothing live runs.
+    let mut generation = if control.replay().is_some() {
+        if control.replay_fed_sources().is_empty() {
+            tracing::warn!("the log feeds none of scene `{}`'s sources; its layers play on the conductor alone", scene.name);
+        }
+        Generation::empty()
+    } else {
+        Generation::spawn(&registry, &scene, clock.clone(), seed, &rt)?
+    };
+    if let Some(path) = &opts.record_data {
+        let header = crate::datalog::LogHeader::new(&scene.name, seed, crate::datalog::unix_now(), &ControlLoop::source_specs(&scene));
+        let mut writer = crate::datalog::DataLogWriter::create(path, &header).with_context(|| format!("creating data log {}", path.display()))?;
+        tracing::info!(path = %path.display(), "recording data log");
+        control.add_sample_sink(Box::new(move |s: &Sample| writer.write(s)));
+    }
     #[cfg_attr(not(feature = "midi"), allow(unused_mut))]
     let mut midi_name = None;
     if let Some(port) = &opts.midi_port {
@@ -226,7 +256,8 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
                     match reload(&mut control, &toml_src, fixed_seed) {
                         Ok(new_seed) => {
                             let scene = control.scene();
-                            match Generation::spawn(&registry, scene, clock.clone(), new_seed, &rt) {
+                            let spawned = if control.replay().is_some() { Ok(Generation::empty()) } else { Generation::spawn(&registry, scene, clock.clone(), new_seed, &rt) };
+                            match spawned {
                                 Ok(g) => {
                                     std::mem::replace(&mut generation, g).stop();
                                     reloads_for_thread.fetch_add(1, Ordering::Relaxed);

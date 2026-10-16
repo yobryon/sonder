@@ -4,6 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sonder</title>
+<meta name="theme-color" content="#07080a">
+<meta name="description" content="A realtime generative music engine that listens to the world.">
+<link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sonder">
+<!-- PWA: the manifest is harmless behind the native server; the service worker is only
+     registered on a static host (worker mode) — see pwa.js. -->
+<link rel="manifest" href="./manifest.webmanifest">
 <link rel="stylesheet" href="./app.css">
 </head>
 <body>
@@ -54,6 +65,9 @@
       <span id="dot" class="dot connecting"></span>
       <span id="conn-label" class="dim">connecting</span>
       <span id="mode" class="mode" title="no Sonder server behind this page: the engine runs as WebAssembly in a Web Worker and JS adapters fetch the live data" hidden>no server — running in your browser</span>
+      <button id="install" class="btn ghost" title="install Sonder as an app" hidden>install</button>
+      <button id="open-log" class="btn ghost" title="open a .sonder data log (time travel) — or drop one anywhere on the page" hidden>open log</button>
+      <input id="log-file" type="file" accept=".sonder,.gz,.jsonl,application/gzip" hidden>
       <button id="share" class="btn ghost" title="copy a link that carries this scene">share</button>
       <button id="edit" class="btn ghost" title="scene editor (e)">edit</button>
       <button id="help" class="btn ghost" title="keyboard shortcuts (?)">?</button>
@@ -61,6 +75,7 @@
   </header>
 
   <div id="note" class="caption"><span id="cnote">…</span><span id="fnote" class="fnote" hidden></span></div>
+  <div id="timeline" class="timeline" hidden></div>
   <div id="banner" class="banner" hidden></div>
 
   <main id="stage">
@@ -69,6 +84,7 @@
     <div id="vizlabel" class="vizlabel mono"></div>
     <div id="captions" class="captions" aria-live="polite"></div>
     <div id="tip" class="tip" hidden></div>
+    <div id="keys" class="keys" hidden></div>
   </main>
 
   <aside id="editor" hidden></aside>
@@ -101,6 +117,8 @@
       <tr><td><kbd>c</kbd></td><td>next chord</td></tr>
       <tr><td><kbd>n</kbd></td><td>next form section</td></tr>
       <tr><td><kbd>e</kbd></td><td>scene editor</td></tr>
+      <tr><td>drop a <code>.sonder</code> log</td><td>time travel: replay it (click the timeline to seek)</td></tr>
+      <tr><td><kbd>p</kbd></td><td>play along (scenes with a <code>human</code> layer): <kbd>z</kbd>…<kbd>,</kbd> / <kbd>q</kbd>…<kbd>i</kbd> two octaves, <kbd>↑</kbd>/<kbd>↓</kbd> octave, <kbd>Esc</kbd> stop</td></tr>
       <tr><td>hover / click a note</td><td>what caused it; click an event → its notes</td></tr>
       <tr><td><kbd>?</kbd></td><td>toggle this legend</td></tr>
     </table>

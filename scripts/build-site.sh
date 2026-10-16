@@ -52,5 +52,8 @@ echo "+ catalog.json (sources, recipes, presets + composer system prompt)"
 # Native build of the CLI (default features) just to print the catalog.
 cargo run --quiet --release -p sonder -- catalog --json > "$OUT/catalog.json"
 
+echo "+ service worker (build hash + precache list)"
+scripts/sw-inject.sh "$OUT"
+
 du -sh "$OUT/pkg/sonder_wasm_bg.wasm" | sed 's/^/wasm: /'
 echo "site built in $OUT/ — serve with: python3 -m http.server -d $OUT"

@@ -27,6 +27,7 @@ reqwest = { workspace = true, optional = true }
 hound = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 midir = { workspace = true, optional = true }
+flate2 = { version = "1.1", optional = true }
 
 [features]
 default = ["native", "native-audio", "midi"]
@@ -35,7 +36,7 @@ default = ["native", "native-audio", "midi"]
 native = [
     "dep:sonder-sources", "sonder-sources/native",
     "dep:sonder-vision", "sonder-vision/native",
-    "dep:reqwest", "dep:hound", "dep:rand",
+    "dep:reqwest", "dep:hound", "dep:rand", "dep:flate2",
     "tokio/rt", "tokio/rt-multi-thread", "tokio/time", "tokio/macros", "tokio/test-util",
 ]
 native-audio = ["native", "sonder-audio/native-audio"]

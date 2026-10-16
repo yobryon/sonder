@@ -8,7 +8,8 @@
 //   t.on('status', (state) => …)                // 'connecting' | 'live' | 'closed'
 //   t.send(userCommand); t.startAudio(); t.stopAudio(); t.close()
 // Worker-only extras: 'ready' {scenes, version}, 'started' {seed, specs, mainSpecs},
-//   'error' {message}, t.start(sceneToml, seed), t.postSample(source, json), t.postFrame(...)
+//   'error' {message}, t.start(sceneToml, seed), t.postSample(source, json), t.postFrame(...),
+//   t.loadLog(bytes, title) → 'log_loaded' {info} (time travel: the engine plays the log)
 //
 // All URLs are relative so the same files work from the server root and from a
 // GitHub Pages sub-path.
@@ -144,6 +145,7 @@ export class WorkerTransport extends Emitter {
       case 'validated': { const r = this.pendingValidate.get(m.id); if (r) { this.pendingValidate.delete(m.id); r(m.errors); } break; }
       case 'error': console.error('[worker]', m.message); this.emit('error', m); this.emit('status', 'closed'); break;
       case 'log': console.debug('[worker]', m.message); break;
+      case 'log_loaded': this.emit('log_loaded', m.info); break;
       case 'stopped': this.started = false; this.emit('status', 'closed'); break;
       default: break;
     }
@@ -160,6 +162,8 @@ export class WorkerTransport extends Emitter {
   send(cmd) { if (this.worker) this.worker.postMessage({ type: 'command', cmd }); }
   postSample(source, json) { if (this.worker) this.worker.postMessage({ type: 'sample', source, json }); }
   postFrame(source, gray, w, h) { if (this.worker) this.worker.postMessage({ type: 'frame', source, gray, w, h }, [gray.buffer]); }
+  /** Time travel: play a `.sonder` log (plain JSONL bytes) into the running scene. */
+  loadLog(bytes, title) { if (this.worker) this.worker.postMessage({ type: 'load_log', bytes, title }, [bytes.buffer]); }
   startAudio() { this.audioOn = true; this.worker?.postMessage({ type: 'audio', on: true }); this.emit('audio-config', { sampleRate: this.sampleRate, channels: 2 }); }
   stopAudio() { this.audioOn = false; this.worker?.postMessage({ type: 'audio', on: false }); }
   stop() { this.worker?.postMessage({ type: 'stop' }); }

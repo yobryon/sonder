@@ -37,6 +37,7 @@ ol { margin: 0; padding: 0; list-style: none; }
   grid-template-areas:
     "hdr hdr"
     "note note"
+    "timeline timeline"
     "banner banner"
     "stage layers"
     "sources ticker";
@@ -103,6 +104,23 @@ ol { margin: 0; padding: 0; list-style: none; }
 #note { grid-area: note; padding: 4px 16px; font-size: 12px; color: var(--fg-dim); font-style: italic; background: var(--bg-1); display: flex; flex-wrap: wrap; gap: 2px 18px; }
 #note > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #note .fnote { color: var(--accent); opacity: .85; }
+
+/* ---------- replay timeline (time travel) ---------- */
+.timeline { grid-area: timeline; display: flex; align-items: center; gap: 10px; padding: 6px 16px; font-size: 12px; background: var(--bg-1); border-top: 1px solid var(--line); }
+.tl-tag { color: #c9a0e8; letter-spacing: .1em; text-transform: uppercase; font-size: 10px; white-space: nowrap; }
+.tl-title { color: var(--fg); font-size: 11px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-wall { font-size: 11px; white-space: nowrap; }
+.tl-bar { position: relative; flex: 1; height: 8px; min-width: 120px; background: var(--bg-2); border-radius: 4px; cursor: pointer; overflow: visible; }
+.tl-bar:hover { outline: 1px solid var(--fg-faint); }
+.tl-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: linear-gradient(90deg, #7a5aa8, #c9a0e8); border-radius: 4px; }
+.tl-head { position: absolute; top: -3px; width: 2px; height: 14px; margin-left: -1px; background: var(--fg); box-shadow: 0 0 6px #c9a0e8; }
+.tl-time { white-space: nowrap; } .tl-time b { color: var(--fg); font-weight: 600; }
+.tl-speeds { display: inline-flex; gap: 2px; }
+.tl-speed, .tl-pause { padding: 1px 7px; font-size: 11px; }
+.tl-speed.on { border-color: #c9a0e8; color: #c9a0e8; }
+.tl-pause.on { border-color: var(--warn); color: var(--warn); }
+#app.dropping::after { content: "drop the .sonder log to replay it"; position: fixed; inset: 0; display: grid; place-items: center; background: rgba(7,8,10,.82); color: #c9a0e8; font-size: 22px; letter-spacing: .08em; border: 2px dashed #c9a0e8; z-index: 50; pointer-events: none; }
+@media (max-width: 760px) { .tl-wall, .tl-title { display: none; } }
 
 /* ---------- form (section / arc / motif) ---------- */
 .form { display: flex; flex-direction: column; gap: 4px; min-width: 110px; border-left: 1px solid var(--line); padding-left: 14px; }
@@ -232,7 +250,7 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--bg-2); border
   #app {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto auto minmax(50vh, auto) auto auto auto;
-    grid-template-areas: "hdr" "note" "banner" "stage" "layers" "sources" "ticker";
+    grid-template-areas: "hdr" "note" "timeline" "banner" "stage" "layers" "sources" "ticker";
   }
   #hdr { gap: 10px 18px; }
   .listen { margin-left: 0; }
@@ -241,3 +259,20 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--bg-2); border
   #event-list li { grid-template-columns: 62px 10px 1fr 50px; }
   #event-list .eattrs { display: none; }
 }
+
+/* ── play-along strip (keys.js): an overlay at the foot of the stage, shown when the scene has a `human` layer ── */
+.keys { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; padding: 6px 16px 8px; background: rgba(13,15,18,.94); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.keys.playing { box-shadow: inset 0 0 0 1px var(--accent); }
+.khead { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.ktitle { color: var(--accent); font-weight: 600; letter-spacing: .06em; }
+.khead .btn { padding: 2px 9px; font-size: 11px; }
+.khead .btn.on { border-color: var(--accent); color: var(--accent); }
+.kstatus { margin-left: auto; min-width: 8ch; text-align: right; }
+.kpiano { position: relative; display: flex; height: 56px; user-select: none; touch-action: none; }
+.kkey { position: relative; flex: 1 1 0; border: 1px solid var(--line); border-radius: 0 0 4px 4px; background: #e9e6df; color: #3a3f48; cursor: pointer; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; font-size: 10px; padding-bottom: 3px; }
+.kkey.black { flex: 0 0 0; width: 0; z-index: 2; }
+.kkey.black::before { content: ''; position: absolute; left: -11px; top: -1px; width: 22px; height: 60%; background: #1a1d23; border: 1px solid #000; border-radius: 0 0 3px 3px; }
+.kkey.black .klabel { position: absolute; left: -11px; width: 22px; top: 2px; color: #9aa1ab; text-align: center; z-index: 3; }
+.kkey .kname { position: absolute; bottom: 14px; color: #7c838e; font-size: 9px; }
+.kkey.down { background: var(--accent); }
+.kkey.black.down::before { background: var(--accent); border-color: var(--accent); }

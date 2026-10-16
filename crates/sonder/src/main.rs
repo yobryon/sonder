@@ -73,6 +73,8 @@ enum Cmd {
     Radio(radio::RadioArgs),
     /// Render today's dated track (seed = date) into an album directory with an index page.
     Record(record::RecordArgs),
+    /// Play a recorded data log (time travel): the scene it was recorded with, or another.
+    Replay(ReplayArgs),
     /// Compose a scene from a prompt with Claude (needs ANTHROPIC_API_KEY).
     Compose(ComposeArgs),
     /// Print the composer catalog (source kinds, recipes, presets, system prompt).
@@ -115,8 +117,56 @@ struct PlayArgs {
     /// Reload the scene in place whenever its file changes on disk (polled every second).
     #[arg(long)]
     watch: bool,
+    /// Write every ingested sample to this `.sonder` (or `.sonder.gz`) data log, for `sonder replay`.
+    #[arg(long, value_name = "PATH")]
+    record_data: Option<PathBuf>,
     #[command(flatten)]
     source: SourceOverride,
+}
+
+#[derive(Args, Clone)]
+struct ReplayArgs {
+    /// A `.sonder` / `.sonder.gz` data log (from `--record-data` or `sonder record`).
+    log: PathBuf,
+    /// Scene to play the log through (default: the scene named in the log's header, if built in).
+    #[arg(long)]
+    scene: Option<String>,
+    /// Playback speed (1 = real time).
+    #[arg(long, default_value_t = 1.0)]
+    speed: f64,
+    /// Start this many seconds into the log.
+    #[arg(long)]
+    from: Option<f64>,
+    /// Stop at this many seconds into the log.
+    #[arg(long)]
+    to: Option<f64>,
+    /// Start over when the log ends.
+    #[arg(long = "loop")]
+    looping: bool,
+    /// Web UI port (0 = disabled).
+    #[arg(long, default_value_t = 7777)]
+    web: u16,
+    /// Bind address for the web UI.
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: String,
+    /// Open the web UI in a browser at start.
+    #[arg(long)]
+    open: bool,
+    /// Don't open a native audio device (listen via the web UI).
+    #[arg(long)]
+    no_audio: bool,
+    /// Write s16le stereo PCM to stdout instead of a device.
+    #[arg(long)]
+    pcm_stdout: bool,
+    /// Run headless (no TUI).
+    #[arg(long)]
+    headless: bool,
+    /// RNG seed (default: the seed recorded in the log, so the music comes back too).
+    #[arg(long)]
+    seed: Option<u64>,
+    /// Also send MIDI to this output port (substring match), or `virtual`.
+    #[arg(long, value_name = "PORT")]
+    midi: Option<String>,
 }
 
 #[derive(Args, Clone, Default)]
@@ -155,8 +205,15 @@ fn main() -> anyhow::Result<()> {
     init_logging(&cli.log, cli.log_file.as_deref(), matches!(cli.cmd, Cmd::Play(_)))?;
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     match cli.cmd {
-        Cmd::Play(args) => rt.block_on(play(args, true)),
-        Cmd::Serve(args) => rt.block_on(play(args, false)),
+        Cmd::Play(args) => rt.block_on(async {
+            let scene = sonder_engine::load_scene(&args.scene)?;
+            play(scene, args, true, None).await
+        }),
+        Cmd::Serve(args) => rt.block_on(async {
+            let scene = sonder_engine::load_scene(&args.scene)?;
+            play(scene, args, false, None).await
+        }),
+        Cmd::Replay(args) => rt.block_on(replay(args)),
         Cmd::Render { scene, seconds, out, seed, source } => {
             let mut scene = sonder_engine::load_scene(&scene)?;
             sonder_engine::live::apply_overrides(&mut scene, &source.into_overrides()?)?;
@@ -300,8 +357,89 @@ fn scene_needs_network(scene: &Scene) -> bool {
     })
 }
 
-async fn play(args: PlayArgs, tui: bool) -> anyhow::Result<()> {
-    let scene = sonder_engine::load_scene(&args.scene)?;
+/// `sonder replay`: resolve the scene (the log's own, or `--scene`) and play the log into it.
+async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
+    let log = sonder_engine::datalog::DataLog::open(&args.log).with_context(|| format!("opening data log {}", args.log.display()))?;
+    let header = log.header().clone();
+    let scene = match &args.scene {
+        Some(s) => sonder_engine::load_scene(s)?,
+        None => builtin_scene_named(&header.scene).with_context(|| {
+            format!(
+                "the log was recorded with scene `{}`, which is not a built-in scene; pass --scene <name|path> to choose one (the log carries sources: {})",
+                header.scene,
+                log.source_names().join(", ")
+            )
+        })?,
+    };
+    let fed: Vec<String> = {
+        let names = log.source_names();
+        scene.layers.iter().filter(|l| matches!(l.source, sonder_core::LayerSource::Spec(_)) && names.contains(&l.name)).map(|l| l.name.clone()).collect()
+    };
+    if fed.is_empty() {
+        eprintln!(
+            "sonder replay: warning: the log's sources ({}) match none of scene `{}`'s ({}); its layers will play on the conductor alone",
+            log.source_names().join(", "),
+            scene.name,
+            scene.layers.iter().filter(|l| matches!(l.source, sonder_core::LayerSource::Spec(_))).map(|l| l.name.as_str()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    if !log.audio_dropped().is_empty() {
+        eprintln!("sonder replay: note: audio from {} was not recorded (logs hold data, not sound)", log.audio_dropped().iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+    }
+    let title = args.log.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| args.log.display().to_string());
+    eprintln!(
+        "sonder replay: {title} — {} ({}), {} of data, {} samples → scene `{}`{}",
+        header.scene,
+        header.created,
+        mmss(log.length_seconds()),
+        log.entries().len(),
+        scene.name,
+        if args.speed != 1.0 { format!(" at {}×", args.speed) } else { String::new() }
+    );
+    let config = sonder_engine::replay::ReplayConfig {
+        speed: args.speed,
+        from: args.from.unwrap_or(0.0),
+        to: args.to,
+        looping: args.looping,
+        rename: Default::default(),
+    };
+    let replay = sonder_engine::live::ReplayOptions { log: std::sync::Arc::new(log), title, config };
+    let play_args = PlayArgs {
+        scene: args.scene.clone().unwrap_or_else(|| header.scene.clone()),
+        web: args.web,
+        bind: args.bind,
+        open: args.open,
+        no_audio: args.no_audio,
+        pcm_stdout: args.pcm_stdout,
+        sample_rate: 48_000,
+        seed: Some(args.seed.unwrap_or(header.seed)),
+        midi: args.midi,
+        watch: false,
+        record_data: None,
+        source: SourceOverride::default(),
+    };
+    play(scene, play_args, !args.headless, Some(replay)).await
+}
+
+/// A built-in scene by slug (`night-freeway`) or title (`Night Freeway`), case-insensitive.
+fn builtin_scene_named(name: &str) -> Option<Scene> {
+    let want = name.trim().to_ascii_lowercase();
+    sonder_engine::builtin_scenes()
+        .into_iter()
+        .find(|(slug, scene)| slug.eq_ignore_ascii_case(&want) || scene.name.to_ascii_lowercase() == want)
+        .map(|(_, s)| s)
+}
+
+fn mmss(t: f64) -> String {
+    let t = t.max(0.0) as u64;
+    if t >= 3600 {
+        format!("{}:{:02}:{:02}", t / 3600, (t % 3600) / 60, t % 60)
+    } else {
+        format!("{}:{:02}", t / 60, t % 60)
+    }
+}
+
+async fn play(scene: Scene, args: PlayArgs, tui: bool, replay: Option<sonder_engine::live::ReplayOptions>) -> anyhow::Result<()> {
     let backend = if args.pcm_stdout {
         AudioBackendChoice::PcmStdout
     } else if args.no_audio {
@@ -316,10 +454,15 @@ async fn play(args: PlayArgs, tui: bool) -> anyhow::Result<()> {
         web_tap: args.web != 0,
         source_overrides: args.source.into_overrides()?,
         midi_port: args.midi.clone(),
+        replay,
+        record_data: args.record_data.clone(),
     };
     let handle = sonder_engine::start(scene, opts).await?;
     if let Some(p) = &handle.midi_port {
         tracing::info!("midi out → {p}");
+    }
+    if let Some(p) = &args.record_data {
+        eprintln!("sonder: recording data to {} (play it back with `sonder replay {}`)", p.display(), p.display());
     }
     if args.watch {
         let path = scene_file_path(&args.scene).context("--watch needs a scene file, not a built-in name")?;
@@ -741,7 +884,9 @@ async fn compose(args: ComposeArgs) -> anyhow::Result<()> {
     };
     if args.play {
         let scene = path.expect("a path when playing").to_string_lossy().into_owned();
+        let loaded = sonder_engine::load_scene(&scene)?;
         play(
+            loaded,
             PlayArgs {
                 scene,
                 web: 7777,
@@ -753,9 +898,11 @@ async fn compose(args: ComposeArgs) -> anyhow::Result<()> {
                 seed: None,
                 midi: None,
                 watch: false,
+                record_data: None,
                 source: SourceOverride::default(),
             },
             true,
+            None,
         )
         .await?;
     }

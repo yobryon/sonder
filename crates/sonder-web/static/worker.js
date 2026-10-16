@@ -8,11 +8,15 @@
 //      {type:'sample', source, json}              from main-thread adapters (browser.input)
 //      {type:'frame', source, gray, w, h}         webcam luma frame (transferable)
 //      {type:'audio', on}                         post rendered blocks or not
+//      {type:'snapshot-rate', hz}                 snapshots per second (2 when the tab is hidden)
 //      {type:'validate', id, toml}
+//      {type:'load_log', bytes, title}            a .sonder data log (plain JSONL bytes, transferable):
+//                                                 switches the engine to replay mode (adapters stop)
 //      {type:'stop'}
 // Out: {type:'ready', scenes, version}  {type:'started', scene, seed, specs, mainSpecs}
 //      {type:'audio', data:Float32Array, sampleRate}  {type:'snapshot', json}
 //      {type:'validated', id, errors}  {type:'error', message}  {type:'log', message}  {type:'stopped'}
+//      {type:'log_loaded', info}       info = {title, scene, seed, length, sources, fed, audio_dropped, …}
 
 import { planTicks } from './timing.js';
 import { ADAPTERS, UNAVAILABLE, isMainThreadKind, loadAdapter } from './sources/index.js';
@@ -28,6 +32,7 @@ let tickCount = 0;
 let tickSec = 0.02;
 let framesPerTick = 960;
 let running = false;
+let snapshotEvery = 2;     // ticks per snapshot: 25 Hz visible, ~2 Hz when the tab is hidden
 
 const post = (m, transfer) => self.postMessage(m, transfer || []);
 const log = (message) => post({ type: 'log', message });
@@ -43,7 +48,9 @@ self.onmessage = async (ev) => {
       case 'sample': if (engine && running) pushSample(m.source, m.json); break;
       case 'frame': if (engine && running) engine.push_frame(m.source, m.gray, m.w, m.h); break;
       case 'audio': audioOn = !!m.on; break;
+      case 'snapshot-rate': snapshotEvery = Math.max(1, Math.round(1 / (Math.max(0.1, +m.hz || 25) * tickSec))); break;
       case 'validate': post({ type: 'validated', id: m.id, errors: mod ? Array.from(mod.validate_scene(m.toml)) : ['engine not loaded'] }); break;
+      case 'load_log': loadLog(m.bytes, m.title || 'log'); break;
       case 'stop': stop(); post({ type: 'stopped' }); break;
       default: break;
     }
@@ -92,6 +99,17 @@ async function start({ sceneToml, seed, sampleRate: sr }) {
   loop();
 }
 
+// Time travel: hand a data log to the engine. The adapters are stopped (the engine
+// ignores their samples anyway) and the page learns what the log carries.
+function loadLog(bytes, title) {
+  if (!engine || !running) throw new Error('start a scene before loading a log');
+  if (typeof engine.load_log !== 'function') throw new Error('this engine build cannot replay logs');
+  const info = plain(engine.load_log(bytes, title));
+  for (const a of adapters) { try { a.stop(); } catch (_) { /* ignore */ } }
+  adapters = [];
+  post({ type: 'log_loaded', info: { ...info, sources: Array.from(info.sources || []), fed: Array.from(info.fed || []), audio_dropped: Array.from(info.audio_dropped || []) } });
+}
+
 function pushSample(source, json) {
   try { engine.push_sample(source, json); } catch (e) { log(`push_sample(${source}) rejected: ${e.message || e}`); }
 }
@@ -112,7 +130,7 @@ function loop() {
     engine.tick(out);
     tickCount++;
     if (audioOn) post({ type: 'audio', data: out, sampleRate }, [out.buffer]);
-    if (tickCount % 2 === 0) post({ type: 'snapshot', json: engine.snapshot_json() });
+    if (tickCount % snapshotEvery === 0) post({ type: 'snapshot', json: engine.snapshot_json() });
   }
   timer = setTimeout(loop, nextMs);
 }

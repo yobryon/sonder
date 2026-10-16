@@ -112,8 +112,10 @@ pub fn run(args: RecordArgs) -> anyhow::Result<()> {
         let scene = sonder_engine::load_scene(&args.scene)?;
         let seconds = (args.minutes * 60.0).max(1.0);
         let wav = args.out.join(format!("{date}.wav"));
+        let log_name = format!("{date}.sonder.gz");
+        let log_path = args.out.join(&log_name);
         eprintln!("sonder record: {date} — {:.1} min of `{}` (seed {seed}) → {}", args.minutes, scene.name, wav.display());
-        let stats = sonder_engine::render_to_wav(&scene, seconds, seed, &wav)?;
+        let stats = render_recording(&scene, seconds, seed, &wav, &log_path)?;
         let mut files = Vec::new();
         let mp3 = args.out.join(format!("{date}.mp3"));
         if super::radio::ffmpeg_available() {
@@ -138,14 +140,23 @@ pub fn run(args: RecordArgs) -> anyhow::Result<()> {
         if wav.exists() {
             files.push(Attachment { file: format!("{date}.wav"), label: format!("{} (WAV)", scene.name) });
         }
+        if log_path.exists() {
+            files.push(Attachment { file: log_name, label: "data log (replay it: drop onto the web UI, or `sonder replay`)".into() });
+        }
         for a in &args.attachments {
             let name = a.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             if !args.out.join(&name).exists() {
                 eprintln!("sonder record: attachment {} is not in {}; skipping", a.display(), args.out.display());
                 continue;
             }
-            let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(&name);
-            let label = stem.strip_prefix(&format!("{date}-")).unwrap_or(stem).replace(['-', '_'], " ");
+            let label = if is_data_log(&name) {
+                let stem = name.trim_end_matches(".gz").trim_end_matches(".sonder");
+                let what = stem.strip_prefix(&format!("{date}-")).unwrap_or(stem).replace(['-', '_'], " ");
+                format!("{what} data log (replay it: drop onto the web UI, or `sonder replay`)")
+            } else {
+                let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(&name);
+                stem.strip_prefix(&format!("{date}-")).unwrap_or(stem).replace(['-', '_'], " ")
+            };
             files.push(Attachment { file: name, label });
         }
         let record = Record {
@@ -166,6 +177,20 @@ pub fn run(args: RecordArgs) -> anyhow::Result<()> {
     std::fs::write(args.out.join("index.html"), index_html(&records))?;
     eprintln!("sonder record: index.html lists {} record(s)", records.len());
     Ok(())
+}
+
+/// Render the WAV while recording every ingested sample to a gzip data log next to it.
+fn render_recording(scene: &sonder_core::Scene, seconds: f64, seed: u64, wav: &Path, log: &Path) -> anyhow::Result<sonder_engine::RenderStats> {
+    use sonder_engine::datalog::{DataLogWriter, LogHeader};
+    let header = LogHeader::new(&scene.name, seed, sonder_engine::datalog::unix_now(), &sonder_engine::control::ControlLoop::source_specs(scene));
+    let mut writer = DataLogWriter::create(log, &header).with_context(|| format!("creating {}", log.display()))?;
+    let opts = sonder_engine::RenderOptions { record: Some(Box::new(move |s: &sonder_core::Sample| writer.write(s))), ..Default::default() };
+    sonder_engine::render_to_wav_with(scene, seconds, seed, wav, opts)
+}
+
+/// `.sonder` / `.sonder.gz`?
+fn is_data_log(name: &str) -> bool {
+    name.ends_with(".sonder") || name.ends_with(".sonder.gz")
 }
 
 /// Every `<date>.json` in `dir`, newest first.
@@ -203,6 +228,15 @@ pub fn index_html(records: &[Record]) -> String {
     for r in records {
         let mut players = String::new();
         for f in &r.files {
+            if is_data_log(&f.file) {
+                players.push_str(&format!(
+                    "<figure class=\"log\"><figcaption>{}</figcaption><a href=\"{}\" download>⟲ {}</a></figure>",
+                    esc(&f.label),
+                    esc(&f.file),
+                    esc(&f.file)
+                ));
+                continue;
+            }
             let mime = if f.file.ends_with(".mp3") { "audio/mpeg" } else if f.file.ends_with(".ogg") { "audio/ogg" } else { "audio/wav" };
             players.push_str(&format!(
                 "<figure><figcaption>{}</figcaption><audio controls preload=\"none\"><source src=\"{}\" type=\"{mime}\"></audio> <a href=\"{}\" download>download</a></figure>",
@@ -279,6 +313,10 @@ mod tests {
         assert!(html.contains("A &lt;b&gt;"));
         assert!(html.contains("<time>1:05</time> M4.1 off Honshu"));
         assert!(html.contains("src=\"2026-01-02.mp3\" type=\"audio/mpeg\""));
+        let with_log = vec![Record { date: "2026-01-04".into(), files: vec![Attachment { file: "2026-01-04.sonder.gz".into(), label: "data log".into() }], ..Default::default() }];
+        let html = index_html(&with_log);
+        assert!(html.contains("<a href=\"2026-01-04.sonder.gz\" download>"));
+        assert!(!html.contains("<audio"), "a data log is not an audio file");
     }
 
     #[test]
@@ -300,6 +338,13 @@ mod tests {
         assert_eq!(rec.scene_name, "Night Freeway");
         assert!(dir.join("2026-10-15.wav").exists());
         assert!(rec.files.iter().any(|f| f.file.ends_with(".wav")));
+        // The data log sits next to the audio and plays back.
+        let log = sonder_engine::datalog::DataLog::open(&dir.join("2026-10-15.sonder.gz")).unwrap();
+        assert_eq!(log.header().seed, 20_261_015);
+        assert_eq!(log.header().scene, "Night Freeway");
+        assert!(log.length_seconds() > 2.0, "{}", log.length_seconds());
+        assert!(log.entries().iter().any(|e| matches!(e.datum, sonder_core::Datum::Reading { .. })));
+        assert!(rec.files.iter().any(|f| f.file == "2026-10-15.sonder.gz"));
         let index = std::fs::read_to_string(dir.join("index.html")).unwrap();
         assert!(index.contains("2026-10-15"));
         let _ = std::fs::remove_dir_all(&dir);

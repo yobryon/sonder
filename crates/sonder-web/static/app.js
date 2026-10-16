@@ -17,6 +17,8 @@ import { newCaptions, liveCaptions, isBig } from './captions.js';
 import { noteRect, hitNote, causedBy, pitchName, causeText, attrSummary } from './roll.js';
 import { project, eventLatLon, sunPosition, nightPolygon } from './geo.js';
 import { createEditor, sceneTitle } from './editor.js';
+import { createTimeline, readLogFile, looksLikeLog, peekHeader } from './timeline.js';
+import { initKeys } from './keys.js';
 // The source-adapter registry is only needed in worker mode and is not served by the
 // native server, so it is imported lazily (a 404 would otherwise sink this whole module).
 let registry = null;
@@ -177,6 +179,7 @@ function ingest(snap) {
   for (const [k, n] of state.notes) if (n.at < horizon && !n.active) state.notes.delete(k);
 
   updateHeader(snap);
+  if (timeline) timeline.update(snap.replay || null);
   if (state.tick % 2 === 0) updateLayers(snap);
   if (state.tick % 4 === 0) updateSources(snap);
   if (state.tickerDirty) { updateTicker(); state.tickerDirty = false; }
@@ -195,6 +198,7 @@ function setText(el, text) {
 
 function updateHeader(s) {
   setText($('#scene'), s.scene_name || 'untitled');
+  if (pwa) pwa.media.setTitle(s.scene_name || 'Sonder');
   $('#paused').hidden = !s.paused;
   const t = s.transport || {};
   setText($('#pos'), `${(t.bar ?? 0) + 1}.${(t.beat ?? 0) + 1}`);
@@ -910,6 +914,7 @@ function updateHover(Hv) {
 const params = new URLSearchParams(location.search);
 const MOCK = params.get('mock') === '1';
 let transport = null;
+let pwa = null;            // ./pwa.js (service worker, install button, Media Session); optional
 let mainAdapters = [];     // browser.input / camera adapters running on this thread
 let cameraAdapter = null;
 let audioAdapter = null;   // audio.features (mic / stream) adapter, toggled by #mic
@@ -1135,8 +1140,14 @@ async function boot() {
     if (audio.node) audio.node.port.postMessage({ type: 'config', srcRate: sampleRate, targetMs: 200, maxMs: 500 });
   });
   transport.on('audio-error', (msg) => { setText($('#buf'), msg); $('#buf').className = 'buf mono bad'; });
+  // PWA glue: service worker + install button (static host only), Media Session, hidden-tab rate.
+  pwa = await import('./pwa.js').catch(() => null);
+  if (pwa) pwa.install({ transport, mock: MOCK, installButton: $('#install'), onPlay: startAudio, onPause: stopAudio });
+  // Play-along: keyboard / Web MIDI piano for `human` layers (shown when the scene has one).
+  initKeys({ root: $('#keys'), send, getSnap: () => state.snap });
 
   setupEditor();
+  setupTimeTravel();
   const linked = await urlScene();
 
   if (transport.mode === 'ws') {
@@ -1214,6 +1225,56 @@ window.addEventListener('keydown', (e) => {
 });
 
 function toggleLegend() { const l = $('#legend'); l.hidden = !l.hidden; }
+
+// ---------------------------------------------------------------------------
+// Time travel: the replay timeline (both modes) and opening a data log (worker mode).
+// ---------------------------------------------------------------------------
+let timeline = null;
+function setupTimeTravel() {
+  timeline = createTimeline($('#timeline'), { send });
+  if (!transport || transport.mode !== 'worker') return; // ws mode: `sonder replay <log>` natively
+  $('#open-log').hidden = false;
+  $('#open-log').addEventListener('click', () => $('#log-file').click());
+  $('#log-file').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) openLog(f); e.target.value = ''; });
+  const app = $('#app');
+  let depth = 0;
+  window.addEventListener('dragenter', (e) => { if (hasFile(e)) { e.preventDefault(); depth++; app.classList.add('dropping'); } });
+  window.addEventListener('dragover', (e) => { if (hasFile(e)) e.preventDefault(); });
+  window.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; app.classList.remove('dropping'); } });
+  window.addEventListener('drop', (e) => {
+    depth = 0; app.classList.remove('dropping');
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    e.preventDefault();
+    openLog(f);
+  });
+  transport.on('log_loaded', (info) => {
+    stopMainAdapters();
+    const when = info.created ? ` from ${info.created}` : '';
+    if (!info.fed || !info.fed.length) banner(`log loaded${when}, but none of its sources (${(info.sources || []).join(', ')}) are in this scene — pick the scene it was recorded with (${info.scene})`);
+    else banner(`⟲ replaying ${info.title}${when}: ${info.fed.join(', ')} · click the timeline to seek`);
+  });
+}
+const hasFile = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+
+// Inflate if needed, switch to the log's scene when we have it, then hand the bytes over.
+async function openLog(file) {
+  if (!looksLikeLog(file.name)) { banner(`${file.name} is not a .sonder data log`, true); return; }
+  let bytes;
+  try { bytes = await readLogFile(file); } catch (e) { banner(`could not read ${file.name}: ${e.message || e}`, true); return; }
+  const header = peekHeader(bytes);
+  if (!header) { banner(`${file.name} does not start with a Sonder log header`, true); return; }
+  const want = String(header.scene || '').toLowerCase();
+  const scene = (transport.scenes || []).find((s) => s.title.toLowerCase() === want || s.name.toLowerCase() === want);
+  if (scene && (!currentScene || currentScene.name !== scene.name)) {
+    startScene(scene, header.seed);
+    await new Promise((res) => { const once = () => res(); transport.on('started', once); setTimeout(res, 3000); });
+  } else if (!transport.started && currentScene) {
+    startScene(currentScene, header.seed);
+    await new Promise((res) => { transport.on('started', () => res()); setTimeout(res, 3000); });
+  }
+  transport.loadLog(bytes, file.name);
+}
 $('#help').addEventListener('click', toggleLegend);
 
 // ---------------------------------------------------------------------------
@@ -1266,6 +1327,7 @@ async function startAudio() {
     if (transport && transport.mode === 'worker' && !transport.started && currentScene) startScene(currentScene, currentSeed);
     transport.startAudio();
     audio.on = true;
+    if (pwa) pwa.media.setPlaying(true);
     btn.textContent = '■ Stop';
     btn.classList.add('on');
   } catch (e) {
@@ -1279,6 +1341,7 @@ async function startAudio() {
 
 async function stopAudio() {
   audio.on = false;
+  if (pwa) pwa.media.setPlaying(false);
   if (transport) transport.stopAudio();
   if (audio.ctx) { try { await audio.ctx.close(); } catch (_) { /* ignore */ } }
   audio.ctx = null; audio.node = null; audio.gain = null;

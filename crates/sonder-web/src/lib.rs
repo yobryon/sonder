@@ -185,7 +185,7 @@ mod tests {
         assert!(assets::INDEX_HTML.contains("/app.css"));
         assert!(assets::APP_JS.contains("/worklet.js"));
         // Every module app.js / editor.js import must be served in ws mode.
-        for m in ["scene-url.js", "captions.js", "roll.js", "geo.js", "editor.js", "coastlines.json"] {
+        for m in ["scene-url.js", "captions.js", "roll.js", "geo.js", "editor.js", "timeline.js", "coastlines.json"] {
             assert!(assets::FILES.iter().any(|(p, _, _)| p.trim_start_matches('/') == m), "{m} not embedded");
         }
         for (_, body, _) in assets::FILES {

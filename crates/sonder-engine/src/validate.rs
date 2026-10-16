@@ -18,10 +18,15 @@ pub fn validate(scene: &Scene) -> Result<(), Vec<String>> {
             if let Err(e) = crate::recipes::expand(spec) {
                 errs.push(format!("{ctx}: {e}"));
             }
+            if spec.kind == crate::replay::KIND {
+                if let Err(e) = crate::replay::ReplayConfig::from_spec(spec) {
+                    errs.push(format!("{ctx}: {e}"));
+                }
+            }
         }
         #[cfg(feature = "native")]
         if let LayerSource::Spec(spec) = &layer.source {
-            if registry.info(&spec.kind).is_none() && !crate::recipes::is_recipe(&spec.kind) {
+            if registry.info(&spec.kind).is_none() && !crate::recipes::is_recipe(&spec.kind) && spec.kind != crate::replay::KIND {
                 let mut known: Vec<String> = registry.catalog().iter().map(|i| i.kind.to_string()).collect();
                 known.extend(crate::recipes::all().into_iter().map(|r| r.recipe.kind));
                 errs.push(format!("{ctx}: unknown source kind `{}` (known: {})", spec.kind, known.join(", ")));

@@ -99,6 +99,39 @@ for UI work without a wasm build. Sources that cannot exist in a browser
 (`system.metrics`, `file-tail`, `stdin`) show as *failed* and their layers play on the
 conductor alone; OpenSky may be blocked by CORS. JS unit tests: `node --test crates/sonder-web/js-tests/*.test.mjs`.
 
+## Desktop app
+
+The desktop app is the native engine (native audio, MIDI out, local sources such as your
+CPU or a camera) with the web UI in a window, built with Tauri. Download the installer for
+Linux (AppImage/deb), macOS (dmg) or Windows (msi/exe) from the
+[Releases](https://github.com/yobryon/sonder/releases) page — they are built by
+`.github/workflows/desktop.yml` on every `v*` tag. Menu: pick a built-in scene, open a scene
+file, toggle native audio, open the UI in a browser. To build it yourself:
+
+```
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev   # Linux only
+cargo install tauri-cli --version "^2" --locked      # or: npm i -g @tauri-apps/cli
+cd crates/sonder-desktop && cargo tauri build          # → target/release/bundle/
+```
+
+The crate lives outside the workspace (see [`crates/sonder-desktop/README.md`](crates/sonder-desktop/README.md)).
+
+## Install as an app
+
+The hosted build is a PWA: open **https://yobryon.github.io/sonder/** and use the
+**install** button in the header (Chrome/Edge: also the install icon in the address bar;
+Safari: *Share → Add to Home Screen*). Installed, it opens in its own window, works offline
+for the shell and the wasm engine (live feeds still need the network; offline scenes like
+`night-freeway` and `midnight-walk` play anyway), shows the scene name and play/pause on
+the lock screen / media keys (Media Session), and drops its UI refresh to 2 Hz while hidden
+(the music keeps playing at full rate).
+
+iOS Safari notes: audio needs a tap on **Listen** (AudioWorklet starts only after a user
+gesture, and the ring/silent switch mutes Web Audio); in standalone (home-screen) mode a
+page reload restarts the engine with a new seed, so pin one with `?seed=…`; the browser
+freezes JavaScript when the app is backgrounded, so audio stops when you switch apps and
+resumes when you come back. Background playback works on Android Chrome and desktop.
+
 ## v2: form, attribution, sharing, presence
 
 - **Form**: `conductor.form` shapes pieces over minutes — tension arcs or A/B sections,

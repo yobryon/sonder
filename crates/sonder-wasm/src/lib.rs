@@ -8,6 +8,11 @@
 //! stepped here in Rust so the offline scenes work with no JS adapter at all.
 //!
 //! See `docs/WASM.md` for the JS-facing contract.
+//!
+//! Object detection (cargo feature `detect`, off by default): build with
+//! `--features detect`, have JS fetch the ONNX model named by the camera's `model_url`
+//! param, pass the bytes to [`Engine::load_model`], then push RGB frames with
+//! [`Engine::push_frame_rgb`] instead of gray ones with [`Engine::push_frame`].
 
 #![forbid(unsafe_code)]
 
@@ -102,6 +107,27 @@ pub struct Engine {
     frames_per_tick: usize,
     ticks: u64,
     specs: Vec<SourceSpecEntry>,
+    /// True once a log is loaded: sims stop and JS samples are ignored.
+    replaying: bool,
+    /// The object detector shared by all camera sources (feature `detect`; see `load_model`).
+    #[cfg(feature = "detect")]
+    detector: Option<sonder_vision::Detector>,
+}
+
+/// What `Engine::load_log` returns (as a plain JS object).
+#[derive(Serialize)]
+struct ReplayInfo {
+    title: String,
+    scene: String,
+    seed: u64,
+    epoch_unix: f64,
+    created: String,
+    length: f64,
+    /// Source names in the log.
+    sources: Vec<String>,
+    /// Scene sources the log feeds (empty = nothing in this scene listens to it).
+    fed: Vec<String>,
+    audio_dropped: Vec<String>,
 }
 
 #[wasm_bindgen]
@@ -142,7 +168,105 @@ impl Engine {
         let control = ControlLoop::new(scene, seed, controller, None, None, "browser".into(), snapshot_tx)
             .map_err(|e| JsError::new(&format!("{e:#}")))?;
         let frames_per_tick = (sample_rate as f64 * TICK_SECONDS).round() as usize;
-        Ok(Engine { control, host, clock, snapshot_rx, sims, cameras, frames_per_tick, ticks: 0, specs })
+        Ok(Engine {
+            control,
+            host,
+            clock,
+            snapshot_rx,
+            sims,
+            cameras,
+            frames_per_tick,
+            ticks: 0,
+            specs,
+            replaying: false,
+            #[cfg(feature = "detect")]
+            detector: None,
+        })
+    }
+
+    /// Load an object-detection model (YOLOv8/11-format ONNX bytes; JS fetches them from the
+    /// camera source's `model_url` param, see [`Engine::source_specs`]). `input` is the model
+    /// input size in pixels (0 = the first camera's `model_input`, default 320). Afterwards
+    /// feed RGB frames with [`Engine::push_frame_rgb`]. Only in builds with the `detect`
+    /// feature.
+    #[cfg(feature = "detect")]
+    pub fn load_model(&mut self, bytes: &[u8], input: u32) -> Result<(), JsError> {
+        let mut cfg = self
+            .cameras
+            .values()
+            .find(|c| c.detect.enabled)
+            .or_else(|| self.cameras.values().next())
+            .map(|c| c.detect.detector_config())
+            .unwrap_or_default();
+        if input > 0 {
+            cfg.input = input;
+        }
+        let det = sonder_vision::Detector::from_bytes(bytes, cfg).map_err(|e| JsError::new(&format!("cannot load model: {e}")))?;
+        self.detector = Some(det);
+        Ok(())
+    }
+
+    /// Whether a detection model is loaded.
+    #[cfg(feature = "detect")]
+    pub fn has_model(&self) -> bool {
+        self.detector.is_some()
+    }
+
+    /// Feed an interleaved 8-bit RGB frame to a camera source whose spec has `detect = true`:
+    /// runs the detector and the tracker-by-class, emitting `blob` / `crossing` events with
+    /// `class`, per-class count readings and viz with class names. Requires
+    /// [`Engine::load_model`] first. Only in builds with the `detect` feature.
+    #[cfg(feature = "detect")]
+    pub fn push_frame_rgb(&mut self, source: &str, rgb: &[u8], width: u32, height: u32) -> Result<(), JsError> {
+        if self.replaying {
+            return Ok(());
+        }
+        let Some(cam) = self.cameras.get_mut(source) else {
+            return Err(JsError::new(&format!("`{source}` is not a camera source in this scene")));
+        };
+        if rgb.len() != (width as usize) * (height as usize) * 3 || width == 0 || height == 0 {
+            return Err(JsError::new("frame size does not match width × height × 3"));
+        }
+        let Some(det) = self.detector.as_mut() else {
+            return Err(JsError::new("no detection model loaded (call load_model first)"));
+        };
+        let now = self.clock.now();
+        let samples = cam.process_rgb(det, rgb, width, height, now).map_err(|e| JsError::new(&e))?;
+        for s in samples {
+            self.control.ingest(s);
+        }
+        Ok(())
+    }
+
+    /// Switch to replay mode: play this `.sonder` log (plain JSONL bytes — inflate gzip in
+    /// JS first) into the current scene under the log's source names. The sims stop and
+    /// `push_sample` / `push_frame` are ignored from now on. Returns `ReplayInfo`.
+    pub fn load_log(&mut self, bytes: &[u8], title: &str) -> Result<JsValue, JsError> {
+        let log = sonder_engine::datalog::load_bytes(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+        let h = log.header().clone();
+        let sources = log.source_names();
+        let audio_dropped = log.audio_dropped().iter().map(|s| s.to_string()).collect();
+        let replay = sonder_engine::replay::Replay::new(log.clone(), title, sonder_engine::replay::ReplayConfig::default());
+        self.control.set_replay(Some(replay));
+        self.replaying = true;
+        self.sims.clear();
+        let fed = self.control.replay_fed_sources();
+        to_js(&ReplayInfo { title: title.to_string(), scene: h.scene, seed: h.seed, epoch_unix: h.epoch_unix, created: h.created, length: log.length_seconds(), sources, fed, audio_dropped })
+    }
+
+    /// Replay only: jump to `to` seconds into the log.
+    pub fn seek(&mut self, to: f64) {
+        self.control.command(UserCommand::Seek { to });
+    }
+
+    /// Replay only: playback speed (0 pauses the log).
+    pub fn set_speed(&mut self, speed: f64) {
+        self.control.command(UserCommand::SetSpeed { speed });
+    }
+
+    /// Is a log playing?
+    pub fn replaying(&self) -> bool {
+        self.replaying
     }
 
     /// Sources the scene needs: `[{name, kind, params, builtin}]`. `builtin` sources are
@@ -164,6 +288,9 @@ impl Engine {
     /// Feed one sample from a JS adapter. `json` is a `Datum` object with a `type` tag:
     /// `reading` / `event` / `status` / `viz` (see `docs/WASM.md`).
     pub fn push_sample(&mut self, source: &str, json: &str) -> Result<(), JsError> {
+        if self.replaying {
+            return Ok(());
+        }
         let datum: Datum = serde_json::from_str(json).map_err(|e| JsError::new(&format!("bad sample for `{source}`: {e}")))?;
         let sample = Sample { source: SourceId::new(source), at: self.clock.now(), datum };
         self.control.ingest(sample);
@@ -173,6 +300,9 @@ impl Engine {
     /// Feed an 8-bit grayscale webcam frame to a camera source; runs the tracker and emits
     /// the same events/readings/viz the native camera source does.
     pub fn push_frame(&mut self, source: &str, gray: &[u8], width: u32, height: u32) -> Result<(), JsError> {
+        if self.replaying {
+            return Ok(());
+        }
         let Some(cam) = self.cameras.get_mut(source) else {
             return Err(JsError::new(&format!("`{source}` is not a camera source in this scene")));
         };

@@ -1,6 +1,6 @@
 # Daily record: render today's dated track (offline, seed = YYYYMMDD) and a short live
-# capture, add them to the album kept on the `records` branch, and let pages.yml publish
-# the album under site/records/.
+# capture, add them (with their data logs, for time travel) to the album kept on the
+# `records` branch, and let pages.yml publish the album under site/records/.
 name: record
 
 on:
@@ -63,15 +63,20 @@ jobs:
           if [ "${{ steps.album.outcome }}" = "success" ]; then
             rsync -a --exclude .git album/ site/records/
           fi
-          # Live capture: three minutes of the social firehose, straight to MP3.
+          # Live capture: three minutes of the social firehose, straight to MP3, plus the
+          # data log of everything that came in (replayable: `sonder replay`, or drop it
+          # onto the web UI).
           if ! "$SONDER" radio social-firehose --format mp3 --bitrate 128k \
-               --out "site/records/$DATE-live.mp3" --seconds "$LIVE_SECONDS"; then
+               --out "site/records/$DATE-live.mp3" --seconds "$LIVE_SECONDS" \
+               --record-data "site/records/$DATE-live.sonder.gz"; then
             echo "::warning::live capture failed; recording the offline render only"
-            rm -f "site/records/$DATE-live.mp3"
+            rm -f "site/records/$DATE-live.mp3" "site/records/$DATE-live.sonder.gz"
           fi
           ATTACH=()
-          [ -f "site/records/$DATE-live.mp3" ] && ATTACH=(--attach "$DATE-live.mp3")
-          # Offline render, deterministic for the date.
+          [ -f "site/records/$DATE-live.mp3" ] && ATTACH+=(--attach "$DATE-live.mp3")
+          [ -f "site/records/$DATE-live.sonder.gz" ] && ATTACH+=(--attach "$DATE-live.sonder.gz")
+          # Offline render, deterministic for the date; `sonder record` writes its own
+          # data log (<date>.sonder.gz) next to the audio.
           "$SONDER" record --scene night-freeway --minutes "$MINUTES" --out site/records \
             --date "$DATE" --no-wav "${ATTACH[@]}"
           # Keep the album to the last 30 days (Pages sites are capped at 1 GB).

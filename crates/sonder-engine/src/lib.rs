@@ -14,9 +14,11 @@
 pub mod compose_prompt;
 pub mod captions;
 pub mod control;
+pub mod datalog;
 pub mod instruments;
 pub mod mapping;
 pub mod recipes;
+pub mod replay;
 #[cfg(feature = "native")]
 pub mod live;
 #[cfg(feature = "midi")]
@@ -30,7 +32,7 @@ pub mod validate;
 #[cfg(feature = "native")]
 pub use live::{start, AudioBackendChoice, EngineHandle, EngineOptions, WebAudio};
 #[cfg(feature = "native")]
-pub use render::{render_to_wav, RenderStats};
+pub use render::{render_to_wav, render_to_wav_with, RenderOptions, RenderStats};
 pub use scenes::{builtin_scenes, load_scene, parse_scene};
 pub use validate::validate;
 
