@@ -34,6 +34,19 @@ pub fn decode_gray_into(jpeg: &[u8], downscale: u32, out: &mut Vec<u8>) -> Resul
     Decoder::new().decode_into(jpeg, downscale, out)
 }
 
+/// Decode a JPEG to interleaved 8-bit RGB at full resolution. Returns `(pixels, width,
+/// height)`.
+pub fn decode_rgb(jpeg: &[u8]) -> Result<(Vec<u8>, u32, u32), VisionError> {
+    let mut out = Vec::new();
+    let (w, h) = decode_rgb_into(jpeg, &mut out)?;
+    Ok((out, w, h))
+}
+
+/// Like [`decode_rgb`] but writes into a caller-provided buffer.
+pub fn decode_rgb_into(jpeg: &[u8], out: &mut Vec<u8>) -> Result<(u32, u32), VisionError> {
+    Decoder::new().decode_rgb_into(jpeg, out)
+}
+
 /// A reusable JPEG → luma decoder holding its scratch buffers.
 #[derive(Debug, Default)]
 pub struct Decoder {
@@ -51,6 +64,45 @@ impl Decoder {
         if downscale == 0 || downscale > MAX_DOWNSCALE {
             return Err(VisionError::BadDownscale(downscale));
         }
+        let (w, h, channels) = self.decode_raw(jpeg)?;
+        let (ow, oh) = downscale_luma(&self.scratch, w, h, channels, downscale, out)?;
+        Ok((ow, oh))
+    }
+
+    /// Decode `jpeg` to interleaved RGB at full resolution into `out` (gray JPEGs are
+    /// expanded; alpha is dropped). Returns `(width, height)`.
+    pub fn decode_rgb_into(&mut self, jpeg: &[u8], out: &mut Vec<u8>) -> Result<(u32, u32), VisionError> {
+        let (w, h, channels) = self.decode_raw(jpeg)?;
+        let n = (w as usize) * (h as usize);
+        out.clear();
+        match channels {
+            3 => out.extend_from_slice(&self.scratch[..n * 3]),
+            _ => {
+                out.reserve(n * 3);
+                for px in self.scratch[..n * channels].chunks_exact(channels) {
+                    if channels >= 3 {
+                        out.extend_from_slice(&px[..3]);
+                    } else {
+                        out.extend_from_slice(&[px[0], px[0], px[0]]);
+                    }
+                }
+            }
+        }
+        Ok((w, h))
+    }
+
+    /// Decode both: full-resolution RGB into `rgb` and downscaled luma into `gray`.
+    pub fn decode_rgb_and_gray_into(&mut self, jpeg: &[u8], downscale: u32, rgb: &mut Vec<u8>, gray: &mut Vec<u8>) -> Result<(u32, u32), VisionError> {
+        if downscale == 0 || downscale > MAX_DOWNSCALE {
+            return Err(VisionError::BadDownscale(downscale));
+        }
+        let (w, h) = self.decode_rgb_into(jpeg, rgb)?;
+        downscale_luma(rgb, w, h, 3, downscale, gray)?;
+        Ok((w, h))
+    }
+
+    /// Decode into the scratch buffer; returns `(width, height, channels)`.
+    fn decode_raw(&mut self, jpeg: &[u8]) -> Result<(u32, u32, usize), VisionError> {
         let mut dec = image::codecs::jpeg::JpegDecoder::new(Cursor::new(jpeg))?;
         let mut limits = image::Limits::default();
         limits.max_image_width = Some(MAX_DIMENSION);
@@ -75,8 +127,7 @@ impl Decoder {
         self.scratch.clear();
         self.scratch.resize(total as usize, 0);
         dec.read_image(&mut self.scratch)?;
-        let (ow, oh) = downscale_luma(&self.scratch, w, h, channels, downscale, out)?;
-        Ok((ow, oh))
+        Ok((w, h, channels))
     }
 }
 
@@ -237,6 +288,26 @@ mod tests {
         let m1: f64 = g.iter().map(|&v| v as f64).sum::<f64>() / g.len() as f64;
         let m4: f64 = g4.iter().map(|&v| v as f64).sum::<f64>() / g4.len() as f64;
         assert!((m1 - m4).abs() < 2.0, "{m1} vs {m4}");
+    }
+
+    #[test]
+    fn decode_rgb_matches_gray_path() {
+        let (w, h) = (32u32, 24u32);
+        let frame = testgen::render(w, h, 30, 0, &[testgen::Disc { x: 16.0, y: 12.0, r: 6.0, brightness: 250 }], 1);
+        let jpeg = testgen::encode_jpeg(&frame, w, h, 95).unwrap();
+        let (rgb, rw, rh) = decode_rgb(&jpeg).unwrap();
+        assert_eq!((rw, rh), (w, h));
+        assert_eq!(rgb.len(), (w * h * 3) as usize);
+        let (g, _, _) = decode_gray(&jpeg, 1).unwrap();
+        for (px, &gv) in rgb.chunks_exact(3).zip(&g) {
+            assert!((luma(px[0], px[1], px[2]) as i32 - gv as i32).abs() <= 1);
+        }
+        let mut dec = Decoder::new();
+        let (mut rgb2, mut g2) = (Vec::new(), Vec::new());
+        assert_eq!(dec.decode_rgb_and_gray_into(&jpeg, 2, &mut rgb2, &mut g2).unwrap(), (w, h));
+        assert_eq!(rgb2, rgb);
+        assert_eq!(g2.len(), 16 * 12);
+        assert!(decode_rgb(b"nope").is_err());
     }
 
     #[test]

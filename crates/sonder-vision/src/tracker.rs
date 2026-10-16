@@ -19,6 +19,16 @@
 
 use sonder_core::Seconds;
 
+use crate::detect::Detection;
+
+/// An object class from a detector (COCO `car`, `person`, …). `name` is static because
+/// label sets are interned once per model (see [`crate::detect::labels_for`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Class {
+    pub id: u16,
+    pub name: &'static str,
+}
+
 /// What a frame is thresholded on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -140,6 +150,9 @@ pub struct Blob {
     /// Direction of travel: `+1` moving down (y increasing), `-1` moving up,
     /// `0` none. For `crossings` this is the direction the line was crossed.
     pub dir: f32,
+    /// Object class when the blob came from a detector ([`Tracker::process_detections`]);
+    /// `None` for threshold blobs.
+    pub class: Option<Class>,
 }
 
 /// Result of [`Tracker::process`] for one frame.
@@ -238,8 +251,9 @@ struct Det {
     maxx: f32,
     maxy: f32,
     area: f32,
-    /// mean luma 0..255
+    /// mean luma 0..255 (detector score × 255 for detections)
     bright: f32,
+    class: Option<Class>,
 }
 
 impl Det {
@@ -255,6 +269,7 @@ impl Det {
             maxy: a.maxy as f32 + 1.0,
             area: n,
             bright: a.sb as f32 / n,
+            class: None,
         }
     }
     /// Gap between bounding boxes (0 if they overlap).
@@ -296,9 +311,31 @@ struct Track {
     confirmed: bool,
     /// Set during association; cleared each frame.
     matched: bool,
+    class: Option<Class>,
+    /// Agreement counter for `class`: same class +1, different −1, flips at 0 (a vehicle
+    /// scored `car`/`truck` alternately keeps the majority label).
+    class_votes: i32,
 }
 
 impl Track {
+    fn vote_class(&mut self, c: Option<Class>) {
+        let Some(c) = c else { return };
+        match self.class {
+            Some(cur) if cur == c => self.class_votes = (self.class_votes + 1).min(8),
+            Some(_) => {
+                self.class_votes -= 1;
+                if self.class_votes <= 0 {
+                    self.class = Some(c);
+                    self.class_votes = 1;
+                }
+            }
+            None => {
+                self.class = Some(c);
+                self.class_votes = 1;
+            }
+        }
+    }
+
     fn blob(&self, now: Seconds) -> Blob {
         let age = (now - self.start_t).max(0.0) as f32;
         let dy = self.y - self.start_y;
@@ -322,6 +359,7 @@ impl Track {
             } else {
                 0.0
             },
+            class: self.class,
         }
     }
     fn exit_blob(&self) -> Blob {
@@ -474,6 +512,69 @@ impl Tracker {
         }
 
         // 5. tracking
+        self.associate(t, out);
+        self.last_t = Some(t);
+    }
+
+    /// Track detector output instead of threshold blobs: the same association, entry/exit
+    /// and crossing logic, with one blob per detection (box → centroid, size and area;
+    /// `brightness` = detection score; `class` carried on the blob). `w × h` is the frame
+    /// size the detections were normalized against (reported in the analysis; the
+    /// `min_blob_px` filter is not applied). `mean_brightness` is left at 0 — set it from
+    /// the frame if a reading needs it. `motion_energy` is the smoothed fraction of the
+    /// frame covered by detections.
+    pub fn process_detections(&mut self, dets: &[Detection], w: u32, h: u32, t: Seconds) -> FrameAnalysis {
+        let mut out = FrameAnalysis::default();
+        self.process_detections_into(dets, w, h, t, &mut out);
+        out
+    }
+
+    /// Like [`Tracker::process_detections`] but reuses the caller's output vectors.
+    pub fn process_detections_into(&mut self, dets: &[Detection], w: u32, h: u32, t: Seconds, out: &mut FrameAnalysis) {
+        out.clear();
+        out.t = t;
+        out.width = w;
+        out.height = h;
+        if w == 0 || h == 0 {
+            out.motion_energy = self.energy;
+            return;
+        }
+        if w != self.width || h != self.height {
+            self.width = w;
+            self.height = h;
+            self.bg_valid = false;
+        }
+        self.frames += 1;
+        let (fw, fh) = (w as f32, h as f32);
+        self.merged.clear();
+        let mut covered = 0.0f32;
+        for d in dets {
+            if !(d.x.is_finite() && d.y.is_finite() && d.w.is_finite() && d.h.is_finite()) || d.w <= 0.0 || d.h <= 0.0 {
+                continue;
+            }
+            let (bw, bh) = (d.w.clamp(0.0, 1.0), d.h.clamp(0.0, 1.0));
+            covered += bw * bh;
+            self.merged.push(Det {
+                cx: d.x.clamp(0.0, 1.0) * fw,
+                cy: d.y.clamp(0.0, 1.0) * fh,
+                minx: (d.x - bw / 2.0).clamp(0.0, 1.0) * fw,
+                miny: (d.y - bh / 2.0).clamp(0.0, 1.0) * fh,
+                maxx: (d.x + bw / 2.0).clamp(0.0, 1.0) * fw,
+                maxy: (d.y + bh / 2.0).clamp(0.0, 1.0) * fh,
+                area: bw * bh * fw * fh,
+                bright: d.score.clamp(0.0, 1.0) * 255.0,
+                class: Some(d.class()),
+            });
+        }
+        self.merged
+            .sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
+        out.raw_blob_count = self.merged.len();
+        if self.merged.len() > self.cfg.max_blobs {
+            self.merged.truncate(self.cfg.max_blobs);
+        }
+        let ea = self.cfg.energy_alpha.clamp(0.0, 1.0);
+        self.energy += (covered.min(1.0) - self.energy) * ea;
+        out.motion_energy = self.energy;
         self.associate(t, out);
         self.last_t = Some(t);
     }
@@ -688,7 +789,12 @@ impl Tracker {
                 let ddiag = (bw * bw + bh * bh).sqrt();
                 let gate = self.cfg.gate_base + self.cfg.gate_scale * tdiag.max(ddiag);
                 if dist <= gate {
-                    self.pairs.push((dist, ti as u32, di as u32));
+                    // Prefer same-class matches when two detections are equally close.
+                    let penalty = match (tr.class, d.class) {
+                        (Some(a), Some(b)) if a != b => gate * 0.25,
+                        _ => 0.0,
+                    };
+                    self.pairs.push((dist + penalty, ti as u32, di as u32));
                 }
             }
         }
@@ -728,6 +834,7 @@ impl Tracker {
             tr.h = (d.maxy - d.miny) / fh;
             tr.area = d.area / (fw * fh);
             tr.brightness = d.bright / 255.0;
+            tr.vote_class(d.class);
             tr.distance += step;
             tr.hits += 1;
             tr.missed = 0;
@@ -779,6 +886,8 @@ impl Tracker {
                 missed: 0,
                 confirmed: confirm_now,
                 matched: true,
+                class: d.class,
+                class_votes: i32::from(d.class.is_some()),
             };
             if confirm_now {
                 let b = tr.blob(t);
@@ -1080,6 +1189,59 @@ mod tests {
         }
         assert!(seen >= 20, "mover seen in {seen} frames");
         assert_eq!(max_blobs, 1);
+    }
+
+    #[test]
+    fn detections_are_tracked_by_class_with_exits_and_crossings() {
+        use crate::detect::Detection;
+        let car = |x: f32, y: f32, score: f32| Detection { class_id: 2, class_name: "car", score, x, y, w: 0.1, h: 0.08 };
+        let person = |x: f32, y: f32| Detection { class_id: 0, class_name: "person", score: 0.7, x, y, w: 0.03, h: 0.1 };
+        let mut tr = Tracker::new(TrackerConfig { line: Some(0.5), ..Default::default() });
+        let (w, h) = (640u32, 480u32);
+        let mut crossings = Vec::new();
+        let mut exits = Vec::new();
+        let mut ids = std::collections::BTreeSet::new();
+        for f in 0..36 {
+            let t = f as f64 / 10.0;
+            let y = 0.1 + f as f32 * 0.03;
+            let mut dets = vec![car(0.3, y, 0.9), person(0.8, 0.5)];
+            if f == 5 {
+                // The car is scored as a truck for one frame: same track, label kept by vote.
+                dets[0] = Detection { class_id: 7, class_name: "truck", ..dets[0] };
+            }
+            if y > 0.85 {
+                dets.remove(0);
+            }
+            let a = tr.process_detections(&dets, w, h, t);
+            assert_eq!(a.width, w);
+            for b in &a.blobs {
+                ids.insert(b.id);
+                assert!(b.class.is_some());
+                if b.class.unwrap().name == "car" {
+                    assert!((b.w - 0.1).abs() < 1e-4 && (b.area - 0.008).abs() < 1e-4, "{b:?}");
+                    assert!((b.brightness - 0.9).abs() < 1e-4);
+                }
+            }
+            if f == 5 {
+                let c = a.blobs.iter().find(|b| b.x < 0.5).unwrap();
+                assert_eq!(c.class.unwrap().name, "car", "one-frame flicker must not relabel the track");
+            }
+            crossings.extend(a.crossings.iter().copied());
+            exits.extend(a.exited.iter().copied());
+        }
+        assert_eq!(ids.len(), 2, "one car track and one person track: {ids:?}");
+        assert_eq!(crossings.len(), 1);
+        assert_eq!(crossings[0].class.unwrap().name, "car");
+        assert_eq!(crossings[0].dir, 1.0);
+        assert_eq!(exits.len(), 1);
+        let e = &exits[0];
+        assert_eq!(e.class.unwrap().name, "car");
+        assert!(e.speed > 0.2 && e.age_s > 2.0, "{e:?}");
+        // Degenerate frames never panic.
+        let a = tr.process_detections(&[car(f32::NAN, 0.5, 0.5)], 0, 0, 3.1);
+        assert!(a.blobs.is_empty());
+        let a = tr.process_detections(&[car(f32::NAN, 0.5, 0.5), car(2.0, -1.0, 0.5)], w, h, 3.2);
+        assert_eq!(a.raw_blob_count, 1);
     }
 
     #[test]

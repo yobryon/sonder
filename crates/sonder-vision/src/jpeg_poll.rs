@@ -18,6 +18,10 @@
 //! * readings per new frame: `motion`, `blobs`, `mean_speed`, `mean_brightness`, `fps`
 //!   (frames per second actually analysed — fractions of a frame per second here);
 //! * a `Viz` payload per new frame: `{"blobs":[{x,y,w,h,b,id}], "line", "w", "h", "motion"}`.
+//!
+//! With `detect = true` (feature `detect`) each still is decoded to RGB and run through the
+//! object detector: one `blob` event per detected object with `class` / `class_id`, plus
+//! readings `objects`, a count per class of the `classes` list and `detect_ms`.
 
 use sonder_core::{Sample, Seconds, SourceSpec, SourceState};
 use sonder_sources::util::{self, hash_of};
@@ -25,7 +29,9 @@ use sonder_sources::{Emitter, Factory, ParamInfo, Poll, Poller, Registry, Source
 use std::time::Duration;
 
 use crate::decode::Decoder;
-use crate::events::blob_sample;
+use crate::detect::DetectParams;
+use crate::events::{blob_sample, blob_viz, class_counts};
+use crate::source::{detect_channels, detect_param_infos, detect_params};
 use crate::tracker::{FrameAnalysis, Mode, Tracker, TrackerConfig};
 
 /// Source kind name.
@@ -50,8 +56,11 @@ pub fn info() -> SourceInfo {
             ParamInfo { name: "downscale", summary: "integer decode downscale factor (1..=16)", default: Some("4") },
             ParamInfo { name: "min_blob", summary: "minimum blob area in (downscaled) pixels", default: Some("4") },
             ParamInfo { name: "background_alpha", summary: "motion mode: background learning rate per frame", default: Some("0.1") },
-        ],
-        channels: vec!["motion", "blobs", "mean_speed", "mean_brightness", "fps"],
+        ]
+        .into_iter()
+        .chain(detect_param_infos())
+        .collect(),
+        channels: detect_channels(&["motion", "blobs", "mean_speed", "mean_brightness", "fps"]),
         events: vec!["blob"],
         network: true,
     }
@@ -79,6 +88,7 @@ pub struct JpegPollParams {
     pub interval: Duration,
     pub tracker: TrackerConfig,
     pub lanes: u32,
+    pub detect: DetectParams,
 }
 
 impl JpegPollParams {
@@ -112,6 +122,7 @@ impl JpegPollParams {
             interval: util::param_secs(spec, "interval", 10.0, 1.0)?,
             tracker,
             lanes: util::param_f64_in(spec, "lanes", 4.0, 1.0, 64.0)? as u32,
+            detect: detect_params(spec)?,
         })
     }
 }
@@ -138,9 +149,14 @@ impl Source for JpegPollSource {
 pub struct FrameState {
     decoder: Decoder,
     gray: Vec<u8>,
+    rgb: Vec<u8>,
     tracker: Tracker,
+    #[cfg(feature = "detect")]
+    detector: Option<(crate::detect::Detector, DetectParams)>,
     /// Result of the most recent analysed frame.
     pub analysis: FrameAnalysis,
+    /// Detector time for the most recent frame (ms; 0 without a detector).
+    pub detect_ms: f32,
     last_hash: Option<u64>,
     last_frame_at: Option<Seconds>,
     /// Smoothed analysed-frames-per-second (fractions of a frame per second for stills).
@@ -152,11 +168,35 @@ impl FrameState {
         Self {
             decoder: Decoder::new(),
             gray: Vec::new(),
+            rgb: Vec::new(),
             tracker: Tracker::new(cfg),
+            #[cfg(feature = "detect")]
+            detector: None,
             analysis: FrameAnalysis::default(),
+            detect_ms: 0.0,
             last_hash: None,
             last_frame_at: None,
             fps: 0.0,
+        }
+    }
+
+    /// Analyse frames with an object detector instead of the threshold.
+    #[cfg(feature = "detect")]
+    pub fn with_detector(cfg: TrackerConfig, detector: crate::detect::Detector, params: DetectParams) -> Self {
+        let mut s = Self::new(cfg);
+        s.detector = Some((detector, params));
+        s
+    }
+
+    /// Whether frames go through a detector.
+    pub fn detecting(&self) -> bool {
+        #[cfg(feature = "detect")]
+        {
+            self.detector.is_some()
+        }
+        #[cfg(not(feature = "detect"))]
+        {
+            false
         }
     }
 
@@ -168,9 +208,26 @@ impl FrameState {
             return Ok(false);
         }
         let downscale = self.tracker.config().downscale.max(1);
+        #[cfg(feature = "detect")]
+        if let Some((det, params)) = &mut self.detector {
+            let (w, hgt) = self.decoder.decode_rgb_into(jpeg, &mut self.rgb).map_err(|e| format!("jpeg decode failed: {e}"))?;
+            self.last_hash = Some(h);
+            let dets: Vec<_> = det.detect_rgb(&self.rgb, w, hgt).map_err(|e| format!("detection failed: {e}"))?.into_iter().filter(|d| params.accepts(d)).collect();
+            self.detect_ms = det.last_ms();
+            self.tracker.process_detections_into(&dets, w, hgt, now, &mut self.analysis);
+            self.analysis.mean_brightness = crate::source::mean_luma_rgb(&self.rgb);
+            self.mark_frame(now);
+            return Ok(true);
+        }
+        let _ = &self.rgb;
         let (w, hgt) = self.decoder.decode_into(jpeg, downscale, &mut self.gray).map_err(|e| format!("jpeg decode failed: {e}"))?;
         self.last_hash = Some(h);
         self.tracker.process_into(&self.gray, w, hgt, now, &mut self.analysis);
+        self.mark_frame(now);
+        Ok(true)
+    }
+
+    fn mark_frame(&mut self, now: Seconds) {
         if let Some(prev) = self.last_frame_at {
             let dt = now - prev;
             if dt > 0.0 {
@@ -179,30 +236,35 @@ impl FrameState {
             }
         }
         self.last_frame_at = Some(now);
-        Ok(true)
     }
 }
 
 /// Samples for one analysed frame: a `blob` event per entered blob, a reading and a viz payload.
 pub fn frame_samples(ctx: &SourceCtx, now: Seconds, a: &FrameAnalysis, fps: f64, lanes: u32) -> Vec<Sample> {
+    frame_samples_with(ctx, now, a, fps, lanes, None, 0.0)
+}
+
+/// [`frame_samples`] with the detection readings (`objects`, per-class counts, `detect_ms`)
+/// when `detect` is given.
+pub fn frame_samples_with(ctx: &SourceCtx, now: Seconds, a: &FrameAnalysis, fps: f64, lanes: u32, detect: Option<&DetectParams>, detect_ms: f32) -> Vec<Sample> {
     let mut out = Vec::with_capacity(a.entered.len() + 2);
     for b in &a.entered {
         out.push(blob_sample(&ctx.id, now, "blob", b, lanes));
     }
     let mean_speed = if a.blobs.is_empty() { 0.0 } else { a.blobs.iter().map(|b| b.speed as f64).sum::<f64>() / a.blobs.len() as f64 };
-    out.push(Sample::reading(
-        &ctx.id,
-        now,
-        [
-            ("motion", a.motion_energy as f64),
-            ("blobs", a.blobs.len() as f64),
-            ("mean_speed", mean_speed),
-            ("mean_brightness", a.mean_brightness as f64),
-            ("fps", fps),
-        ],
-    ));
-    let blobs: Vec<serde_json::Value> =
-        a.blobs.iter().map(|b| serde_json::json!({ "x": b.x, "y": b.y, "w": b.w, "h": b.h, "b": b.brightness, "id": b.id })).collect();
+    let mut values: Vec<(String, f64)> = vec![
+        ("motion".into(), a.motion_energy as f64),
+        ("blobs".into(), a.blobs.len() as f64),
+        ("mean_speed".into(), mean_speed),
+        ("mean_brightness".into(), a.mean_brightness as f64),
+        ("fps".into(), fps),
+    ];
+    if let Some(d) = detect {
+        values.extend(class_counts(&a.blobs, &d.count_classes()));
+        values.push(("detect_ms".into(), detect_ms as f64));
+    }
+    out.push(Sample::reading(&ctx.id, now, values));
+    let blobs: Vec<serde_json::Value> = a.blobs.iter().map(blob_viz).collect();
     out.push(Sample::viz(
         &ctx.id,
         now,
@@ -242,7 +304,13 @@ pub async fn fetch(ctx: &SourceCtx, url: &str) -> Result<Vec<u8>, String> {
 
 async fn run(p: JpegPollParams, ctx: SourceCtx) {
     let mut em = Emitter::new(ctx);
-    let mut state = FrameState::new(p.tracker.clone());
+    let mut state = match make_state(&mut em, &p).await {
+        Ok(s) => s,
+        Err(e) => {
+            em.status(SourceState::Failed, e).await;
+            return;
+        }
+    };
     let mut poller = Poller::new(p.interval);
     poller.start(&mut em).await;
     loop {
@@ -251,6 +319,22 @@ async fn run(p: JpegPollParams, ctx: SourceCtx) {
             return;
         }
     }
+}
+
+/// The frame state, with the detector loaded (downloaded and cached) when `detect` is on.
+async fn make_state(em: &mut Emitter, p: &JpegPollParams) -> Result<FrameState, String> {
+    if !p.detect.enabled {
+        return Ok(FrameState::new(p.tracker.clone()));
+    }
+    em.status(SourceState::Connecting, format!("loading detection model {}", p.detect.model_url)).await;
+    #[cfg(feature = "detect")]
+    {
+        let bytes = crate::detect::fetch_model(&em.ctx.http, &p.detect.model_url).await?;
+        let det = crate::detect::Detector::from_bytes(&bytes, p.detect.detector_config()).map_err(|e| format!("cannot load model {}: {e}", p.detect.model_url))?;
+        Ok(FrameState::with_detector(p.tracker.clone(), det, p.detect.clone()))
+    }
+    #[cfg(not(feature = "detect"))]
+    Err("this build has no object detector".to_string())
 }
 
 async fn poll_once(em: &mut Emitter, p: &JpegPollParams, state: &mut FrameState) -> Result<Poll, String> {
@@ -263,7 +347,7 @@ async fn poll_once(em: &mut Emitter, p: &JpegPollParams, state: &mut FrameState)
     if !state.ingest(&jpeg, now)? {
         return Ok(Poll::Idle);
     }
-    let samples = frame_samples(&em.ctx, now, &state.analysis, state.fps, p.lanes);
+    let samples = frame_samples_with(&em.ctx, now, &state.analysis, state.fps, p.lanes, p.detect.enabled.then_some(&p.detect), state.detect_ms);
     for s in samples {
         em.send(s).await;
     }
@@ -396,6 +480,54 @@ mod tests {
         assert!(readings >= 3, "readings {readings}");
         assert_eq!(viz, readings);
         assert!(blobs >= 1, "blobs {blobs}");
+    }
+
+    /// End to end: `camera.jpeg` with `detect = true` against a live Caltrans still.
+    /// `SONDER_MODEL=… cargo test -p sonder-vision --release --features detect -- --ignored --nocapture live_detect`
+    #[cfg(feature = "detect")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
+    async fn live_detect_caltrans_still_end_to_end() {
+        let url = "https://cwwp2.dot.ca.gov/data/d4/cctv/image/tvd33i80baybridgesastowerwest/tvd33i80baybridgesastowerwest.jpg";
+        let model = std::env::var("SONDER_MODEL").unwrap_or_else(|_| crate::detect::DEFAULT_MODEL_URL.to_string());
+        let (c, mut rx, stop) = ctx(Arc::new(sonder_core::WallClock::new()));
+        let spec = SourceSpec::new(KIND)
+            .with("url", url)
+            .with("interval", 5)
+            .with("detect", true)
+            .with("model_url", model)
+            .with("classes", serde_json::json!(["car", "truck", "bus", "motorcycle", "person", "bicycle"]));
+        let src = Box::new(JpegPollSource::new(JpegPollParams::from_spec(&spec).unwrap()));
+        let task = tokio::spawn(src.run(c));
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        stop.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task).await.expect("stops").unwrap();
+        let (mut events, mut readings, mut live, mut failed) = (0, 0, false, None);
+        while let Ok(s) = rx.try_recv() {
+            match s.datum {
+                Datum::Event { name, attrs, .. } => {
+                    events += 1;
+                    eprintln!("event {name}: class={:?} score={:?} at ({:?},{:?})", attrs.get("class"), attrs.get("brightness"), attrs.get("x"), attrs.get("y"));
+                    assert!(attrs.contains_key("class"));
+                }
+                Datum::Reading { values } => {
+                    readings += 1;
+                    eprintln!("reading: objects={:?} car={:?} truck={:?} detect_ms={:?}", values.get("objects"), values.get("car"), values.get("truck"), values.get("detect_ms"));
+                    assert!(values.contains_key("objects") && values.contains_key("car") && values.contains_key("detect_ms"));
+                }
+                Datum::Status { state, message } => {
+                    eprintln!("status {state:?}: {message}");
+                    live |= state == SourceState::Live;
+                    if state == SourceState::Failed {
+                        failed = Some(message);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(failed.is_none(), "{failed:?}");
+        assert!(live && readings >= 1, "live {live}, readings {readings}");
+        eprintln!("{events} object events, {readings} readings");
     }
 
     /// `cargo test -p sonder-vision -- --ignored jpeg_poll`

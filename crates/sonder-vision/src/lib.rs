@@ -10,7 +10,9 @@
 //! * [`Tracker`] finds bright or moving blobs, tracks them across frames and
 //!   reports entries, exits and line crossings;
 //! * [`factory`] / [`register`] expose it all as the `camera.mjpeg` source;
-//! * [`jpeg_poll`] does the same for still images polled from a URL (`camera.jpeg`).
+//! * [`jpeg_poll`] does the same for still images polled from a URL (`camera.jpeg`);
+//! * [`detect`] (feature `detect`) runs a YOLO-class ONNX model so blobs become `car`,
+//!   `truck`, `person`, … and the tracker follows objects by class.
 //!
 //! The crate is pure Rust (`#![forbid(unsafe_code)]`); the source never panics
 //! on bad input and reports problems as `Datum::Status`.
@@ -25,18 +27,22 @@ pub mod jpeg_poll;
 pub mod mjpeg;
 #[cfg(feature = "native")]
 pub mod source;
-pub mod tracker;
+pub mod detect;
 pub mod events;
+pub mod tracker;
 
 #[cfg(any(test, feature = "testgen"))]
 pub mod testgen;
 
 #[cfg(feature = "native")]
-pub use decode::{decode_gray, decode_gray_into, downscale_luma, Decoder};
+pub use decode::{decode_gray, decode_gray_into, decode_rgb, decode_rgb_into, downscale_luma, Decoder};
+#[cfg(feature = "detect")]
+pub use detect::Detector;
+pub use detect::{DetectParams, Detection, DetectorConfig};
 #[cfg(feature = "native")]
 pub use source::{factory, register, CameraParams, CameraSource, KIND};
-pub use events::{blob_sample, blob_size};
-pub use tracker::{Blob, FrameAnalysis, Mode, Tracker, TrackerConfig};
+pub use events::{blob_sample, blob_size, blob_viz, class_counts};
+pub use tracker::{Blob, Class, FrameAnalysis, Mode, Tracker, TrackerConfig};
 
 /// Errors from decoding and stream framing.
 #[derive(Debug, thiserror::Error)]
@@ -52,4 +58,6 @@ pub enum VisionError {
     BadDownscale(u32),
     #[error("stream: {0}")]
     Stream(String),
+    #[error("model: {0}")]
+    Model(String),
 }

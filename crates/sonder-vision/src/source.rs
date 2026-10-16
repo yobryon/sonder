@@ -9,6 +9,12 @@
 //! * readings at 4 Hz: `motion`, `blobs`, `mean_speed`, `mean_brightness`, `fps`;
 //! * a `Viz` payload at ≤10 Hz: `{"blobs":[{x,y,w,h,b,id}], "line", "w", "h"}`;
 //! * `Status` transitions, with exponential backoff reconnects.
+//!
+//! With `detect = true` (crate feature `detect`) frames are decoded to RGB and run through
+//! a YOLO-class ONNX model instead of the threshold; the tracker follows the detections,
+//! `blob` / `crossing` events carry `class` / `class_id`, readings add `objects`, a count
+//! per class of the `classes` filter list (or `car, truck, bus, motorcycle, person,
+//! bicycle`) and `detect_ms`, and viz blobs carry `c`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,6 +25,8 @@ use sonder_core::{Clock, Sample, Seconds, SourceSpec, SourceState};
 use sonder_sources::{Factory, ParamInfo, Registry, Source, SourceCtx, SourceError, SourceFuture, SourceInfo};
 
 use crate::decode::Decoder;
+use crate::detect::DetectParams;
+use crate::events::{blob_sample, blob_viz, class_counts};
 use crate::mjpeg::FrameStream;
 use crate::tracker::{FrameAnalysis, Mode, Tracker, TrackerConfig};
 
@@ -97,11 +105,43 @@ pub fn info() -> SourceInfo {
                 summary: "motion mode: background learning rate per frame",
                 default: Some("0.02"),
             },
-        ],
-        channels: vec!["motion", "blobs", "mean_speed", "mean_brightness", "fps"],
+        ]
+        .into_iter()
+        .chain(detect_param_infos())
+        .collect(),
+        channels: detect_channels(&["motion", "blobs", "mean_speed", "mean_brightness", "fps"]),
         events: vec!["blob", "crossing"],
         network: true,
     }
+}
+
+/// The detection parameters shared by `camera.mjpeg` and `camera.jpeg`.
+pub(crate) fn detect_param_infos() -> Vec<ParamInfo> {
+    vec![
+        ParamInfo {
+            name: "detect",
+            summary: "run an object detector (YOLO-class ONNX via tract) instead of the threshold; blobs get a `class` (needs the `detect` build feature)",
+            default: Some("false"),
+        },
+        ParamInfo { name: "model_url", summary: "ONNX model URL (cached in ~/.cache/sonder/models) or local path", default: Some("ultralytics yolo11n.onnx") },
+        ParamInfo { name: "model_input", summary: "model input size in pixels (multiple of 32; 320 ≈ 4× faster than 640)", default: Some("320") },
+        ParamInfo { name: "classes", summary: "keep only these classes, e.g. [\"car\",\"truck\",\"person\"]; also the per-class count readings", default: None },
+        ParamInfo { name: "min_score", summary: "minimum detection score 0..1", default: Some("0.35") },
+    ]
+}
+
+/// Reading channels plus the detection ones.
+pub(crate) fn detect_channels(base: &[&'static str]) -> Vec<&'static str> {
+    base.iter().copied().chain(["objects", "detect_ms"]).chain(crate::detect::DEFAULT_COUNT_CLASSES.iter().copied()).collect()
+}
+
+/// Parse detection params, rejecting `detect = true` when the feature is not compiled in.
+pub(crate) fn detect_params(spec: &SourceSpec) -> Result<DetectParams, SourceError> {
+    let d = DetectParams::from_spec(spec).map_err(|(param, msg)| invalid(spec, param, msg))?;
+    if d.enabled && !cfg!(feature = "detect") {
+        return Err(invalid(spec, "detect", "this build has no object detector (enable the `detect` cargo feature of sonder-vision)"));
+    }
+    Ok(d)
 }
 
 /// `(info, factory)` for registering with a [`Registry`].
@@ -131,6 +171,7 @@ pub struct CameraParams {
     pub lanes: u32,
     pub readings_hz: f64,
     pub viz_hz: f64,
+    pub detect: DetectParams,
 }
 
 fn invalid(spec: &SourceSpec, param: &'static str, message: impl Into<String>) -> SourceError {
@@ -223,6 +264,7 @@ impl CameraParams {
             lanes,
             readings_hz: 4.0,
             viz_hz: 10.0,
+            detect: detect_params(spec)?,
         })
     }
 }
@@ -247,8 +289,51 @@ impl Source for CameraSource {
 
 /// Messages from the worker thread to the emitter task.
 enum WorkerMsg {
-    Frame(FrameAnalysis),
+    /// An analysed frame and the detector's ms for it (0 without a detector).
+    Frame(FrameAnalysis, f32),
     DecodeError(String),
+}
+
+/// The detector handed to the worker (only with the `detect` feature).
+#[cfg(feature = "detect")]
+type WorkerDetector = Option<(crate::detect::Detector, DetectParams)>;
+#[cfg(not(feature = "detect"))]
+type WorkerDetector = Option<std::convert::Infallible>;
+
+/// Load the detector a source asked for (`None` when `detect` is off).
+#[cfg(feature = "detect")]
+async fn load_detector(ctx: &SourceCtx, d: &DetectParams) -> Result<WorkerDetector, String> {
+    if !d.enabled {
+        return Ok(None);
+    }
+    let bytes = crate::detect::fetch_model(&ctx.http, &d.model_url).await?;
+    let det = crate::detect::Detector::from_bytes(&bytes, d.detector_config()).map_err(|e| format!("cannot load model {}: {e}", d.model_url))?;
+    tracing::info!(source = %ctx.id, input = det.config().input, classes = det.n_classes(), "detection model loaded");
+    Ok(Some((det, d.clone())))
+}
+
+#[cfg(not(feature = "detect"))]
+async fn load_detector(_ctx: &SourceCtx, d: &DetectParams) -> Result<WorkerDetector, String> {
+    if d.enabled {
+        return Err("this build has no object detector".into());
+    }
+    Ok(None)
+}
+
+/// Mean luma (`0..1`) of an interleaved RGB frame, sampled every 4th pixel.
+#[cfg_attr(not(feature = "detect"), allow(dead_code))]
+pub(crate) fn mean_luma_rgb(rgb: &[u8]) -> f32 {
+    let mut sum = 0u64;
+    let mut n = 0u64;
+    for px in rgb.chunks_exact(3).step_by(4) {
+        sum += crate::decode::luma(px[0], px[1], px[2]) as u64;
+        n += 1;
+    }
+    if n == 0 {
+        0.0
+    } else {
+        sum as f32 / n as f32 / 255.0
+    }
 }
 
 /// Spawn the decode + track thread. Frames arrive on a bounded channel; the
@@ -258,19 +343,36 @@ fn spawn_worker(
     results: tokio::sync::mpsc::Sender<WorkerMsg>,
     cfg: TrackerConfig,
     clock: Arc<dyn Clock>,
+    #[allow(unused_mut, unused_variables)] mut detector: WorkerDetector,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     let downscale = cfg.downscale.max(1);
     std::thread::Builder::new().name("sonder-vision".into()).spawn(move || {
         let mut decoder = Decoder::new();
         let mut gray = Vec::new();
+        #[allow(unused_mut, unused_variables)]
+        let mut rgb: Vec<u8> = Vec::new();
         let mut tracker = Tracker::new(cfg);
         let mut out = FrameAnalysis::default();
         for jpeg in frames {
-            match decoder.decode_into(&jpeg, downscale, &mut gray) {
-                Ok((w, h)) => {
-                    let t = clock.now();
-                    tracker.process_into(&gray, w, h, t, &mut out);
-                    if results.blocking_send(WorkerMsg::Frame(std::mem::take(&mut out))).is_err() {
+            let t = clock.now();
+            #[allow(unused_mut)]
+            let mut ms = 0.0f32;
+            #[cfg(feature = "detect")]
+            let decoded = match &mut detector {
+                Some((det, params)) => decoder.decode_rgb_into(&jpeg, &mut rgb).and_then(|(w, h)| {
+                    let dets: Vec<_> = det.detect_rgb(&rgb, w, h)?.into_iter().filter(|d| params.accepts(d)).collect();
+                    ms = det.last_ms();
+                    tracker.process_detections_into(&dets, w, h, t, &mut out);
+                    out.mean_brightness = mean_luma_rgb(&rgb);
+                    Ok(())
+                }),
+                None => decoder.decode_into(&jpeg, downscale, &mut gray).map(|(w, h)| tracker.process_into(&gray, w, h, t, &mut out)),
+            };
+            #[cfg(not(feature = "detect"))]
+            let decoded = decoder.decode_into(&jpeg, downscale, &mut gray).map(|(w, h)| tracker.process_into(&gray, w, h, t, &mut out));
+            match decoded {
+                Ok(()) => {
+                    if results.blocking_send(WorkerMsg::Frame(std::mem::take(&mut out), ms)).is_err() {
                         break;
                     }
                 }
@@ -282,9 +384,6 @@ fn spawn_worker(
         }
     })
 }
-
-/// Perceptual size of a blob in 0..1 from its frame-area fraction.
-use crate::events::blob_sample;
 
 fn blob_event(ctx: &SourceCtx, at: Seconds, name: &str, b: &crate::tracker::Blob, lanes: u32) -> Sample {
     blob_sample(&ctx.id, at, name, b, lanes)
@@ -300,9 +399,10 @@ async fn emit_loop(ctx: SourceCtx, mut rx: tokio::sync::mpsc::Receiver<WorkerMsg
     let mut fps = 0.0f64;
     let mut decode_errors = 0u64;
     let mut latest: Option<FrameAnalysis> = None;
+    let count_classes = p.detect.enabled.then(|| p.detect.count_classes());
     while let Some(msg) = rx.recv().await {
-        let a = match msg {
-            WorkerMsg::Frame(a) => a,
+        let (a, detect_ms) = match msg {
+            WorkerMsg::Frame(a, ms) => (a, ms),
             WorkerMsg::DecodeError(e) => {
                 decode_errors += 1;
                 if decode_errors == 1 || decode_errors.is_multiple_of(100) {
@@ -338,24 +438,24 @@ async fn emit_loop(ctx: SourceCtx, mut rx: tokio::sync::mpsc::Receiver<WorkerMsg
             } else {
                 a.blobs.iter().map(|b| b.speed as f64).sum::<f64>() / a.blobs.len() as f64
             };
-            let values: Vec<(&str, f64)> = vec![
-                ("motion", a.motion_energy as f64),
-                ("blobs", a.blobs.len() as f64),
-                ("mean_speed", mean_speed),
-                ("mean_brightness", a.mean_brightness as f64),
-                ("fps", fps),
+            let mut values: Vec<(String, f64)> = vec![
+                ("motion".into(), a.motion_energy as f64),
+                ("blobs".into(), a.blobs.len() as f64),
+                ("mean_speed".into(), mean_speed),
+                ("mean_brightness".into(), a.mean_brightness as f64),
+                ("fps".into(), fps),
             ];
+            if let Some(classes) = &count_classes {
+                values.extend(class_counts(&a.blobs, classes));
+                values.push(("detect_ms".into(), detect_ms as f64));
+            }
             if !ctx.emit(Sample::reading(&ctx.id, now, values)).await {
                 return;
             }
         }
         if now - last_viz >= viz_period {
             last_viz = now;
-            let blobs: Vec<serde_json::Value> = a
-                .blobs
-                .iter()
-                .map(|b| serde_json::json!({ "x": b.x, "y": b.y, "w": b.w, "h": b.h, "b": b.brightness, "id": b.id }))
-                .collect();
+            let blobs: Vec<serde_json::Value> = a.blobs.iter().map(blob_viz).collect();
             let payload = serde_json::json!({
                 "blobs": blobs,
                 "line": p.tracker.line,
@@ -402,7 +502,17 @@ async fn status(ctx: &SourceCtx, state: SourceState, msg: impl Into<String>) -> 
 async fn run(p: CameraParams, ctx: SourceCtx) {
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Bytes>(2);
     let (res_tx, res_rx) = tokio::sync::mpsc::channel::<WorkerMsg>(32);
-    let worker = match spawn_worker(frame_rx, res_tx, p.tracker.clone(), ctx.clock.clone()) {
+    if p.detect.enabled && !status(&ctx, SourceState::Connecting, format!("loading detection model {}", p.detect.model_url)).await {
+        return;
+    }
+    let detector = match load_detector(&ctx, &p.detect).await {
+        Ok(d) => d,
+        Err(e) => {
+            status(&ctx, SourceState::Failed, e).await;
+            return;
+        }
+    };
+    let worker = match spawn_worker(frame_rx, res_tx, p.tracker.clone(), ctx.clock.clone(), detector) {
         Ok(h) => h,
         Err(e) => {
             status(&ctx, SourceState::Failed, format!("cannot start vision worker thread: {e}")).await;
@@ -633,6 +743,39 @@ mod tests {
         assert!(CameraParams::from_spec(&SourceSpec::new(KIND).with("url", "-").with("threshold", 3.0)).is_err());
         assert!(CameraParams::from_spec(&SourceSpec::new(KIND).with("url", "-").with("mode", "psychic")).is_err());
         assert!(CameraParams::from_spec(&SourceSpec::new(KIND).with("url", "-").with("downscale", 0)).is_err());
+        assert!(!p.detect.enabled);
+        assert!(CameraParams::from_spec(&SourceSpec::new(KIND).with("url", "-").with("detect", "maybe")).is_err());
+        let r = CameraParams::from_spec(&SourceSpec::new(KIND).with("url", "-").with("detect", true).with("classes", serde_json::json!(["car"])));
+        if cfg!(feature = "detect") {
+            let p = r.unwrap();
+            assert!(p.detect.enabled);
+            assert_eq!(p.detect.count_classes(), vec!["car".to_string()]);
+        } else {
+            assert!(matches!(r, Err(SourceError::InvalidParam { param: "detect", .. })));
+        }
+    }
+
+    #[test]
+    fn class_counts_and_viz_carry_classes() {
+        let car = crate::tracker::Class { id: 2, name: "car" };
+        let mut b = crate::tracker::Blob { x: 0.5, y: 0.5, w: 0.1, h: 0.1, area: 0.01, brightness: 0.8, ..Default::default() };
+        b.class = Some(car);
+        let blobs = vec![b, b, crate::tracker::Blob { class: Some(crate::tracker::Class { id: 0, name: "person" }), ..b }, crate::tracker::Blob::default()];
+        let counts = class_counts(&blobs, &["car".into(), "truck".into()]);
+        assert_eq!(counts, vec![("car".to_string(), 2.0), ("truck".to_string(), 0.0), ("objects".to_string(), 3.0)]);
+        assert_eq!(blob_viz(&b)["c"], "car");
+        assert!(blob_viz(&crate::tracker::Blob::default()).get("c").is_none());
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let (_stx, srx) = tokio::sync::watch::channel(false);
+        let ctx = SourceCtx { id: "cam".into(), tx, clock: Arc::new(sonder_core::VirtualClock::new()), http: reqwest::Client::new(), shutdown: srx, seed: 1 };
+        match blob_sample(&ctx.id, 1.0, "blob", &b, 4).datum {
+            Datum::Event { attrs, .. } => {
+                assert_eq!(attrs["class"].as_str(), Some("car"));
+                assert_eq!(attrs["class_id"].as_f64(), Some(2.0));
+            }
+            _ => panic!("expected event"),
+        }
+        assert!((mean_luma_rgb(&[255, 255, 255, 0, 0, 0]) - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -815,7 +958,7 @@ mod tests {
 
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Bytes>(64);
         let (res_tx, res_rx) = tokio::sync::mpsc::channel::<WorkerMsg>(64);
-        let worker = spawn_worker(frame_rx, res_tx, p.tracker.clone(), clock.clone()).unwrap();
+        let worker = spawn_worker(frame_rx, res_tx, p.tracker.clone(), clock.clone(), None).unwrap();
         let emitter = tokio::spawn(emit_loop(ctx.clone(), res_rx, p.clone()));
         for (i, j) in jpegs.iter().enumerate() {
             clock.set(i as f64 / 10.0);

@@ -12,6 +12,12 @@ default = ["native"]
 native = ["dep:sonder-sources", "sonder-sources/native", "dep:image", "dep:tokio", "dep:tokio-stream", "dep:futures", "dep:bytes", "dep:reqwest"]
 ## Expose the synthetic frame generator (`sonder_vision::testgen`) outside of tests.
 testgen = []
+## Object detection: a YOLOv8/YOLO11-format ONNX model run with `tract-onnx` (pure Rust,
+## wasm-capable). Adds `detect::Detector`; the pure parts of `detect` (config, letterbox
+## maths, output decoding, COCO labels) are always compiled.
+detect = ["dep:tract-onnx"]
+## `detect` for `wasm32-unknown-unknown` (enables getrandom's JS backend in tract).
+detect-js = ["detect", "tract-onnx/getrandom-js"]
 
 [dependencies]
 sonder-core = { workspace = true }
@@ -22,6 +28,7 @@ tokio-stream = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+tract-onnx = { version = "0.23.9", default-features = false, optional = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }

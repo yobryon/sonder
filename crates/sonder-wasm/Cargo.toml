@@ -8,6 +8,15 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+## Object detection in the browser: `Engine::load_model` + `Engine::push_frame_rgb` run a
+## YOLO-class ONNX model (tract-onnx, ~+3 MB of wasm). Off by default to keep the site small:
+##   cargo build --release --target wasm32-unknown-unknown -p sonder-wasm --features detect
+## JS fetches the model itself (the camera source's `model_url` param, see `source_specs()`)
+## and hands the bytes to `load_model`.
+detect = ["sonder-vision/detect-js"]
+
 [dependencies]
 sonder-core = { workspace = true }
 sonder-engine = { workspace = true, default-features = false }
