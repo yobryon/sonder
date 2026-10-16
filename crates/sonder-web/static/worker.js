@@ -3,7 +3,7 @@
 // to the main thread.
 //
 // In:  {type:'init', engine:'./pkg/sonder_wasm.js'|'./engine-mock.js'}
-//      {type:'start', sceneToml, seed, sampleRate}
+//      {type:'start', sceneToml, seed, sampleRate, feed}   feed:'room' = no adapters/sims; samples arrive via 'sample'
 //      {type:'command', cmd}                      UserCommand JSON object
 //      {type:'sample', source, json}              from main-thread adapters (browser.input)
 //      {type:'frame', source, gray, w, h}         webcam luma frame (transferable)
@@ -68,7 +68,7 @@ async function init(engineUrl) {
   post({ type: 'ready', scenes, version: typeof mod.version === 'function' ? mod.version() : '?' });
 }
 
-async function start({ sceneToml, seed, sampleRate: sr }) {
+async function start({ sceneToml, seed, sampleRate: sr, feed }) {
   if (!mod) throw new Error('engine not initialised');
   stop();
   sampleRate = sr || 48000;
@@ -78,8 +78,11 @@ async function start({ sceneToml, seed, sampleRate: sr }) {
   tickSec = framesPerTick / sampleRate;
   const specs = Array.from(engine.source_specs()).map((s) => ({ name: s.name, kind: s.kind, params: plain(s.params), builtin: !!s.builtin }));
   const mainSpecs = [];
+  // A room guest is fed the host's samples: no adapters here, no built-in sims.
+  const fed = feed === 'room';
+  if (fed && typeof engine.feed_externally === 'function') engine.feed_externally();
   for (const spec of specs) {
-    if (spec.builtin) continue;
+    if (fed || spec.builtin) continue;
     if (isMainThreadKind(spec.kind)) { mainSpecs.push(spec); continue; }
     if (UNAVAILABLE[spec.kind]) { pushSample(spec.name, JSON.stringify({ type: 'status', state: 'failed', message: UNAVAILABLE[spec.kind] })); continue; }
     if (!ADAPTERS[spec.kind]) { pushSample(spec.name, JSON.stringify({ type: 'status', state: 'failed', message: `no browser adapter for kind \`${spec.kind}\`` })); continue; }

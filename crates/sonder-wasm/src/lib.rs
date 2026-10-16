@@ -269,6 +269,12 @@ impl Engine {
         self.replaying
     }
 
+    /// Room guest mode: stop the built-in simulations so every sample comes from
+    /// `push_sample` (the host's data, relayed). Idempotent.
+    pub fn feed_externally(&mut self) {
+        self.sims.clear();
+    }
+
     /// Sources the scene needs: `[{name, kind, params, builtin}]`. `builtin` sources are
     /// stepped by Rust; the rest must be fed via `push_sample`.
     pub fn source_specs(&self) -> Result<JsValue, JsError> {

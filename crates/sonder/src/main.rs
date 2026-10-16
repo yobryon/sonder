@@ -41,6 +41,10 @@ enum Cmd {
         out: PathBuf,
         #[arg(long, default_value_t = 1)]
         seed: u64,
+        /// Also render one WAV per layer next to `--out` (`<out>-<layer>.wav`): deterministic
+        /// solo renders, one per layer, sample-aligned with the mix.
+        #[arg(long)]
+        stems: bool,
         #[command(flatten)]
         source: SourceOverride,
     },
@@ -115,14 +119,57 @@ struct PlayArgs {
     /// Also send MIDI to this output port (substring match), or `virtual` to create one.
     #[arg(long, value_name = "PORT")]
     midi: Option<String>,
+    /// Also send OSC (notes, drums, layer params, signals, harmony, form) to this UDP
+    /// `host:port` — see docs/OSC.md.
+    #[arg(long, value_name = "HOST:PORT")]
+    osc: Option<String>,
+    /// Join an Ableton Link session: share tempo and beat phase with Link peers on the LAN
+    /// (needs a build with `--features link`).
+    #[arg(long)]
+    link: bool,
     /// Reload the scene in place whenever its file changes on disk (polled every second).
     #[arg(long)]
     watch: bool,
     /// Write every ingested sample to this `.sonder` (or `.sonder.gz`) data log, for `sonder replay`.
     #[arg(long, value_name = "PATH")]
     record_data: Option<PathBuf>,
+    /// Let the DJ switch scenes on world events (docs/DJ.md): built-in rules, or a dj.toml.
+    #[arg(long, value_name = "DJ_TOML", num_args = 0..=1, default_missing_value = "")]
+    dj: Option<String>,
+    /// Narrate what is happening every N seconds with Claude (needs ANTHROPIC_API_KEY).
+    #[arg(long, value_name = "SECONDS", num_args = 0..=1, default_missing_value = "180")]
+    narrate: Option<f64>,
+    #[command(flatten)]
+    room: RoomArgs,
     #[command(flatten)]
     source: SourceOverride,
+}
+
+/// Shared-room flags (docs/ROOMS.md), on `play`, `serve` and `radio`.
+#[derive(Args, Clone, Default)]
+pub(crate) struct RoomArgs {
+    /// Host a shared room: publish this performance to a sonder-relay so browsers can join
+    /// with the same scene, seed and data — e.g. wss://relay.example/r/my-room.
+    #[arg(long, value_name = "URL")]
+    pub room: Option<String>,
+    /// Your name in the room's chat (default: $USER).
+    #[arg(long, value_name = "NAME", requires = "room")]
+    pub room_name: Option<String>,
+    /// List the room on the relay's index page.
+    #[arg(long, requires = "room")]
+    pub room_public: bool,
+    /// Keep the last 10 minutes of data in memory; `/moment` in the chat saves them here as
+    /// a `.sonder.gz` data log (`sonder replay` plays it).
+    #[arg(long, value_name = "DIR")]
+    pub moments: Option<PathBuf>,
+}
+
+impl RoomArgs {
+    pub fn config(&self) -> Option<sonder_engine::room::RoomConfig> {
+        let url = self.room.clone()?;
+        let name = self.room_name.clone().or_else(|| std::env::var("USER").ok()).unwrap_or_else(|| "host".into());
+        Some(sonder_engine::room::RoomConfig { url, name, public: self.room_public })
+    }
 }
 
 #[derive(Args, Clone)]
@@ -169,6 +216,12 @@ struct ReplayArgs {
     /// Also send MIDI to this output port (substring match), or `virtual`.
     #[arg(long, value_name = "PORT")]
     midi: Option<String>,
+    /// Also send OSC to this UDP `host:port` (docs/OSC.md).
+    #[arg(long, value_name = "HOST:PORT")]
+    osc: Option<String>,
+    /// Join an Ableton Link session (needs a build with `--features link`).
+    #[arg(long)]
+    link: bool,
 }
 
 #[derive(Args, Clone, Default)]
@@ -231,7 +284,7 @@ fn main() -> anyhow::Result<()> {
             play(scene, args, false, None).await
         }),
         Cmd::Replay(args) => rt.block_on(replay(args)),
-        Cmd::Render { scene, seconds, out, seed, source } => {
+        Cmd::Render { scene, seconds, out, seed, stems, source } => {
             let mut scene = sonder_engine::load_scene(&scene)?;
             sonder_engine::live::apply_overrides(&mut scene, &source.into_overrides()?)?;
             eprintln!("rendering {seconds}s of `{}` (seed {seed}) → {}", scene.name, out.display());
@@ -240,6 +293,14 @@ fn main() -> anyhow::Result<()> {
                 "done: {} frames @ {} Hz, peak {:.3}, rms {:.3}, {} notes, {} events",
                 stats.frames, stats.sample_rate, stats.peak, stats.rms, stats.notes, stats.events
             );
+            if stems {
+                let dir = out.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+                let prefix = out.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "sonder".into());
+                eprintln!("rendering {} stems ({} more renders) …", scene.layers.len(), scene.layers.len());
+                for stem in sonder_engine::render_stems_to_wav(&scene, seconds, seed, dir, &prefix)? {
+                    eprintln!("  {} → {} (peak {:.3}, {} notes)", stem.layer_name, stem.path.display(), stem.stats.peak, stem.stats.notes);
+                }
+            }
             Ok(())
         }
         Cmd::List => {
@@ -431,8 +492,13 @@ async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
         sample_rate: 48_000,
         seed: Some(args.seed.unwrap_or(header.seed)),
         midi: args.midi,
+        osc: args.osc,
+        link: args.link,
         watch: false,
         record_data: None,
+        dj: None,
+        narrate: None,
+        room: RoomArgs::default(),
         source: SourceOverride::default(),
     };
     play(scene, play_args, !args.headless, Some(replay)).await
@@ -473,13 +539,49 @@ async fn play(scene: Scene, args: PlayArgs, tui: bool, replay: Option<sonder_eng
         midi_port: args.midi.clone(),
         replay,
         record_data: args.record_data.clone(),
+        room: args.room.config(),
+        moments: args.room.moments.clone(),
+        osc_target: args.osc.clone(),
+        link: args.link,
+        dj: match &args.dj {
+            None => None,
+            Some(p) if p.is_empty() => Some(sonder_engine::live::DjOptions::builtin()),
+            Some(p) => {
+                let path = PathBuf::from(p);
+                let toml = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+                Some(sonder_engine::live::DjOptions { toml, base_dir: path.parent().map(PathBuf::from) })
+            }
+        },
+        narrator: args.narrate.map(|interval| sonder_engine::narrator::NarratorOptions { interval, ..Default::default() }),
     };
     let handle = sonder_engine::start(scene, opts).await?;
+    if args.dj.is_some() {
+        eprintln!("sonder: DJ on — it switches scenes on world events (docs/DJ.md)");
+    }
+    if let Some(every) = args.narrate {
+        if sonder_engine::narrator::api_key().is_some() {
+            eprintln!("sonder: narrator on — one line every {every:.0} s");
+        } else {
+            eprintln!("sonder: --narrate needs ANTHROPIC_API_KEY; narration is off");
+        }
+    }
     if let Some(p) = &handle.midi_port {
         tracing::info!("midi out → {p}");
     }
+    if let Some(t) = &handle.osc_target {
+        eprintln!("sonder: osc out → {t} (docs/OSC.md)");
+    }
+    if args.link {
+        eprintln!("sonder: ableton link on — alone we lead; with peers we follow the session tempo");
+    }
     if let Some(p) = &args.record_data {
         eprintln!("sonder: recording data to {} (play it back with `sonder replay {}`)", p.display(), p.display());
+    }
+    if let Some(cfg) = args.room.config() {
+        eprintln!("sonder: hosting room {} as `{}` — guests join at <site>/?room={} (docs/ROOMS.md)", cfg.url, cfg.name, cfg.url);
+    }
+    if let Some(d) = &args.room.moments {
+        eprintln!("sonder: `/moment` in the chat saves the last 10 minutes to {}", d.display());
     }
     if args.watch {
         let path = scene_file_path(&args.scene).context("--watch needs a scene file, not a built-in name")?;
@@ -914,8 +1016,13 @@ async fn compose(args: ComposeArgs) -> anyhow::Result<()> {
                 sample_rate: 48000,
                 seed: None,
                 midi: None,
+                osc: None,
+                link: false,
                 watch: false,
                 record_data: None,
+                dj: None,
+                narrate: None,
+                room: RoomArgs::default(),
                 source: SourceOverride::default(),
             },
             true,

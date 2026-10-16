@@ -23,9 +23,11 @@ tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
 
 [features]
-default = ["native-audio", "midi"]
+default = ["native-audio", "midi", "osc"]
 native-audio = ["sonder-engine/native-audio"]
 midi = ["sonder-engine/midi"]
+osc = ["sonder-engine/osc"]
+link = ["sonder-engine/link"]
 
 [[bin]]
 name = "sonder"

@@ -15,14 +15,25 @@ pub mod compose_prompt;
 pub mod captions;
 pub mod control;
 pub mod datalog;
+pub mod dj;
 pub mod instruments;
 pub mod mapping;
 pub mod recipes;
 pub mod replay;
 #[cfg(feature = "native")]
+pub mod room;
+#[cfg(feature = "native")]
 pub mod live;
+#[cfg(feature = "native")]
+pub mod moments;
+#[cfg(feature = "link")]
+pub mod link;
 #[cfg(feature = "midi")]
 pub mod midi;
+#[cfg(feature = "native")]
+pub mod narrator;
+#[cfg(feature = "osc")]
+pub mod osc;
 #[cfg(feature = "native")]
 pub mod render;
 pub mod sink;
@@ -32,7 +43,7 @@ pub mod validate;
 #[cfg(feature = "native")]
 pub use live::{start, AudioBackendChoice, EngineHandle, EngineOptions, WebAudio};
 #[cfg(feature = "native")]
-pub use render::{render_to_wav, render_to_wav_with, RenderOptions, RenderStats};
+pub use render::{render_stem, render_stems_to_wav, render_to_wav, render_to_wav_with, RenderOptions, RenderStats, StemFile};
 pub use scenes::{builtin_scenes, load_scene, parse_scene};
 pub use validate::validate;
 

@@ -4,7 +4,7 @@
 //! tokio runtime. Each control tick: advance the virtual clock 20 ms, let source tasks
 //! run their timers, drain samples, compose, render 20 ms of audio.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -43,6 +43,101 @@ pub struct RenderOptions {
     pub seek_at: Option<(f64, f64)>,
     /// `(engine seconds, speed)`: issue `SetSpeed` when the render reaches that time.
     pub speed_at: Option<(f64, f64)>,
+    /// `(engine seconds, command)`: issue any user command when the render reaches that
+    /// time (in order). Stems mute every other layer at t = 0 this way.
+    pub commands_at: Vec<(f64, UserCommand)>,
+}
+
+/// One rendered stem.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StemFile {
+    pub layer: LayerId,
+    pub layer_name: String,
+    pub path: PathBuf,
+    pub stats: RenderStats,
+}
+
+/// Render one layer alone: the same deterministic render as the mix, with every other
+/// (unmuted) layer muted at t = 0, so the stem starts sample-aligned with the mix and
+/// its notes come from the same seed. Layers the scene starts muted are left muted.
+///
+/// Stems are solo renders, not a decomposition of the mix: the master chain (compressor,
+/// limiter, saturation) is nonlinear, and a muted layer stops feeding the mood, so the
+/// stems do not sum sample-exactly to the mix.
+pub fn render_stem(scene: &Scene, seconds: f64, seed: u64, layer: LayerId) -> anyhow::Result<(Vec<f32>, RenderStats)> {
+    let commands_at = scene
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| *i != layer.0 as usize && !l.muted)
+        .map(|(i, _)| (0.0, UserCommand::ToggleMute { layer: LayerId(i as u16) }))
+        .collect();
+    render_with(scene, seconds, seed, RenderOptions { commands_at, ..Default::default() })
+}
+
+/// Render every layer's stem to `<dir>/<prefix>-<layer>.wav` (layer names slugged; a
+/// duplicate name gets its index appended). N renders for N layers, run on up to
+/// `min(N, available_parallelism, 4)` threads at once — each render is an independent
+/// single-thread deterministic job, and the cap bounds peak memory (a 10-minute stereo
+/// render is ~230 MB of f32 before it is written).
+pub fn render_stems_to_wav(scene: &Scene, seconds: f64, seed: u64, dir: &Path, prefix: &str) -> anyhow::Result<Vec<StemFile>> {
+    if let Err(errs) = crate::validate(scene) {
+        anyhow::bail!("scene `{}` is invalid:\n  {}", scene.name, errs.join("\n  "));
+    }
+    let n = scene.layers.len();
+    let mut names: Vec<String> = scene.layers.iter().map(|l| slug(&l.name)).collect();
+    for i in 0..n {
+        if names.iter().filter(|x| **x == names[i]).count() > 1 {
+            names[i] = format!("{}-{i}", names[i]);
+        }
+    }
+    let jobs: Vec<(LayerId, PathBuf)> = (0..n).map(|i| (LayerId(i as u16), dir.join(format!("{prefix}-{}.wav", names[i])))).collect();
+    let workers = std::thread::available_parallelism().map(|p| p.get()).unwrap_or(1).clamp(1, 4).min(n.max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<std::sync::Mutex<Option<anyhow::Result<RenderStats>>>> = (0..n).map(|_| std::sync::Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some((layer, path)) = jobs.get(i) else { break };
+                let res = render_stem(scene, seconds, seed, *layer).and_then(|(samples, mut stats)| {
+                    write_wav(path, &samples, stats.sample_rate)?;
+                    stats.frames = samples.len() / 2;
+                    Ok(stats)
+                });
+                *results[i].lock().unwrap() = Some(res);
+            });
+        }
+    });
+    let mut out = Vec::with_capacity(n);
+    for (i, (layer, path)) in jobs.into_iter().enumerate() {
+        let stats = results[i].lock().unwrap().take().expect("every job ran").with_context(|| format!("stem `{}`", scene.layers[i].name))?;
+        out.push(StemFile { layer, layer_name: scene.layers[i].name.clone(), path, stats });
+    }
+    Ok(out)
+}
+
+fn slug(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() { "layer".into() } else { out }
+}
+
+fn write_wav(path: &Path, samples: &[f32], sample_rate: u32) -> anyhow::Result<()> {
+    let spec = hound::WavSpec { channels: 2, sample_rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let mut w = hound::WavWriter::create(path, spec).with_context(|| format!("creating {}", path.display()))?;
+    for s in samples {
+        w.write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16)?;
+    }
+    w.finalize()?;
+    Ok(())
 }
 
 /// Render `seconds` of a scene to a 16-bit stereo WAV at 48 kHz.
@@ -53,12 +148,7 @@ pub fn render_to_wav(scene: &Scene, seconds: f64, seed: u64, path: &Path) -> any
 /// [`render_to_wav`] with [`RenderOptions`] (replay, recording).
 pub fn render_to_wav_with(scene: &Scene, seconds: f64, seed: u64, path: &Path, opts: RenderOptions) -> anyhow::Result<RenderStats> {
     let (samples, mut stats) = render_with(scene, seconds, seed, opts)?;
-    let spec = hound::WavSpec { channels: 2, sample_rate: stats.sample_rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
-    let mut w = hound::WavWriter::create(path, spec).with_context(|| format!("creating {}", path.display()))?;
-    for s in &samples {
-        w.write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16)?;
-    }
-    w.finalize()?;
+    write_wav(path, &samples, stats.sample_rate)?;
     stats.frames = samples.len() / 2;
     Ok(stats)
 }
@@ -105,6 +195,7 @@ async fn render_inner(scene: &Scene, seconds: f64, seed: u64, opts: RenderOption
     };
     let mut seek_at = opts.seek_at;
     let mut speed_at = opts.speed_at;
+    let mut commands_at = opts.commands_at.into_iter().peekable();
 
     let frames_per_tick = (SR as f64 * TICK_SECONDS).round() as usize;
     let ticks = (seconds / TICK_SECONDS).ceil() as usize;
@@ -128,6 +219,10 @@ async fn render_inner(scene: &Scene, seconds: f64, seed: u64, opts: RenderOption
         }
         if speed_at.is_some_and(|(at, _)| t + 1e-9 >= at) {
             control.command(UserCommand::SetSpeed { speed: speed_at.take().map(|(_, s)| s).unwrap_or(1.0) });
+        }
+        while commands_at.peek().is_some_and(|(at, _)| t + 1e-9 >= *at) {
+            let (_, cmd) = commands_at.next().expect("peeked");
+            control.command(cmd);
         }
         // Let source timers fire and tasks run until they're all waiting again.
         tokio::time::advance(std::time::Duration::from_secs_f64(TICK_SECONDS)).await;
@@ -191,6 +286,56 @@ mod tests {
         assert!(!sa.captions.is_empty(), "the first car should have been captioned");
         assert!(sa.captions.windows(2).all(|w| w[0].at <= w[1].at));
         assert!(sa.captions.iter().any(|c| c.text.starts_with("car in lane")), "{:?}", sa.captions);
+    }
+
+    /// Three layers, 3 s: every stem is audible, stems differ from each other, each one is
+    /// a solo (the stem's note log names only its own layer), and the mix is untouched.
+    #[test]
+    fn stems_are_solo_renders_and_leave_the_mix_alone() {
+        let scene = crate::parse_scene(
+            r#"
+name = "Three"
+[conductor]
+tempo = 120
+[[layer]]
+name = "pad"
+role = "pad"
+instrument = "pad.glass"
+[[layer]]
+name = "bass"
+role = "bass"
+instrument = "bass.sub"
+map.density = "1"
+[[layer]]
+name = "arp"
+role = "arp"
+instrument = "arp.glass"
+map.density = "1"
+"#,
+        )
+        .unwrap();
+        let (mix, _) = render_to_samples(&scene, 3.0, 5).unwrap();
+        let (mix_again, _) = render_to_samples(&scene, 3.0, 5).unwrap();
+        assert_eq!(mix, mix_again);
+        let mut stems = Vec::new();
+        for i in 0..3u16 {
+            let (samples, stats) = render_stem(&scene, 3.0, 5, LayerId(i)).unwrap();
+            assert_eq!(samples.len(), mix.len());
+            assert!(stats.peak > 0.005, "stem {i} is silent: {stats:?}");
+            assert!(stats.note_log.iter().all(|n| n.layer == LayerId(i)), "stem {i} has other layers' notes: {:?}", stats.note_log);
+            assert!(!stats.note_log.is_empty(), "stem {i} played nothing");
+            stems.push(samples);
+        }
+        assert!(stems[0] != stems[1] && stems[1] != stems[2]);
+        // On disk, named after the layers.
+        let dir = std::env::temp_dir().join(format!("sonder-stems-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let files = render_stems_to_wav(&scene, 1.0, 5, &dir, "2026-01-01").unwrap();
+        let names: Vec<String> = files.iter().map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["2026-01-01-pad.wav", "2026-01-01-bass.wav", "2026-01-01-arp.wav"]);
+        assert!(files.iter().all(|f| f.path.exists() && f.stats.frames == 48_000));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

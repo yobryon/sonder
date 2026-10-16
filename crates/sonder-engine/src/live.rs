@@ -41,6 +41,34 @@ pub struct EngineOptions {
     pub replay: Option<ReplayOptions>,
     /// Write every ingested sample to this `.sonder` / `.sonder.gz` data log.
     pub record_data: Option<std::path::PathBuf>,
+    /// Host a shared room on this relay (docs/ROOMS.md).
+    pub room: Option<crate::room::RoomConfig>,
+    /// Keep the last 10 minutes of data in memory; `/moment` saves them here.
+    pub moments: Option<std::path::PathBuf>,
+    /// `host:port` to send OSC to (see `docs/OSC.md`). None = no OSC.
+    pub osc_target: Option<String>,
+    /// Join an Ableton Link session (feature `link`).
+    pub link: bool,
+    /// Run the DJ (rule-based scene switching; see `docs/DJ.md`).
+    pub dj: Option<DjOptions>,
+    /// Run the narrator (one sentence from Claude every `interval` seconds).
+    pub narrator: Option<crate::narrator::NarratorOptions>,
+}
+
+/// A `dj.toml` to run, for [`EngineOptions::dj`].
+#[derive(Debug, Clone)]
+pub struct DjOptions {
+    /// The file's text (`crate::dj::DEFAULT_CONFIG` for the built-in rules).
+    pub toml: String,
+    /// Directory rule scenes are resolved against (besides built-ins and the cwd).
+    pub base_dir: Option<std::path::PathBuf>,
+}
+
+impl DjOptions {
+    /// The embedded `dj/default.toml`.
+    pub fn builtin() -> Self {
+        Self { toml: crate::dj::DEFAULT_CONFIG.to_string(), base_dir: None }
+    }
 }
 
 /// A log to play, for [`EngineOptions::replay`].
@@ -64,6 +92,8 @@ pub struct EngineHandle {
     pub audio_backend: String,
     /// Name of the connected MIDI port, if any.
     pub midi_port: Option<String>,
+    /// Resolved OSC target, if any.
+    pub osc_target: Option<std::net::SocketAddr>,
     /// Resolves when the engine stops (quit command or fatal error).
     pub done: tokio::sync::oneshot::Receiver<anyhow::Result<()>>,
     shutdown: tokio::sync::watch::Sender<bool>,
@@ -109,11 +139,20 @@ impl Generation {
         seed: u64,
         rt: &tokio::runtime::Handle,
     ) -> anyhow::Result<Self> {
+        Self::spawn_specs(registry, &ControlLoop::source_specs(scene), clock, seed, rt)
+    }
+    /// Spawn an arbitrary set of sources (the DJ's watchers).
+    fn spawn_specs(
+        registry: &sonder_sources::Registry,
+        specs: &[(SourceId, SourceSpec)],
+        clock: Arc<dyn Clock>,
+        seed: u64,
+        rt: &tokio::runtime::Handle,
+    ) -> anyhow::Result<Self> {
         let (sample_tx, sample_rx) = tokio::sync::mpsc::channel::<Sample>(4096);
         let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
-        let specs = ControlLoop::source_specs(scene);
         let _guard = rt.enter();
-        let tasks = spawn_sources(registry, &specs, sample_tx, clock, shutdown_rx, seed)?;
+        let tasks = spawn_sources(registry, specs, sample_tx, clock, shutdown_rx, seed)?;
         Ok(Self { tasks, sample_rx, shutdown })
     }
     fn alive(&self) -> usize {
@@ -217,6 +256,19 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
         tracing::info!(path = %path.display(), "recording data log");
         control.add_sample_sink(Box::new(move |s: &Sample| writer.write(s)));
     }
+    let mut room = opts.room.clone().map(|cfg| {
+        let link = crate::room::RoomLink::spawn(cfg, snapshot_rx.clone(), shutdown_rx.clone(), &rt);
+        control.set_room(&link.id(), link.config().url.trim_end_matches('/'), "host");
+        control.add_sample_sink(link.sink());
+        link.announce(control.scene(), seed, 0.0);
+        tracing::info!(url = %link.config().url, "hosting a room");
+        link
+    });
+    let moments = opts.moments.clone().map(crate::moments::MomentBuffer::new);
+    if let Some(m) = &moments {
+        control.add_sample_sink(m.sink());
+        tracing::info!(dir = %m.dir().display(), "keeping the last 10 minutes for /moment");
+    }
     #[cfg_attr(not(feature = "midi"), allow(unused_mut))]
     let mut midi_name = None;
     if let Some(port) = &opts.midi_port {
@@ -231,6 +283,45 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
             let _ = perc_layers;
             anyhow::bail!("this build has no MIDI support (feature `midi`); requested port `{port}`");
         }
+    }
+    #[cfg_attr(not(feature = "osc"), allow(unused_mut))]
+    let mut osc_target = None;
+    if let Some(target) = &opts.osc_target {
+        #[cfg(feature = "osc")]
+        {
+            let osc = crate::osc::OscOut::connect(target).context("opening OSC output")?;
+            osc_target = Some(osc.target());
+            tracing::info!(target = %osc.target(), "osc out");
+            control.add_sink(Box::new(osc));
+        }
+        #[cfg(not(feature = "osc"))]
+        anyhow::bail!("this build has no OSC support (feature `osc`); requested target `{target}`");
+    }
+    if opts.link {
+        #[cfg(feature = "link")]
+        {
+            let link = crate::link::LinkSync::start(scene.conductor.tempo);
+            tracing::info!("ableton link enabled");
+            control.add_sink(Box::new(link));
+        }
+        #[cfg(not(feature = "link"))]
+        anyhow::bail!("this build has no Ableton Link support (build with `--features link`)");
+    }
+
+    // The DJ and its watcher sources (independent of the scene's generation).
+    let mut dj = match &opts.dj {
+        Some(d) => {
+            let dj = crate::dj::Dj::from_toml(&d.toml, d.base_dir.as_deref()).context("dj.toml")?;
+            let watchers = Generation::spawn_specs(&registry, dj.watch_specs(), clock.clone(), seed ^ 0xd1, &rt).context("starting the DJ's watcher sources")?;
+            tracing::info!(watchers = dj.watch_specs().len(), "dj on");
+            Some((dj, watchers))
+        }
+        None => None,
+    };
+    // Captions from tasks outside the control thread (the narrator).
+    let (caption_tx, mut caption_rx) = tokio::sync::mpsc::channel::<(String, f64)>(16);
+    if let Some(n) = opts.narrator.clone() {
+        rt.spawn(crate::narrator::run(n, snapshot_rx.clone(), caption_tx, shutdown_rx.clone()));
     }
 
     // Control thread.
@@ -252,25 +343,51 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
                 while let Ok(cmd) = cmd_rx.try_recv() {
                     control.command(cmd);
                 }
+                let now = clock.now();
                 if let Some(toml_src) = control.take_load_request() {
-                    match reload(&mut control, &toml_src, fixed_seed) {
-                        Ok(new_seed) => {
-                            let scene = control.scene();
-                            let spawned = if control.replay().is_some() { Ok(Generation::empty()) } else { Generation::spawn(&registry, scene, clock.clone(), new_seed, &rt) };
-                            match spawned {
-                                Ok(g) => {
-                                    std::mem::replace(&mut generation, g).stop();
-                                    reloads_for_thread.fetch_add(1, Ordering::Relaxed);
-                                    tracing::info!(scene = %scene.name, "scene reloaded");
-                                }
-                                Err(e) => {
-                                    tracing::error!("reloaded scene `{}` but its sources failed to start: {e:#}", scene.name);
-                                    std::mem::replace(&mut generation, Generation::empty()).stop();
+                    // A scene the user picked (picker, editor, --watch): the DJ steps back.
+                    match crate::parse_scene(&toml_src) {
+                        Ok(scene) => {
+                            if swap_scene(&mut control, &mut generation, &registry, &clock, &rt, &reloads_for_thread, scene, fixed_seed) {
+                                if let Some((dj, _)) = dj.as_mut() {
+                                    if dj.enabled() {
+                                        dj.pause_for_user();
+                                        control.push_caption("DJ paused — you picked the scene", 0.5);
+                                    }
                                 }
                             }
                         }
                         Err(e) => tracing::error!("scene reload rejected: {e:#}"),
                     }
+                }
+                if let Some((dj, watchers)) = dj.as_mut() {
+                    for enabled in control.take_dj_requests() {
+                        dj.set_enabled(enabled, now);
+                        control.push_caption(if enabled { "DJ on" } else { "DJ off" }, 0.5);
+                    }
+                    let mut drained = 0;
+                    while let Ok(sample) = watchers.sample_rx.try_recv() {
+                        dj.observe(sample);
+                        drained += 1;
+                        if drained > 5_000 {
+                            break;
+                        }
+                    }
+                    let current = control.scene().name.clone();
+                    for action in dj.tick(now, &current) {
+                        match action {
+                            crate::dj::Action::Load { scene, caption } => {
+                                if swap_scene(&mut control, &mut generation, &registry, &clock, &rt, &reloads_for_thread, *scene, fixed_seed) {
+                                    control.push_caption(caption, 0.9);
+                                }
+                            }
+                            crate::dj::Action::Caption(text, importance) => control.push_caption(text, importance),
+                        }
+                    }
+                    control.set_dj(Some(dj.snapshot(now)));
+                }
+                while let Ok((text, importance)) = caption_rx.try_recv() {
+                    control.push_caption(text, importance);
                 }
                 // Bound the per-tick drain so a firehose can't starve the tick.
                 let mut drained = 0;
@@ -281,7 +398,25 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
                         break;
                     }
                 }
-                control.tick(clock.now());
+                control.tick(now);
+                if let Some(link) = room.as_mut() {
+                    link.pump(&mut control, reloads_for_thread.load(Ordering::Relaxed), now);
+                }
+                if control.take_moment_request() {
+                    match &moments {
+                        Some(m) => match m.save(control.scene(), control.seed(), now) {
+                            Ok((path, n)) => {
+                                tracing::info!(path = %path.display(), samples = n, "moment saved");
+                                control.push_caption(format!("moment saved: {} ({n} samples)", path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()), 0.8);
+                            }
+                            Err(e) => {
+                                tracing::error!("saving moment: {e}");
+                                control.push_caption(format!("moment not saved: {e}"), 0.6);
+                            }
+                        },
+                        None => control.push_caption("moments are off — start the host with --moments <dir>", 0.5),
+                    }
+                }
                 alive_for_thread.store(generation.alive(), Ordering::Relaxed);
                 for path in control.take_save_requests() {
                     let scene = control.current_scene();
@@ -314,6 +449,9 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
             // note-offs on drop), then the audio stream (joins the backend thread). Only
             // then is the engine `done`.
             generation.stop();
+            if let Some((_, watchers)) = dj.take() {
+                watchers.stop();
+            }
             alive_for_thread.store(0, Ordering::Relaxed);
             drop(control);
             drop(_stream);
@@ -328,6 +466,7 @@ pub async fn start(mut scene: Scene, opts: EngineOptions) -> anyhow::Result<Engi
         sample_rate,
         audio_backend: backend_name,
         midi_port: midi_name,
+        osc_target,
         done: done_rx,
         shutdown: shutdown_tx,
         source_tasks_alive: alive,
@@ -343,16 +482,53 @@ impl Generation {
     }
 }
 
-/// Parse, validate and apply a `LoadScene` TOML to the control loop. Returns the seed the
-/// new scene runs with. On error the old scene keeps running and a caption says why.
-fn reload(control: &mut ControlLoop, toml_src: &str, fixed_seed: Option<u64>) -> anyhow::Result<u64> {
-    let scene = crate::parse_scene(toml_src)?;
+/// Validate and apply a scene to the control loop. Returns the seed the new scene runs
+/// with. On error the old scene keeps running.
+fn reload(control: &mut ControlLoop, scene: Scene, fixed_seed: Option<u64>) -> anyhow::Result<u64> {
     if let Err(errs) = crate::validate(&scene) {
         anyhow::bail!("scene `{}` is invalid:\n  {}", scene.name, errs.join("\n  "));
     }
     let seed = fixed_seed.or(scene.conductor.seed).unwrap_or_else(rand::random::<u64>);
     control.rebuild(scene, seed)?;
     Ok(seed)
+}
+
+/// The hot-reload path shared by `LoadScene` and the DJ: rebuild the control loop around
+/// `scene`, stop the old sources and start the new ones. Errors are logged; `true` when
+/// the scene changed.
+#[allow(clippy::too_many_arguments)]
+fn swap_scene(
+    control: &mut ControlLoop,
+    generation: &mut Generation,
+    registry: &sonder_sources::Registry,
+    clock: &Arc<dyn Clock>,
+    rt: &tokio::runtime::Handle,
+    reloads: &AtomicUsize,
+    scene: Scene,
+    fixed_seed: Option<u64>,
+) -> bool {
+    match reload(control, scene, fixed_seed) {
+        Ok(new_seed) => {
+            let scene = control.scene();
+            let spawned = if control.replay().is_some() { Ok(Generation::empty()) } else { Generation::spawn(registry, scene, clock.clone(), new_seed, rt) };
+            match spawned {
+                Ok(g) => {
+                    std::mem::replace(generation, g).stop();
+                    tracing::info!(scene = %scene.name, "scene reloaded");
+                }
+                Err(e) => {
+                    tracing::error!("reloaded scene `{}` but its sources failed to start: {e:#}", scene.name);
+                    std::mem::replace(generation, Generation::empty()).stop();
+                }
+            }
+            reloads.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(e) => {
+            tracing::error!("scene reload rejected: {e:#}");
+            false
+        }
+    }
 }
 
 type Opened = (sonder_audio::SynthController, AudioStream, String);
@@ -485,6 +661,80 @@ mod tests {
         // Still ticking and still quits cleanly.
         handle.commands.send(UserCommand::Quit).await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), &mut handle.done).await.expect("done").unwrap().unwrap();
+    }
+
+    /// Wait (≤ 10 s) for a snapshot that satisfies `pred`.
+    async fn wait_for(rx: &mut crate::SnapshotRx, what: &str, pred: impl Fn(&EngineSnapshot) -> bool) -> Arc<EngineSnapshot> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if pred(&rx.borrow()) {
+                    return rx.borrow().clone();
+                }
+                rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for: {what}"))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dj_switches_scenes_on_a_rule_and_fills_the_snapshot() {
+        // A synthetic rule: the walk's periodic `tick` sends us to Midnight Walk for 2 s,
+        // then (cooldown keeps it from re-firing) back to the default.
+        let toml = r#"
+[dj]
+min_hold = 0
+cooldown = 600
+default = "night-freeway"
+
+[[rule]]
+name = "walk ticks"
+when = "synthetic.walk: event tick with n >= 1"
+scene = "midnight-walk"
+hold = 2
+params = { event_every = 0.3 }
+"#;
+        let scene = crate::load_scene("night-freeway").unwrap();
+        let opts = EngineOptions { dj: Some(DjOptions { toml: toml.into(), base_dir: None }), ..null_opts() };
+        let mut handle = start(scene, opts).await.unwrap();
+        let mut rx = handle.snapshot.clone();
+        let snap = wait_for(&mut rx, "the DJ to switch to Midnight Walk", |s| s.scene_name == "Midnight Walk").await;
+        let dj = snap.dj.clone().expect("snapshot.dj is filled while the DJ runs");
+        assert!(dj.enabled);
+        assert_eq!(dj.rule, "walk ticks");
+        assert!(dj.reason.starts_with("tick (n "), "{}", dj.reason);
+        assert!(dj.hold_remaining <= 2.0);
+        assert!(
+            snap.captions.iter().any(|c| c.text.starts_with("DJ → Midnight Walk: tick") && c.importance >= 0.9),
+            "{:?}",
+            snap.captions.iter().map(|c| &c.text).collect::<Vec<_>>()
+        );
+        assert_eq!(handle.reloads(), 1);
+        // The hold ends, nothing else fires: back to the default scene.
+        let snap = wait_for(&mut rx, "the DJ to return to the default", |s| s.scene_name == "Night Freeway").await;
+        let dj = snap.dj.clone().unwrap();
+        assert!(dj.rule.is_empty() && dj.reason == "quiet again", "{dj:?}");
+        assert_eq!(handle.reloads(), 2);
+        // SetDj false shows up in the snapshot; a user-picked scene pauses it.
+        handle.commands.send(UserCommand::SetDj { enabled: false }).await.unwrap();
+        let snap = wait_for(&mut rx, "the DJ to turn off", |s| s.dj.as_ref().is_some_and(|d| !d.enabled)).await;
+        assert_eq!(snap.dj.as_ref().unwrap().reason, "off");
+        handle.commands.send(UserCommand::SetDj { enabled: true }).await.unwrap();
+        wait_for(&mut rx, "the DJ to turn on", |s| s.dj.as_ref().is_some_and(|d| d.enabled)).await;
+        let bare = "name = \"Bare\"\n[[layer]]\nname = \"drone\"\nrole = \"pad\"\ninstrument = \"pad.glass\"\n";
+        handle.commands.send(UserCommand::LoadScene { toml: bare.into() }).await.unwrap();
+        let snap = wait_for(&mut rx, "the user's scene", |s| s.scene_name == "Bare" && s.dj.as_ref().is_some_and(|d| !d.enabled)).await;
+        assert!(snap.dj.as_ref().unwrap().reason.starts_with("paused"));
+        handle.commands.send(UserCommand::Quit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), &mut handle.done).await.expect("done").unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_bad_dj_config_fails_start() {
+        let scene = crate::load_scene("night-freeway").unwrap();
+        let opts = EngineOptions { dj: Some(DjOptions { toml: "[[rule]]\nname='x'\nwhen='k: event e'\nscene='no-such-scene'\n".into(), base_dir: None }), ..null_opts() };
+        let err = format!("{:#}", start(scene, opts).await.err().expect("bad dj.toml must fail"));
+        assert!(err.contains("dj.toml") && err.contains("rule `x`") && err.contains("no-such-scene"), "{err}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

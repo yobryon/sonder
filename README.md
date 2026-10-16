@@ -127,6 +127,17 @@ cd crates/sonder-desktop && cargo tauri build          # → target/release/bund
 
 The crate lives outside the workspace (see [`crates/sonder-desktop/README.md`](crates/sonder-desktop/README.md)).
 
+## Listen together: shared rooms
+
+One native engine hosts, a tiny relay fans it out, any browser joins — everyone hears the
+same performance because guests run the same scene with the same seed, fed the host's live
+data. Run the relay (`cargo run -p sonder-relay`, or the Dockerfile — a $5 VPS or Fly.io is
+plenty), host with `sonder play night-freeway --room wss://relay.example/r/my-room
+--room-name bryon`, and send people to `<site>/?room=wss://relay.example/r/my-room` (or
+press **join** in the UI). Listener count and chat show in a room panel; chat lines become
+captions; `/moment` in the chat saves the last 10 minutes as a data log when the host runs
+with `--moments <dir>`. Details: [docs/ROOMS.md](docs/ROOMS.md).
+
 ## Install as an app
 
 The hosted build is a PWA: open **https://yobryon.github.io/sonder/** and use the
@@ -215,6 +226,7 @@ with the mix (one extra render per layer).
 | `sonder sources [kind]` / `sonder instruments` | what you can point it at / what it can sound like |
 | `sonder probe <url> [-o scene.toml]` | poll a JSON endpoint and write a starter scene |
 | `sonder validate <scene>` | check a scene without running it |
+| `sonder play|serve|radio … --room <wss://relay/r/id>` | host a shared room ([docs/ROOMS.md](docs/ROOMS.md)); `sonder-relay` is the relay |
 
 Keys (TUI and web): `1-9` mute · `Shift+1-9` solo · `space` pause · `[ ]` tempo · `- =` density ·
 `k/K` transpose · `n/N` (TUI) or `m/M` (web) mode · `c` next chord · `w` open web UI · `Ctrl+S` save scene · `q` quit.

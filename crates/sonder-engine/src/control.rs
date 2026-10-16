@@ -64,6 +64,8 @@ pub struct ControlLoop {
     quit_requested: bool,
     save_requests: Vec<String>,
     sinks: Vec<Box<dyn crate::sink::CommandSink>>,
+    /// Scratch for [`CommandSink::drain_requests`].
+    sink_requests: Vec<crate::sink::SinkRequest>,
     mappings: HashMap<SourceId, crate::mapping::SourceMapping>,
     captioner: Captioner,
     /// `LoadScene` TOML waiting for the live runner (which owns the sources).
@@ -77,7 +79,24 @@ pub struct ControlLoop {
     replay: Option<Replay>,
     /// A `Seek` waiting for the next tick (needs `now`).
     pending_seek: Option<f64>,
+    /// What the DJ is doing, for the snapshot (None: no DJ running).
+    dj: Option<DjSnapshot>,
+    /// `SetDj` toggles waiting for the live runner (which owns the DJ).
+    dj_requests: Vec<bool>,
+    /// Shared-room state (chat ring, listeners) when hosting or joined; see `set_room`.
+    room: Option<RoomSnapshot>,
+    /// Chat lines said here, waiting for the room publisher.
+    outbound_chat: Vec<ChatMessage>,
+    /// `/moment` requests waiting for the live runner.
+    moment_requests: u32,
 }
+
+/// Chat lines kept in [`RoomSnapshot::chat`].
+pub const ROOM_CHAT_RING: usize = 32;
+/// Importance of a chat caption.
+pub const CHAT_CAPTION_IMPORTANCE: f64 = 0.6;
+/// Chat text that asks the host to save the last minutes as a data log.
+pub const MOMENT_COMMAND: &str = "/moment";
 
 /// The per-scene state `new` and `rebuild` both construct before touching the synth.
 struct Parts {
@@ -197,6 +216,7 @@ impl ControlLoop {
             quit_requested: false,
             save_requests: Vec::new(),
             sinks: Vec::new(),
+            sink_requests: Vec::new(),
             mappings: parts.mappings,
             captioner: parts.captioner,
             load_request: None,
@@ -204,6 +224,11 @@ impl ControlLoop {
             sample_sinks: Vec::new(),
             replay,
             pending_seek: None,
+            dj: None,
+            dj_requests: Vec::new(),
+            room: None,
+            outbound_chat: Vec::new(),
+            moment_requests: 0,
         })
     }
 
@@ -402,6 +427,21 @@ impl ControlLoop {
         self.load_request.take()
     }
 
+    /// `SetDj { enabled }` values received since the last call, in order.
+    pub fn take_dj_requests(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.dj_requests)
+    }
+
+    /// Publish the DJ's state in the snapshot (the live runner updates it every tick).
+    pub fn set_dj(&mut self, dj: Option<DjSnapshot>) {
+        self.dj = dj;
+    }
+
+    /// Add a caption at the current engine time (DJ switches, narration).
+    pub fn push_caption(&mut self, text: impl Into<String>, importance: f64) {
+        self.captioner.push(self.last_now.unwrap_or(0.0), None, text, importance);
+    }
+
     /// The names of the sources this scene needs started, with their specs — recipes
     /// expanded to their transport specs, so sources/adapters never see recipe kinds.
     pub fn source_specs(scene: &Scene) -> Vec<(SourceId, SourceSpec)> {
@@ -440,6 +480,78 @@ impl ControlLoop {
     /// Paths requested by `SaveScene` commands since last call.
     pub fn take_save_requests(&mut self) -> Vec<String> {
         std::mem::take(&mut self.save_requests)
+    }
+
+    /// Current seed (the one `rebuild` last applied).
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// Join (or host) a room: `EngineSnapshot.room` is published from now on. `role` is
+    /// "host" or "guest".
+    pub fn set_room(&mut self, id: &str, url: &str, role: &str) {
+        self.room = Some(RoomSnapshot { id: id.into(), role: role.into(), url: url.into(), ..Default::default() });
+    }
+
+    /// Leave the room (`EngineSnapshot.room` becomes `None`).
+    pub fn clear_room(&mut self) {
+        self.room = None;
+    }
+
+    pub fn room(&self) -> Option<&RoomSnapshot> {
+        self.room.as_ref()
+    }
+
+    /// Listener count reported by the relay.
+    pub fn set_room_listeners(&mut self, listeners: u32) {
+        if let Some(r) = self.room.as_mut() {
+            r.listeners = listeners;
+        }
+    }
+
+    /// Estimated clock offset to the host (guests).
+    pub fn set_room_offset(&mut self, offset: f64) {
+        if let Some(r) = self.room.as_mut() {
+            r.offset = offset;
+        }
+    }
+
+    /// A chat line arrived (from the relay or this UI): it joins the room's chat ring and
+    /// becomes a caption (`from: text`). `/moment` also asks the live runner to save the
+    /// recent data log. Returns false for blank lines, which are ignored.
+    pub fn chat_received(&mut self, mut msg: ChatMessage) -> bool {
+        msg.text = msg.text.trim().to_string();
+        if msg.text.is_empty() {
+            return false;
+        }
+        if msg.from.trim().is_empty() {
+            msg.from = "anon".into();
+        }
+        if !msg.at.is_finite() {
+            msg.at = self.last_now.unwrap_or(0.0);
+        }
+        if msg.text == MOMENT_COMMAND {
+            self.moment_requests += 1;
+        }
+        self.captioner.push(msg.at, None, format!("{}: {}", msg.from, msg.text), CHAT_CAPTION_IMPORTANCE);
+        if let Some(r) = self.room.as_mut() {
+            r.chat.push(msg);
+            if r.chat.len() > ROOM_CHAT_RING {
+                let excess = r.chat.len() - ROOM_CHAT_RING;
+                r.chat.drain(..excess);
+            }
+        }
+        true
+    }
+
+    /// Chat lines said through `UserCommand::Chat` since the last call (for the publisher).
+    pub fn take_outbound_chat(&mut self) -> Vec<ChatMessage> {
+        std::mem::take(&mut self.outbound_chat)
+    }
+
+    /// Was a `/moment` requested since the last call?
+    pub fn take_moment_request(&mut self) -> bool {
+        std::mem::take(&mut self.moment_requests) > 0
     }
 
     /// Feed one sample from a source. Sources with a mapping (recipes, `event = {..}`)
@@ -572,6 +684,9 @@ impl ControlLoop {
 
     /// Apply a UI command.
     pub fn command(&mut self, cmd: UserCommand) {
+        for sink in &mut self.sinks {
+            sink.on_user_command(&cmd);
+        }
         match &cmd {
             UserCommand::Quit => self.quit_requested = true,
             UserCommand::SaveScene { path } => self.save_requests.push(path.clone()),
@@ -579,6 +694,13 @@ impl ControlLoop {
             UserCommand::Seek { to } => {
                 if self.replay.is_some() {
                     self.pending_seek = Some(*to);
+                }
+            }
+            UserCommand::SetDj { enabled } => self.dj_requests.push(*enabled),
+            UserCommand::Chat { from, text } => {
+                let msg = ChatMessage { at: self.last_now.unwrap_or(0.0), from: from.clone(), text: text.clone() };
+                if self.chat_received(msg.clone()) {
+                    self.outbound_chat.push(msg);
                 }
             }
             UserCommand::SetSpeed { speed } => {
@@ -598,6 +720,18 @@ impl ControlLoop {
         };
         self.last_now = Some(now);
         self.tick_count = self.tick_count.wrapping_add(1);
+
+        // Sinks that steer the engine (Ableton Link following a peer's tempo).
+        self.sink_requests.clear();
+        for sink in &mut self.sinks {
+            sink.drain_requests(&mut self.sink_requests);
+        }
+        for req in std::mem::take(&mut self.sink_requests) {
+            match req {
+                crate::sink::SinkRequest::Command(cmd) => self.command(cmd),
+                crate::sink::SinkRequest::SetBarPhase(phase) => self.composer.set_bar_phase(phase),
+            }
+        }
 
         // Time travel: pending seeks first, then whatever the log has for this tick.
         if let Some(to) = self.pending_seek.take() {
@@ -709,6 +843,7 @@ impl ControlLoop {
         self.captioner.note_section(now, &snap.form.section, &snap.form.note);
         self.captioner.note_key(now, &snap.harmony.key_name, &snap.harmony.mode);
         snap.captions = self.captioner.captions().cloned().collect();
+        snap.room = self.room.clone();
         // The composer fills harmony/mood/transport and may pre-populate layers; make sure
         // every layer exists and carries our signal/meter data.
         if snap.layers.len() != self.scene.layers.len() {
@@ -744,6 +879,7 @@ impl ControlLoop {
             })
             .collect();
         snap.replay = self.replay.as_ref().map(|r| r.snapshot());
+        snap.dj = self.dj.clone();
         snap.events = self.events.iter().cloned().collect();
         snap.notes = self
             .notes
@@ -761,6 +897,9 @@ impl ControlLoop {
         // Backends report underruns through the shared atomic, not the feedback queue.
         snap.underruns = self.underruns.saturating_add(self.synth.underruns());
         snap.audio_backend = self.audio_backend.clone();
+        for sink in &mut self.sinks {
+            sink.on_snapshot(&snap);
+        }
         let _ = self.snapshot_tx.send(Arc::new(snap));
     }
 }

@@ -158,10 +158,11 @@ export class WorkerTransport extends Emitter {
       default: break;
     }
   }
-  /** Start (or restart) the engine with a scene. `seed` is a decimal string / number. */
-  start(sceneToml, seed, sampleRate = 48000) {
+  /** Start (or restart) the engine with a scene. `seed` is a decimal string / number.
+   *  `extra` is merged into the start message (`{ feed: 'room' }`: a room guest fed by the host). */
+  start(sceneToml, seed, sampleRate = 48000, extra = {}) {
     this.sampleRate = sampleRate;
-    this.worker.postMessage({ type: 'start', sceneToml, seed: seed === undefined || seed === null ? null : String(seed), sampleRate });
+    this.worker.postMessage({ type: 'start', sceneToml, seed: seed === undefined || seed === null ? null : String(seed), sampleRate, ...extra });
   }
   validate(toml) {
     const id = ++this.validateId;

@@ -1,0 +1,25 @@
+[package]
+name = "sonder-relay"
+description = "Tiny WebSocket relay for shared Sonder rooms: one host publishes, guests listen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio-tungstenite = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+
+[[bin]]
+name = "sonder-relay"
+path = "src/main.rs"

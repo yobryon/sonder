@@ -29,6 +29,8 @@ pub(crate) const FILES: &[(&str, &str, &str)] = &[
     ("/editor.js", include_str!("../static/editor.js"), JS),
     ("/timeline.js", include_str!("../static/timeline.js"), JS),
     ("/keys.js", include_str!("../static/keys.js"), JS),
+    ("/rooms.js", include_str!("../static/rooms.js"), JS),
+    ("/dj.js", include_str!("../static/dj.js"), JS),
     ("/coastlines.json", include_str!("../static/coastlines.json"), JSON),
     ("/compose.js", include_str!("../static/compose.js"), JS),
     ("/compose.css", include_str!("../static/compose.css"), "text/css; charset=utf-8"),

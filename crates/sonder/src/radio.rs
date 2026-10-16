@@ -40,6 +40,8 @@ pub struct RadioArgs {
     #[arg(long, value_name = "PATH")]
     pub record_data: Option<PathBuf>,
     #[command(flatten)]
+    pub room: super::RoomArgs,
+    #[command(flatten)]
     pub source: super::SourceOverride,
 }
 
@@ -170,6 +172,12 @@ pub async fn run(args: RadioArgs) -> anyhow::Result<()> {
         midi_port: None,
         replay: None,
         record_data: args.record_data.clone(),
+        room: args.room.config(),
+        moments: args.room.moments.clone(),
+        osc_target: None,
+        link: false,
+        dj: None,
+        narrator: None,
     };
     let mut handle = sonder_engine::start(scene, opts).await?;
     let mut audio = handle.subscribe_audio().context("engine has no audio tap")?;

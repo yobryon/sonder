@@ -33,6 +33,10 @@ pub struct RecordArgs {
     /// Only rebuild index.html from the JSON files already there.
     #[arg(long)]
     pub index_only: bool,
+    /// Also render one WAV per layer (`<date>-<layer>.wav`): deterministic solo renders
+    /// with the day's seed, listed on the album page. N extra renders for N layers.
+    #[arg(long)]
+    pub stems: bool,
 }
 
 /// One day's record, as written to `<date>.json`.
@@ -142,6 +146,13 @@ pub fn run(args: RecordArgs) -> anyhow::Result<()> {
         }
         if log_path.exists() {
             files.push(Attachment { file: log_name, label: "data log (replay it: drop onto the web UI, or `sonder replay`)".into() });
+        }
+        if args.stems {
+            eprintln!("sonder record: {} stems ({} more renders) …", scene.layers.len(), scene.layers.len());
+            for stem in sonder_engine::render_stems_to_wav(&scene, seconds, seed, &args.out, &date)? {
+                let name = stem.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                files.push(Attachment { file: name, label: format!("{} — {} stem", scene.name, stem.layer_name) });
+            }
         }
         for a in &args.attachments {
             let name = a.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -331,6 +342,7 @@ mod tests {
             attachments: vec![],
             no_wav: false,
             index_only: false,
+            stems: true,
         };
         run(args).unwrap();
         let rec: Record = serde_json::from_str(&std::fs::read_to_string(dir.join("2026-10-15.json")).unwrap()).unwrap();
@@ -345,8 +357,13 @@ mod tests {
         assert!(log.length_seconds() > 2.0, "{}", log.length_seconds());
         assert!(log.entries().iter().any(|e| matches!(e.datum, sonder_core::Datum::Reading { .. })));
         assert!(rec.files.iter().any(|f| f.file == "2026-10-15.sonder.gz"));
+        // Stems: one per layer, named after it, listed on the page.
+        assert!(dir.join("2026-10-15-traffic.wav").exists());
+        assert!(dir.join("2026-10-15-headlights.wav").exists());
+        assert!(rec.files.iter().any(|f| f.file == "2026-10-15-undertow.wav" && f.label.contains("undertow stem")));
         let index = std::fs::read_to_string(dir.join("index.html")).unwrap();
         assert!(index.contains("2026-10-15"));
+        assert!(index.contains("src=\"2026-10-15-traffic.wav\""));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

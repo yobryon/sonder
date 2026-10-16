@@ -26,6 +26,7 @@
       <select id="scene-pick" class="scenepick" title="choose a scene (restarts the engine)" hidden></select>
       <span id="seed" class="seed mono dim" title="engine seed (?seed=… to pin it)" hidden></span>
       <span id="paused" class="paused" hidden>paused</span>
+      <span id="dj" class="dj" title="the DJ switches scenes on world events (docs/DJ.md)" hidden></span>
     </div>
 
     <div class="transport" title="bar.beat · tempo">
@@ -69,6 +70,7 @@
       <button id="open-log" class="btn ghost" title="open a .sonder data log (time travel) — or drop one anywhere on the page" hidden>open log</button>
       <input id="log-file" type="file" accept=".sonder,.gz,.jsonl,application/gzip" hidden>
       <button id="share" class="btn ghost" title="copy a link that carries this scene">share</button>
+      <button id="join" class="btn ghost" title="join a shared room: listen to someone's performance together (docs/ROOMS.md)">join</button>
       <button id="edit" class="btn ghost" title="scene editor (e)">edit</button>
       <button id="help" class="btn ghost" title="keyboard shortcuts (?)">?</button>
     </div>
@@ -85,6 +87,7 @@
     <div id="captions" class="captions" aria-live="polite"></div>
     <div id="tip" class="tip" hidden></div>
     <div id="keys" class="keys" hidden></div>
+    <div id="room" class="room" hidden></div>
   </main>
 
   <aside id="editor" hidden></aside>

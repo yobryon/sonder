@@ -19,6 +19,10 @@ import { project, eventLatLon, sunPosition, nightPolygon } from './geo.js';
 import { createEditor, sceneTitle } from './editor.js';
 import { createTimeline, readLogFile, looksLikeLog, peekHeader } from './timeline.js';
 import { initKeys } from './keys.js';
+import { initDj } from './dj.js';
+let dj = null;             // header DJ pill (dj.js); updated from every snapshot
+import { initRooms } from './rooms.js';
+let rooms = null;          // shared-room panel + guest client (rooms.js)
 // The source-adapter registry is only needed in worker mode and is not served by the
 // native server, so it is imported lazily (a 404 would otherwise sink this whole module).
 let registry = null;
@@ -187,6 +191,7 @@ function ingest(snap) {
   for (const [k, n] of state.notes) if (n.at < horizon && !n.active) state.notes.delete(k);
 
   updateHeader(snap);
+  if (rooms) rooms.update(snap);
   if (timeline) timeline.update(snap.replay || null);
   if (state.tick % 2 === 0) updateLayers(snap);
   if (state.tick % 4 === 0) updateSources(snap);
@@ -237,6 +242,7 @@ function updateHeader(s) {
   $('#m-tension').style.width = `${clamp(m.tension ?? 0, 0, 1) * 100}%`;
   $('#m-brightness').style.width = `${clamp(m.brightness ?? 0, 0, 1) * 100}%`;
   setText($('#cnote'), s.conductor_note || ' ');
+  if (dj) dj.update(s);
   const f = s.form || {};
   const formEl = $('#form');
   const hasForm = !!(f.section || f.motif || f.note);
@@ -1063,7 +1069,7 @@ function startScene(scene, seed) {
     send({ cmd: 'load_scene', toml: scene.toml });
   } else {
     setConn('connecting');
-    transport.start(scene.toml, currentSeed, audio.srcRate);
+    transport.start(scene.toml, currentSeed, audio.srcRate, rooms && rooms.inRoom() ? { feed: 'room' } : {});
   }
   // Drop whatever the old engine had queued in the worklet so latency doesn't stack.
   if (audio.node) audio.node.port.postMessage({ type: 'config', srcRate: audio.srcRate, targetMs: 200, maxMs: 500 });
@@ -1158,6 +1164,16 @@ async function boot() {
   if (pwa) pwa.install({ transport, mock: MOCK, installButton: $('#install'), onPlay: startAudio, onPause: stopAudio });
   // Play-along: keyboard / Web MIDI piano for `human` layers (shown when the scene has one).
   initKeys({ root: $('#keys'), send, getSnap: () => state.snap });
+  dj = initDj({ root: $('#dj'), send });
+  // Shared rooms: a guest (?room=…) runs the host's scene fed by the host's samples; on the
+  // host's own server the panel mirrors snapshot.room.
+  rooms = initRooms({
+    root: $('#room'), joinButton: $('#join'), params, send, banner,
+    getTransport: () => transport,
+    startScene: (toml, seed) => startScene(customScene(toml, { keepHash: true }), seed),
+    pushCaption: (c) => pushCaptions(newCaptions([c], state.seenCaptions, Date.now())),
+    getEngineTime: () => (state.snap ? state.snap.time + (performance.now() - state.recvAt) / 1000 : 0),
+  });
 
   setupEditor();
   setupTimeTravel();
@@ -1195,6 +1211,7 @@ async function boot() {
   transport.on('error', ({ message }) => { banner(`engine error: ${message}`, true); setConn('closed'); });
   transport.on('ready', async ({ scenes, version }) => {
     console.info(`sonder wasm ${version}: ${scenes.length} scenes`);
+    if (rooms.active()) { transport.scenes = scenes; rooms.engineReady(); return; } // the host picks the scene
     transport.scenes = await addWebcamVariants(scenes);
     buildScenePicker(transport.scenes);
     if (linked) {

@@ -55,6 +55,11 @@ ol { margin: 0; padding: 0; list-style: none; }
 .logo { font-weight: 700; letter-spacing: .22em; text-transform: lowercase; color: var(--accent); }
 .scene { color: var(--fg); font-size: 15px; }
 .paused { color: var(--warn); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+/* DJ pill (dj.js): rule · reason · countdown + on/off */
+.dj { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-dim); border: 1px solid var(--line); border-radius: 10px; padding: 1px 4px 1px 9px; white-space: nowrap; max-width: 420px; }
+.dj.on { color: var(--accent); border-color: var(--fg-faint); }
+.dj .dj-text { overflow: hidden; text-overflow: ellipsis; }
+.dj .dj-toggle { padding: 0 6px; font-size: 10px; }
 
 .transport { display: flex; align-items: baseline; gap: 10px; }
 
@@ -276,3 +281,17 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--bg-2); border
 .kkey .kname { position: absolute; bottom: 14px; color: #7c838e; font-size: 9px; }
 .kkey.down { background: var(--accent); }
 .kkey.black.down::before { background: var(--accent); border-color: var(--accent); }
+
+/* Shared room panel (rooms.js): listeners, chat, status — floats over the stage. */
+.room { position: absolute; right: 14px; top: 14px; width: min(300px, calc(100% - 28px)); max-height: 60%; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: rgba(11, 13, 17, .86); border: 1px solid var(--line); border-radius: 8px; z-index: 4; font-size: 12px; backdrop-filter: blur(4px); }
+.room .rhead { display: flex; align-items: center; gap: 8px; }
+.room .rtitle { flex: 1; letter-spacing: .08em; text-transform: uppercase; font-size: 11px; color: var(--fg-dim); }
+.room .rtitle b { color: var(--accent); text-transform: none; letter-spacing: 0; font-size: 12px; }
+.room .rchat { flex: 1; min-height: 48px; max-height: 240px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.room .rchat li { padding: 2px 0; border-bottom: 1px solid var(--line); line-height: 1.35; word-break: break-word; }
+.room .rchat b { color: var(--fg); font-weight: 600; margin-right: 4px; }
+.room .rform { display: grid; grid-template-columns: 64px 1fr auto; gap: 6px; }
+.room .rform input { background: var(--bg-2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font-size: 12px; min-width: 0; }
+.room .rform .btn { padding: 3px 10px; }
+.room .rstatus { font-size: 10px; min-height: 12px; }
+@media (max-width: 900px) { .room { top: auto; bottom: 14px; max-height: 45%; } }
