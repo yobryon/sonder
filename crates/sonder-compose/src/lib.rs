@@ -537,6 +537,8 @@ impl Composer {
             }
             UserCommand::SaveScene { .. } | UserCommand::LoadScene { .. } | UserCommand::Quit => {}
             UserCommand::NextSection => self.form.request_next(),
+            // Replay transport lives in the engine.
+            UserCommand::Seek { .. } | UserCommand::SetSpeed { .. } => {}
         }
     }
 

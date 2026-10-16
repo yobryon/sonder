@@ -70,6 +70,7 @@ pub fn default_for_role(role: Role) -> &'static str {
         Role::Bells => "modal.bell",
         Role::Perc => "perc.kit",
         Role::Texture => "texture.wind",
+        Role::Human => "string.nylon",
     }
 }
 

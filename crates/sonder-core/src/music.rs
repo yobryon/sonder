@@ -43,10 +43,13 @@ pub enum Role {
     Perc,
     /// Unpitched bed (noise, filtered) driven by signals.
     Texture,
+    /// A person: plays `note` / `note_off` events from a human input source (MIDI,
+    /// keyboard), snapped to the harmony.
+    Human,
 }
 
 impl Role {
-    pub const ALL: [Role; 9] = [
+    pub const ALL: [Role; 10] = [
         Role::Pad,
         Role::Drone,
         Role::Bass,
@@ -56,10 +59,11 @@ impl Role {
         Role::Bells,
         Role::Perc,
         Role::Texture,
+        Role::Human,
     ];
     /// Does this role play notes in response to events (vs. on its own clock)?
     pub fn is_event_driven(self) -> bool {
-        matches!(self, Role::Pluck | Role::Bells | Role::Perc)
+        matches!(self, Role::Pluck | Role::Bells | Role::Perc | Role::Human)
     }
     pub fn name(self) -> &'static str {
         match self {
@@ -72,6 +76,7 @@ impl Role {
             Role::Bells => "bells",
             Role::Perc => "perc",
             Role::Texture => "texture",
+            Role::Human => "human",
         }
     }
 }

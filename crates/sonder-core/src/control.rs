@@ -28,5 +28,9 @@ pub enum UserCommand {
     LoadScene { toml: String },
     /// Jump to the next form section now.
     NextSection,
+    /// Replay only: seek to this many seconds into the log.
+    Seek { to: f64 },
+    /// Replay only: playback speed multiplier (1 = real time, 0 = pause).
+    SetSpeed { speed: f64 },
     Quit,
 }

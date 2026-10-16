@@ -115,6 +115,7 @@ pub fn register_window(role: Role, register: f64) -> (i32, i32) {
         Role::Bells => (72, 96), // C5–C7
         Role::Perc => (36, 60),
         Role::Texture => (36, 48), // C2–C3
+        Role::Human => (36, 96),   // C2–C7: a keyboard's range
     };
     let shift = ((register.clamp(0.0, 1.0) - 0.5) * 24.0).round() as i32;
     ((lo + shift).clamp(12, 108), (hi + shift).clamp(12, 108))
@@ -138,6 +139,8 @@ pub fn for_role(cfg: &LayerConfig) -> Box<dyn Generator> {
         Role::Pluck | Role::Bells => Box::new(hits::Hits::new(cfg.role)),
         Role::Perc => Box::new(perc::Perc::new(cfg.on_event.is_empty())),
         Role::Texture => Box::new(texture::Texture::default()),
+        // Placeholder until the v3 human generator lands: play events like a pluck.
+        Role::Human => Box::new(hits::Hits::new(Role::Pluck)),
     }
 }
 

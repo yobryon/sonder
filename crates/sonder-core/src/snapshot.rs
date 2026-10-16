@@ -126,6 +126,22 @@ pub struct Caption {
     pub importance: f64,
 }
 
+/// Replay state when the engine is fed from a data log.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ReplaySnapshot {
+    /// Log file name or title.
+    pub title: String,
+    /// Seconds into the log.
+    pub position: f64,
+    /// Log length in seconds.
+    pub length: f64,
+    pub speed: f64,
+    /// Wall-clock Unix seconds of the log's start (0 if unknown).
+    pub epoch_unix: f64,
+    /// Original scene name recorded in the log.
+    pub scene: String,
+}
+
 /// Where the piece is in its musical form.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct FormSnapshot {
@@ -159,6 +175,9 @@ pub struct EngineSnapshot {
     /// Recent captions, newest last (bounded, ~16).
     #[serde(default)]
     pub captions: Vec<Caption>,
+    /// Present when fed from a data log (time travel).
+    #[serde(default)]
+    pub replay: Option<ReplaySnapshot>,
     pub layers: Vec<LayerSnapshot>,
     pub sources: Vec<SourceSnapshot>,
     /// Most recent events, newest last (bounded, ~64).
