@@ -10,6 +10,7 @@
 //! GET  /*.js, /coastlines.json  the other UI modules app.js imports (see `assets::FILES`)
 //! GET  /api/snapshot  latest `EngineSnapshot` as JSON
 //! POST /api/validate  `{"toml": "..."}` → `{"errors": []}` (scene validation for the editor)
+//! GET  /api/scenes    built-in scenes `[{name,title,description,tags,toml}]` for the picker
 //! WS   /ws            server → snapshot JSON on every change (coalesced);
 //!                     client → `UserCommand` JSON (`{"cmd":"toggle_mute","layer":0}`)
 //! WS   /audio         server → one text header `{"sample_rate","channels","format":"s16le"}`
@@ -62,6 +63,7 @@ fn router(state: Arc<AppState>) -> Router {
     assets::routes(Router::new().route("/", get(assets::index)))
         .route("/api/snapshot", get(api_snapshot))
         .route("/api/validate", post(api_validate))
+        .route("/api/scenes", get(api_scenes))
         .route("/ws", get(ws::snapshot_ws))
         .route("/audio", get(audio::audio_ws))
         .with_state(state)
@@ -86,6 +88,33 @@ struct ValidateResponse {
 /// `validate_scene` runs. Always 200: errors are data, not failures.
 async fn api_validate(Json(req): Json<ValidateRequest>) -> Json<ValidateResponse> {
     Json(ValidateResponse { errors: validate_scene_toml(&req.toml) })
+}
+
+#[derive(serde::Serialize)]
+struct SceneEntry {
+    name: String,
+    title: String,
+    description: String,
+    tags: Vec<String>,
+    toml: String,
+}
+
+/// Built-in scenes, so the UI can offer a picker in `ws` mode (switching sends `load_scene`).
+async fn api_scenes() -> Json<Vec<SceneEntry>> {
+    let entries = sonder_engine::scenes::BUILTIN_SCENE_SOURCES
+        .iter()
+        .filter_map(|(name, src)| {
+            let scene = sonder_engine::parse_scene(src).ok()?;
+            Some(SceneEntry {
+                name: name.to_string(),
+                title: scene.name,
+                description: scene.description,
+                tags: scene.tags,
+                toml: src.to_string(),
+            })
+        })
+        .collect();
+    Json(entries)
 }
 
 /// Parse + validate a scene TOML; empty when valid.

@@ -20,8 +20,9 @@ struct Cli {
     /// Write logs to this file instead of stderr (recommended with the TUI).
     #[arg(long, global = true)]
     log_file: Option<PathBuf>,
+    /// Subcommand; with none, `play` starts the default scene.
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -203,9 +204,24 @@ impl SourceOverride {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    init_logging(&cli.log, cli.log_file.as_deref(), matches!(cli.cmd, Cmd::Play(_)))?;
+    // Bare `sonder` = play the default scene.
+    let cmd = match cli.cmd {
+        Some(c) => c,
+        None => Cli::parse_from(["sonder", "play"]).cmd.expect("play subcommand"),
+    };
+    // The TUI needs a real terminal; without one (piped, launched from a GUI, CI) `play`
+    // becomes `serve` so the web UI still works instead of failing on raw mode.
+    let has_tty = std::io::IsTerminal::is_terminal(&std::io::stdin()) && std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let cmd = match cmd {
+        Cmd::Play(args) if !has_tty => {
+            eprintln!("sonder: no terminal for the TUI — running headless; use the web UI");
+            Cmd::Serve(args)
+        }
+        other => other,
+    };
+    init_logging(&cli.log, cli.log_file.as_deref(), matches!(cmd, Cmd::Play(_)))?;
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    match cli.cmd {
+    match cmd {
         Cmd::Play(args) => rt.block_on(async {
             let scene = sonder_engine::load_scene(&args.scene)?;
             play(scene, args, true, None).await

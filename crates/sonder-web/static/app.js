@@ -132,6 +132,14 @@ function newEvents(events, seen) {
 }
 
 function ingest(snap) {
+  // ws mode: the engine owns the scene; keep the picker in step when it changes
+  // (hot reload, --watch, a linked scene).
+  if (transport && transport.mode === 'ws' && snap && snap.scene_name && snap.scene_name !== lastWsScene) {
+    lastWsScene = snap.scene_name;
+    const pick = $('#scene-pick');
+    const match = (transport.scenes || []).find((x) => x.title === snap.scene_name);
+    if (pick && match) { pick.value = match.name; currentScene = match; if (editor) editor.setToml(match.toml, match.name); }
+  }
   state.snap = snap;
   state.recvAt = performance.now();
   state.tick++;
@@ -1050,9 +1058,13 @@ function startScene(scene, seed) {
   currentSeed = seed ?? String(Math.floor(Math.random() * 2 ** 48));
   resetClient();
   stopMainAdapters();
-  setConn('connecting');
   banner('');
-  transport.start(scene.toml, currentSeed, audio.srcRate);
+  if (transport.mode === 'ws') {
+    send({ cmd: 'load_scene', toml: scene.toml });
+  } else {
+    setConn('connecting');
+    transport.start(scene.toml, currentSeed, audio.srcRate);
+  }
   // Drop whatever the old engine had queued in the worklet so latency doesn't stack.
   if (audio.node) audio.node.port.postMessage({ type: 'config', srcRate: audio.srcRate, targetMs: 200, maxMs: 500 });
   const pick = $('#scene-pick');
@@ -1071,6 +1083,7 @@ function startScene(scene, seed) {
 
 // --- scene editor, share links, URL scenes ---------------------------------
 let editor = null;
+let lastWsScene = '';
 const customScene = (toml, extra = {}) => ({ name: '__custom', title: sceneTitle(toml), toml, custom: true, tags: [], ...extra });
 
 async function validateToml(toml) {
@@ -1152,6 +1165,12 @@ async function boot() {
 
   if (transport.mode === 'ws') {
     if (transport.probe && !state.snap) ingest(transport.probe);
+    // The native engine hot-reloads scenes, so the picker works here too: choosing one
+    // sends `load_scene` with its TOML.
+    try {
+      const scenes = await fetch('api/scenes').then((r) => (r.ok ? r.json() : []));
+      if (scenes.length) { transport.scenes = scenes; buildScenePicker(scenes); }
+    } catch { /* older server without /api/scenes: the picker stays hidden */ }
     if (linked) {
       // A link with a scene in it asks the native engine to hot-reload into that scene.
       editor.setToml(linked, '');
