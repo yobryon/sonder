@@ -28,6 +28,7 @@ pub(crate) const FILES: &[(&str, &str, &str)] = &[
     ("/geo.js", include_str!("../static/geo.js"), JS),
     ("/editor.js", include_str!("../static/editor.js"), JS),
     ("/timeline.js", include_str!("../static/timeline.js"), JS),
+    ("/keys.js", include_str!("../static/keys.js"), JS),
     ("/coastlines.json", include_str!("../static/coastlines.json"), JSON),
     ("/compose.js", include_str!("../static/compose.js"), JS),
     ("/compose.css", include_str!("../static/compose.css"), "text/css; charset=utf-8"),
@@ -64,4 +65,32 @@ pub(crate) fn routes<S: Clone + Send + Sync + 'static>(mut router: Router<S>) ->
         );
     }
     router
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every relative module import in the static JS must be served in ws mode, or the
+    /// whole page module fails to load (a 404 on one import = a blank UI).
+    #[test]
+    fn every_static_import_is_served() {
+        let served: Vec<&str> = FILES.iter().map(|(p, _, _)| p.trim_start_matches('/')).collect();
+        let mut missing = Vec::new();
+        for (path, body, _) in FILES {
+            if !path.ends_with(".js") && !path.ends_with(".html") {
+                continue;
+            }
+            for cap in body.split("from './").skip(1).chain(body.split("import('./").skip(1)).chain(body.split("src=\"").skip(1)) {
+                let name: String = cap.chars().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/')).collect();
+                let name = name.trim_start_matches("./");
+                // `sources/*` (browser adapters) and `pkg/*` (wasm) are worker-mode only and
+                // imported lazily; everything else must be here.
+                if name.ends_with(".js") && !served.contains(&name) && !name.starts_with("pkg/") && !name.starts_with("sources/") {
+                    missing.push(format!("{path} imports {name}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "not served in ws mode:\n  {}", missing.join("\n  "));
+    }
 }

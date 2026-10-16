@@ -130,6 +130,14 @@ export class WorkerTransport extends Emitter {
   open() {
     this.emit('status', 'connecting');
     const w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    // A worker whose engine never loads (e.g. this page is served by something that has no
+    // pkg/, or the import failed) would otherwise sit at "connecting" forever.
+    this.readyTimer = setTimeout(() => {
+      if (!this.ready) {
+        this.emit('error', { message: 'the browser engine did not load (no pkg/ next to this page?) — if a Sonder server is running, reload with ?mode=ws' });
+        this.emit('status', 'closed');
+      }
+    }, 8000);
     w.onmessage = (ev) => this.onMessage(ev.data);
     w.onerror = (e) => { this.emit('error', { message: e.message || 'worker error' }); this.emit('status', 'closed'); };
     w.postMessage({ type: 'init', engine: this.engineUrl });
@@ -138,7 +146,7 @@ export class WorkerTransport extends Emitter {
   }
   onMessage(m) {
     switch (m.type) {
-      case 'ready': this.ready = true; this.scenes = m.scenes; this.version = m.version; this.emit('ready', m); break;
+      case 'ready': this.ready = true; clearTimeout(this.readyTimer); this.scenes = m.scenes; this.version = m.version; this.emit('ready', m); break;
       case 'started': this.started = true; this.sampleRate = m.sampleRate; this.emit('started', m); this.emit('status', 'live'); break;
       case 'snapshot': try { this.emit('snapshot', JSON.parse(m.json)); } catch (e) { console.warn('bad snapshot', e); } break;
       case 'audio': if (this.audioOn) this.emit('audio', m.data, m.sampleRate); break;
@@ -176,7 +184,14 @@ export class WorkerTransport extends Emitter {
  */
 export async function connect({ mode, engine } = {}) {
   let probe = null;
-  if (mode !== 'worker') probe = await probeServer();
+  // A native server may still be starting when the page loads (sonder play opens the
+  // browser immediately), so give it a few tries before deciding there is none.
+  if (mode !== 'worker') {
+    for (let attempt = 0; attempt < 4 && !probe; attempt++) {
+      if (attempt) await new Promise((r) => setTimeout(r, 600));
+      probe = await probeServer();
+    }
+  }
   const chosen = chooseMode(mode, !!probe);
   const t = chosen === 'ws' ? new WsTransport() : new WorkerTransport({ engine });
   t.probe = probe;

@@ -1169,7 +1169,13 @@ async function boot() {
     // sends `load_scene` with its TOML.
     try {
       const scenes = await fetch('api/scenes').then((r) => (r.ok ? r.json() : []));
-      if (scenes.length) { transport.scenes = scenes; buildScenePicker(scenes); }
+      if (scenes.length) {
+        transport.scenes = scenes;
+        buildScenePicker(scenes);
+        // Reflect the scene already playing (the picker must not look like a choice we made).
+        const running = state.snap?.scene_name && scenes.find((x) => x.title === state.snap.scene_name);
+        if (running) { $('#scene-pick').value = running.name; currentScene = running; lastWsScene = running.title; if (editor) editor.setToml(running.toml, running.name); }
+      }
     } catch { /* older server without /api/scenes: the picker stays hidden */ }
     if (linked) {
       // A link with a scene in it asks the native engine to hot-reload into that scene.
