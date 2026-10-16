@@ -910,6 +910,29 @@ async fn compose(args: ComposeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Resolves on Ctrl-C or SIGTERM (systemd stop, `timeout`), so data logs flush cleanly.
+pub(crate) async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(t) => t,
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = term.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+
 #[cfg(test)]
 mod compose_tests {
     use super::*;
@@ -1022,25 +1045,3 @@ mod compose_tests {
     }
 }
 
-
-/// Resolves on Ctrl-C or SIGTERM (systemd stop, `timeout`), so data logs flush cleanly.
-pub(crate) async fn stop_signal() {
-    #[cfg(unix)]
-    {
-        let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(t) => t,
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-                return;
-            }
-        };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            _ = term.recv() => {},
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}
