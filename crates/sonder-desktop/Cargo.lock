@@ -3982,6 +3982,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",
+ "futures",
  "hound",
  "midir",
  "parking_lot",
@@ -3999,6 +4000,7 @@ dependencies = [
  "sonder-vision",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "toml 1.1.8+spec-1.1.0",
  "tracing",
 ]
