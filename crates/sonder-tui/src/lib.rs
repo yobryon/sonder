@@ -82,6 +82,8 @@ pub enum Action {
     OctaveShift(i32),
     /// Replay: move the log position by this many seconds.
     SeekBy(f64),
+    /// Turn the DJ on / off (needs `--dj`).
+    ToggleDj,
     /// Replay: multiply the playback speed by this factor.
     SpeedBy(f64),
     /// Nothing bound.
@@ -163,6 +165,7 @@ pub fn map_key(key: &KeyEvent) -> Action {
         KeyCode::Char('m') => Action::MuteSelected,
         KeyCode::Char('s') => Action::SoloSelected,
         KeyCode::Char('w') => Action::OpenWeb,
+        KeyCode::Char('D') => Action::ToggleDj,
         KeyCode::Char('p') => Action::TogglePlay,
         KeyCode::Char(',') => Action::SeekBy(-10.0),
         KeyCode::Char('.') => Action::SeekBy(10.0),
@@ -315,6 +318,15 @@ async fn event_loop(
                             state.octave = (state.octave + d).clamp(0, 8);
                             state.flash(format!("octave {} (low C = {})", state.octave, sonder_core::midi_name(12 * (state.octave + 1))));
                         }
+                        Action::ToggleDj => match &current.dj {
+                            Some(d) => {
+                                let enabled = !d.enabled;
+                                if send_command(&commands, &mut state, UserCommand::SetDj { enabled }) {
+                                    state.flash(if enabled { "DJ on" } else { "DJ off" });
+                                }
+                            }
+                            None => state.flash("no DJ running (start with --dj)"),
+                        },
                         Action::OpenWeb => match web_url {
                             Some(url) => {
                                 if open_url(url) {

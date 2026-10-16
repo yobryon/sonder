@@ -40,7 +40,7 @@ const ROLL_MIDI: (f64, f64) = (36.0, 96.0);
 
 /// Static part of the footer legend.
 pub const KEY_LEGEND: &str =
-    "q quit · space pause · [ ] tempo · - = density · k/K transpose · o/O mode · c chord · n section · m/s mute/solo · p play · , . seek · < > speed · ^s save · w web · ? help";
+    "q quit · space pause · [ ] tempo · - = density · k/K transpose · o/O mode · c chord · n section · m/s mute/solo · p play · , . seek · < > speed · D dj · ^s save · w web · ? help";
 
 /// Footer legend while play-along mode is on.
 pub const PLAY_LEGEND: &str =
@@ -150,6 +150,26 @@ fn draw_top(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
                 .fg(Color::Black)
                 .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    if let Some(d) = &snap.dj {
+        let text = if !d.enabled {
+            " DJ off ".to_string()
+        } else {
+            let mut t = format!(" DJ · {}", if d.rule.is_empty() { "watching" } else { &d.rule });
+            if !d.reason.is_empty() && d.reason != "watching" {
+                t.push_str(&format!(" · {}", d.reason));
+            }
+            if !d.candidate.is_empty() {
+                t.push_str(&format!(" · next: {}", d.candidate));
+            }
+            t.push_str(&format!(" · {} ", fmt_time(d.hold_remaining)));
+            t
+        };
+        spans.push(Span::styled(
+            text,
+            Style::default().fg(Color::Black).bg(if d.enabled { Color::Indexed(114) } else { Color::DarkGray }),
         ));
         spans.push(Span::raw(" "));
     }
@@ -901,9 +921,9 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, web_url: Option<&str>) {
         ("o / O", "next / previous mode"),
         ("c", "force chord change"),
         ("n", "jump to the next form section"),
-        (", / .", "replay: seek -10 / +10 s"),
-        ("< / >", "replay: speed ÷2 / ×2"),
+        (", . / < >", "replay: seek -10/+10 s, ÷2/×2"),
         ("w", "open the web UI in a browser"),
+        ("D", "DJ on / off (needs --dj)"),
         ("p", "play along: letters become a two-octave piano (scene needs a human layer)"),
         ("Ctrl-S", "save the current scene to <scene>.toml"),
         ("?", "toggle this help"),
@@ -1199,6 +1219,25 @@ mod tests {
         let mut none = fake_snapshot();
         none.layers.clear();
         let _ = render(120, 40, &none, &mut state);
+    }
+
+    #[test]
+    fn renders_the_dj_line() {
+        let mut state = UiState::new();
+        let mut snap = fake_snapshot();
+        snap.dj = Some(sonder_core::DjSnapshot {
+            enabled: true,
+            rule: "big quake".into(),
+            reason: "M5.8 near Tonga".into(),
+            hold_remaining: 125.0,
+            candidate: "storm".into(),
+        });
+        state.ingest(&snap);
+        let text = render(140, 30, &snap, &mut state);
+        assert!(text.contains("DJ · big quake · M5.8 near Tonga · next: storm · 2:05"), "{text}");
+        snap.dj.as_mut().unwrap().enabled = false;
+        let text = render(140, 30, &snap, &mut state);
+        assert!(text.contains("DJ off"), "{text}");
     }
 
     #[test]

@@ -1,0 +1,36 @@
+# Sonder's built-in DJ — rules that switch the scene when something happens in the world.
+# `sonder play --dj` uses this file; `--dj my.toml` replaces it. See docs/DJ.md.
+#
+# A rule's `when` is one condition over a source kind the DJ watches on its own,
+# whatever scene is playing:
+#   "<kind>: event <name> [with <attr> <op> <value>]"
+#   "<kind>: reading <channel> <op> <value> [for <seconds>]"
+# Ops: < <= > >= == !=. Values are numbers, or 'quoted text' for == / != on text attributes.
+# `params` passes source parameters to the watcher (defaults otherwise).
+
+[dj]
+min_hold = 600               # a scene plays at least this long before the DJ may switch
+cooldown = 1800              # the same rule waits this long before firing again
+default = "social-firehose"  # where to go back to once a rule's hold is over
+
+[[rule]]
+name = "big quake"
+when = "usgs.earthquakes: event quake with mag >= 5.5"
+scene = "seismic"
+hold = 900
+priority = 10
+params = { feed = "all_hour", min_magnitude = 4.0 }
+
+[[rule]]
+name = "storm nearby"
+when = "blitzortung.lightning: reading rate > 2 for 30"
+scene = "storm"
+hold = 600
+priority = 5
+
+[[rule]]
+name = "geomagnetic storm"
+when = "noaa.space-weather: reading kp >= 6"
+scene = "planet-tonight"
+hold = 900
+priority = 3
