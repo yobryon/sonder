@@ -106,11 +106,22 @@ CPU or a camera) with the web UI in a window, built with Tauri. Download the ins
 Linux (AppImage/deb), macOS (dmg) or Windows (msi/exe) from the
 [Releases](https://github.com/yobryon/sonder/releases) page — they are built by
 `.github/workflows/desktop.yml` on every `v*` tag. Menu: pick a built-in scene, open a scene
-file, toggle native audio, open the UI in a browser. To build it yourself:
+file, toggle native audio, open the UI in a browser.
+
+To run it from source you only need Rust — the app is an ordinary cargo binary:
 
 ```
-sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev   # Linux only
-cargo install tauri-cli --version "^2" --locked      # or: npm i -g @tauri-apps/cli
+# Linux prerequisites (Windows and macOS need nothing beyond Rust; Windows uses the built-in WebView2):
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev
+cd crates/sonder-desktop
+cargo run --release                                    # builds and opens the app
+```
+
+Installers (AppImage/deb, dmg, msi) additionally need the Tauri CLI, which is a separate
+tool (`cargo tauri` is not part of cargo until you install it):
+
+```
+cargo install tauri-cli --version "^2" --locked        # ~10 min; or: npm i -g @tauri-apps/cli
 cd crates/sonder-desktop && cargo tauri build          # → target/release/bundle/
 ```
 

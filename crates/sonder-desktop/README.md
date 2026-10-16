@@ -30,8 +30,11 @@ sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchel
 
 cd crates/sonder-desktop
 cargo check                      # typecheck
-cargo tauri dev                  # run (cargo install tauri-cli --version "^2", or npm i -g @tauri-apps/cli)
-cargo tauri build                # installers under target/release/bundle/
+cargo run --release              # run — no Tauri CLI needed; this is a normal cargo binary
+cargo tauri build                # installers under target/release/bundle/ — needs the CLI first:
+                                 #   cargo install tauri-cli --version "^2" --locked  (or npm i -g @tauri-apps/cli)
+                                 # `cargo tauri` is not a built-in cargo command; without the install it says "no such command"
+cargo tauri dev                  # hot-reloading dev run (also needs the CLI)
 ```
 
 Release builds for Linux (AppImage, deb), macOS (dmg) and Windows (msi, nsis) are made by
