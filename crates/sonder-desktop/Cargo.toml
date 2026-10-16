@@ -1,0 +1,40 @@
+# The Sonder desktop app: a Tauri 2 window around the native engine + the embedded web UI.
+#
+# This crate is EXCLUDED from the root workspace (see `exclude` in ../../Cargo.toml): Tauri
+# needs webkit2gtk / appindicator system libraries that a normal `cargo build --workspace`
+# must not require. It references the sibling crates by path and is built on its own:
+#
+#   cd crates/sonder-desktop && cargo tauri build       # or `cargo check` to typecheck
+#
+# CI builds it for Linux/macOS/Windows: .github/workflows/desktop.yml.
+[package]
+name = "sonder-desktop"
+description = "Sonder desktop app (Tauri): native engine + the web UI in a window"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/yobryon/sonder"
+publish = false
+
+[[bin]]
+name = "sonder-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+sonder-core = { path = "../sonder-core" }
+sonder-engine = { path = "../sonder-engine", default-features = false, features = ["native-audio", "midi"] }
+sonder-web = { path = "../sonder-web" }
+tauri = { version = "2.12", features = ["tray-icon"] }
+tauri-plugin-dialog = "2.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

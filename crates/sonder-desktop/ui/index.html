@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- Splash shown while the native engine starts; the window then navigates to the embedded
+     web UI at http://127.0.0.1:<port>/ (see src/main.rs). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sonder</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #07080a; color: #7c838e;
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+  .logo { font-size: 28px; font-weight: 600; letter-spacing: .18em; color: #e8c88a; }
+  #err { color: #e2635a; max-width: 60ch; white-space: pre-wrap; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <div class="logo">sonder</div>
+  <div id="msg">starting the engine…</div>
+  <div id="err"></div>
+</main>
+</body>
+</html>

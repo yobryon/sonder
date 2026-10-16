@@ -27,7 +27,21 @@ pub(crate) const FILES: &[(&str, &str, &str)] = &[
     ("/roll.js", include_str!("../static/roll.js"), JS),
     ("/geo.js", include_str!("../static/geo.js"), JS),
     ("/editor.js", include_str!("../static/editor.js"), JS),
+    ("/timeline.js", include_str!("../static/timeline.js"), JS),
     ("/coastlines.json", include_str!("../static/coastlines.json"), JSON),
+    ("/compose.js", include_str!("../static/compose.js"), JS),
+    ("/compose.css", include_str!("../static/compose.css"), "text/css; charset=utf-8"),
+    ("/pwa.js", include_str!("../static/pwa.js"), JS),
+    ("/manifest.webmanifest", include_str!("../static/manifest.webmanifest"), "application/manifest+json"),
+    ("/icons/icon.svg", include_str!("../static/icons/icon.svg"), "image/svg+xml"),
+];
+
+/// Binary assets (icons) for `ws` mode, so the manifest and Media Session artwork resolve.
+pub(crate) const BINARY_FILES: &[(&str, &[u8], &str)] = &[
+    ("/icons/icon-192.png", include_bytes!("../static/icons/icon-192.png"), "image/png"),
+    ("/icons/icon-512.png", include_bytes!("../static/icons/icon-512.png"), "image/png"),
+    ("/icons/maskable-512.png", include_bytes!("../static/icons/maskable-512.png"), "image/png"),
+    ("/icons/apple-touch-icon.png", include_bytes!("../static/icons/apple-touch-icon.png"), "image/png"),
 ];
 
 fn static_response(body: &'static str, content_type: &'static str) -> Response {
@@ -42,6 +56,12 @@ pub(crate) async fn index() -> Response {
 pub(crate) fn routes<S: Clone + Send + Sync + 'static>(mut router: Router<S>) -> Router<S> {
     for &(path, body, ct) in FILES {
         router = router.route(path, get(move || async move { static_response(body, ct) }));
+    }
+    for &(path, body, ct) in BINARY_FILES {
+        router = router.route(
+            path,
+            get(move || async move { ([(CONTENT_TYPE, ct), (CACHE_CONTROL, "max-age=86400")], body).into_response() }),
+        );
     }
     router
 }

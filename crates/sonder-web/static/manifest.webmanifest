@@ -1,0 +1,20 @@
+{
+  "id": "./",
+  "name": "Sonder",
+  "short_name": "Sonder",
+  "description": "A realtime generative music engine that listens to the world: live public data streams become an evolving piece of music, entirely in your browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07080a",
+  "theme_color": "#07080a",
+  "lang": "en",
+  "categories": ["music", "entertainment"],
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

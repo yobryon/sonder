@@ -1,0 +1,127 @@
+# The Sonder desktop app (crates/sonder-desktop, Tauri 2).
+#
+# - `check`: `cargo check` of the crate on every push to main / PR — cheap, catches Rust
+#   errors in the Tauri glue (which cannot be compiled on a box without webkit2gtk).
+# - `build`: on a `v*` tag or by hand, build installers for Linux (AppImage + deb), macOS
+#   (dmg, Apple-silicon and Intel) and Windows (msi + nsis), upload them as artifacts and,
+#   on a tag, attach them to the GitHub release.
+#
+# The crate is excluded from the root workspace (see the root Cargo.toml), so every cargo
+# command here runs inside crates/sonder-desktop.
+name: desktop
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "crates/**"
+      - "scenes/**"
+      - "recipes/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "crates/sonder-desktop/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: cargo check (ubuntu)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tauri + engine system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-check
+          workspaces: crates/sonder-desktop
+      - name: cargo check
+        working-directory: crates/sonder-desktop
+        run: cargo check --locked
+      - name: cargo test (engine lifecycle, silent backend)
+        working-directory: crates/sonder-desktop
+        run: cargo test --locked
+
+  build:
+    name: build (${{ matrix.name }})
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-24.04
+            args: ""
+          - name: macos-arm64
+            os: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - name: macos-x86_64
+            os: macos-latest
+            args: "--target x86_64-apple-darwin"
+          - name: windows
+            os: windows-latest
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.name == 'macos-arm64' && 'aarch64-apple-darwin' || matrix.name == 'macos-x86_64' && 'x86_64-apple-darwin' || '' }}
+
+      - name: Tauri + engine system deps (Linux)
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ matrix.name }}
+          workspaces: crates/sonder-desktop
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The prebuilt npm CLI installs in seconds; `cargo install tauri-cli` takes ~10 min.
+      - name: Install the Tauri CLI
+        run: npm install -g @tauri-apps/cli@^2
+
+      - name: tauri build
+        working-directory: crates/sonder-desktop
+        run: tauri build --ci ${{ matrix.args }}
+
+      - name: Collect bundles
+        shell: bash
+        working-directory: crates/sonder-desktop
+        run: |
+          mkdir -p ../../dist
+          find target -path '*/release/bundle/*' -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' \) -exec cp {} ../../dist/ \;
+          ls -la ../../dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonder-desktop-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

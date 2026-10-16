@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# The Tauri desktop app is built on its own (CI: .github/workflows/desktop.yml). It needs
+# webkit2gtk/appindicator system libraries that a plain `cargo build --workspace` must not
+# require, so it is excluded here and references the sibling crates by path.
+exclude = ["crates/sonder-desktop"]
 
 [workspace.package]
 version = "0.1.0"
@@ -61,6 +65,8 @@ debug = 1
 
 [profile.dev]
 opt-level = 1
+debug = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
