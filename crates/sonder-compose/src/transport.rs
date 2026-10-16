@@ -77,6 +77,27 @@ impl Transport {
         self.bpm = (self.bpm + delta).clamp(lo, hi);
     }
 
+    /// Move the position within the bar to `phase` beats (0 ≤ phase < beats per bar) by
+    /// the smallest signed shift. The jump fires nothing: `prev_beats` is set to the new
+    /// position, so grid points between the old and new positions are neither replayed
+    /// nor caught up. For coarse alignment to an external clock (Ableton Link).
+    pub fn set_bar_phase(&mut self, phase: f64) {
+        let bpb = self.beats_per_bar as f64;
+        if !phase.is_finite() {
+            return;
+        }
+        let want = phase.rem_euclid(bpb);
+        let have = self.beats.rem_euclid(bpb);
+        let mut delta = want - have;
+        if delta > bpb / 2.0 {
+            delta -= bpb;
+        } else if delta < -bpb / 2.0 {
+            delta += bpb;
+        }
+        self.beats = (self.beats + delta).max(0.0);
+        self.prev_beats = self.beats;
+    }
+
     pub fn bpm(&self) -> f64 {
         self.bpm
     }
@@ -221,6 +242,20 @@ mod tests {
         assert_eq!(t.grid_points(0.5), vec![0.0, 0.5, 1.0]);
         t.tick(0.02, 0.5);
         assert!(t.grid_points(0.5).is_empty());
+    }
+
+    #[test]
+    fn bar_phase_snaps_by_the_shortest_way() {
+        let mut t = Transport::new(&cfg());
+        t.tick(10.0, 0.5); // 10 beats: bar 2, beat 2
+        t.set_bar_phase(2.5);
+        assert!((t.beats() - 10.5).abs() < 1e-9, "{}", t.beats());
+        assert_eq!(t.prev_beats(), t.beats());
+        t.set_bar_phase(0.0); // 10.5 → 12.0 is 1.5 forward; 8.0 is 2.5 back
+        assert!((t.beats() - 12.0).abs() < 1e-9, "{}", t.beats());
+        t.set_bar_phase(3.9); // 12.0 → 11.9 (0.1 back) rather than 15.9
+        assert!((t.beats() - 11.9).abs() < 1e-9, "{}", t.beats());
+        assert!(t.grid_points(0.5).is_empty(), "a jump fires nothing");
     }
 
     #[test]

@@ -268,9 +268,16 @@ Recorded after implementation so the contract above and the code agree.
 - **sonder-audio**: `SynthController::take_tap()` hands the tap to the engine (the pair
   constructor does not return it separately); `native_default_sample_rate()` lets the engine
   build the synth at the device's rate.
-- **sonder-engine**: adds `sink::CommandSink` (observers of the command stream) and `midi::
-  MidiOut` (feature `midi`, default on; `--midi <port>` / `--midi virtual`, `sonder
-  midi-ports`). Offline render runs sources + control + synth in lockstep inside a
+- **sonder-engine**: adds `sink::CommandSink` (observers of the command stream, with
+  default no-op hooks `on_snapshot` / `on_user_command` / `drain_requests` so a sink can
+  read engine state and steer the transport) and `midi::MidiOut` (feature `midi`, default
+  on; `--midi <port>` / `--midi virtual`, `sonder midi-ports`), `osc::OscOut` (feature
+  `osc`, default on; `--osc host:port`, docs/OSC.md) and `link::LinkSync` (feature `link`,
+  off by default; `--link`: Ableton Link via `rusty_link` — alone Sonder pushes tempo and
+  bar phase to the session, with peers it nudges its tempo to the session's and snaps bar
+  phase at bar boundaries through `Composer::set_bar_phase`). `render::render_stem` /
+  `render_stems_to_wav` make per-layer solo renders by issuing `ToggleMute` for every other
+  layer at t = 0 (`RenderOptions::commands_at`); `--stems` on `render` and `record`. Offline render runs sources + control + synth in lockstep inside a
   `start_paused` tokio runtime driving a `VirtualClock`; renders of offline scenes are
   bit-identical for a seed (tested). Live mode falls back from native audio to a silent
   real-time clock so the web UI still carries sound.

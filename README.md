@@ -191,6 +191,19 @@ MIDI out: `sonder midi-ports`, then `sonder play <scene> --midi <port>` (or `--m
 to create a port a DAW can connect to). Melodic layers get one channel each; percussion
 layers play GM drums on channel 10.
 
+OSC out: `sonder play <scene> --osc 127.0.0.1:9000` sends notes, drums, layer params,
+signals, harmony, form and mood as OSC bundles (TouchDesigner, Max, SuperCollider…) — see
+[docs/OSC.md](docs/OSC.md).
+
+Ableton Link: `sonder play <scene> --link` shares tempo and beat phase with Link peers on
+the LAN (alone Sonder leads; with peers it follows the session). Needs a build with
+`cargo build --features link` (compiles the C++ Link library and generates its bindings: cmake, a C++
+compiler and libclang, e.g. `apt install cmake g++ libclang-dev`).
+
+Stems: `sonder render <scene> --stems` and `sonder record --stems` also write one WAV per
+layer (`<name>-<layer>.wav`): deterministic solo renders from the same seed, so they line up
+with the mix (one extra render per layer).
+
 ## Commands
 
 | | |

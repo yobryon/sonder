@@ -1,0 +1,120 @@
+# Body — you are the instrument.
+#
+# Stand in front of the webcam. The tracker runs in motion mode: whatever moves against
+# the still background becomes a blob, and the picture is cut into three pitch zones
+# (`lanes = 3`: left, centre, right).
+#
+#   * how much you move (`motion`)       → the pad's energy and brightness
+#   * how many of you move (`blobs`)     → density
+#   * where a gesture ends (`blob` x)    → pan, and its zone picks the register
+#   * every finished gesture             → a pluck (snapped to the chord)
+#   * fast movement (`speed`)            → percussion
+#
+# Browser: open the web UI and click “camera” (the `webcam` URL is the page's own
+# webcam; the frames are downscaled to 160 px and capped at 15 fps before the tracker).
+# Native, pipe a webcam in as MJPEG instead (see docs/OVERPASS.md):
+#   ffmpeg -f v4l2 -i /dev/video0 -vf scale=320:-1 -r 15 -f mjpeg - \
+#     | sonder play body --source camera.mjpeg -p url=- -p mode=motion -p lanes=3
+
+name = "Body"
+description = "Your webcam, motion mode: move to play. Left, centre and right are pitch zones."
+tags = ["interactive", "camera", "play-along"]
+viz = "freeway"
+
+[conductor]
+key = "A"
+mode = "dorian"
+tempo = 84
+tempo_range = [72, 100]
+drift = "slow"
+progression = "modal"
+bars_per_chord = 2
+mood_smoothing = 8
+mood_baseline = [0.3, 0.2, 0.5]
+humanize = 0.15
+
+[effects.reverb]
+size = 0.8
+damping = 0.4
+level = 0.8
+
+[effects.delay]
+beats = 0.5
+feedback = 0.35
+
+# ── presence: the whole frame ─────────────────────────────────────────────────
+
+[[layer]]
+name = "presence"
+role = "pad"
+instrument = "pad.glass"
+source = { kind = "camera.mjpeg", url = "webcam", mode = "motion", lanes = 3, fps_cap = 15 }
+signals.motion  = "norm(smooth(field('motion'), 1.5))"
+signals.bodies  = "norm(smooth(field('blobs'), 3))"
+signals.speed   = "norm(smooth(field('mean_speed'), 1))"
+map.energy      = "0.3 + 0.7 * motion"
+map.brightness  = "motion"
+map.density     = "0.2 + 0.8 * bodies"
+map.cutoff      = "0.25 + 0.7 * motion"
+map.register    = "0.4 + 0.3 * speed"
+map.reverb      = "0.7 - 0.3 * motion"
+map.volume      = "0.5 + 0.4 * motion"
+
+# ── gesture: each movement that ends is a note; left/centre/right pick the octave ──
+
+[[layer]]
+name = "gesture"
+role = "pluck"
+instrument = "pluck.glass"
+source = "presence"
+signals.motion = "norm(smooth(field('motion'), 1.5))"
+map.register   = "0.3 + 0.4 * motion"
+map.volume     = "0.8"
+on_event.blob.pitch    = "0.15 + 0.35 * attr('lane') + 0.2 * (1 - attr('y'))"
+on_event.blob.velocity = "0.35 + 0.65 * clamp(attr('speed'), 0, 1)"
+on_event.blob.pan      = "attr('x')"
+on_event.blob.length   = "0.3 + 1.5 * clamp(attr('size'), 0, 1)"
+on_event.blob.quantize = "1/16"
+on_event.blob.snap     = "chord"
+
+# ── pulse: fast movement is percussion ────────────────────────────────────────
+
+[[layer]]
+name = "pulse"
+role = "perc"
+instrument = "perc.kit"
+source = "presence"
+signals.speed = "norm(smooth(field('mean_speed'), 1))"
+signals.motion = "norm(smooth(field('motion'), 1))"
+map.density   = "0.3 * motion + 0.7 * speed"
+map.volume    = "0.4 + 0.5 * speed"
+on_event.blob.chance   = "step(0.6, clamp(attr('speed'), 0, 1))"
+on_event.blob.drum     = "hat"
+on_event.blob.velocity = "0.3 + 0.7 * clamp(attr('speed'), 0, 1)"
+on_event.blob.pan      = "attr('x')"
+on_event.blob.quantize = "1/16"
+
+# ── ground: more people, more bass ────────────────────────────────────────────
+
+[[layer]]
+name = "ground"
+role = "bass"
+instrument = "bass.sub"
+source = "presence"
+signals.bodies = "norm(smooth(field('blobs'), 4))"
+signals.motion = "norm(smooth(field('motion'), 3))"
+map.density    = "0.1 + 0.6 * bodies"
+map.volume     = "0.5 + 0.3 * motion"
+
+# ── breath: the room tone follows how still you are ───────────────────────────
+
+[[layer]]
+name = "breath"
+role = "texture"
+instrument = "texture.wind"
+source = "presence"
+signals.motion = "norm(smooth(field('motion'), 4))"
+map.texture    = "0.2 + 0.5 * motion"
+map.cutoff     = "0.2 + 0.4 * motion"
+map.volume     = "0.35 - 0.2 * motion"
+map.pan        = "0.5 + 0.2 * walk(0.3, 20)"

@@ -213,6 +213,11 @@ impl Composer {
         self.paused
     }
 
+    /// Coarse external-clock alignment: see [`Transport::set_bar_phase`].
+    pub fn set_bar_phase(&mut self, phase: f64) {
+        self.transport.set_bar_phase(phase);
+    }
+
     pub fn transport(&self) -> TransportPos {
         self.transport.pos()
     }

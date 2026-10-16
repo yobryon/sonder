@@ -28,16 +28,24 @@ hound = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 midir = { workspace = true, optional = true }
 flate2 = { version = "1.1", optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+rosc = { version = "0.11", optional = true }
+rusty_link = { version = "0.4", optional = true }
 
 [features]
-default = ["native", "native-audio", "midi"]
+default = ["native", "native-audio", "midi", "osc"]
 ## Live mode, offline render, the source registry (tokio runtime, network sources, camera).
 ## Without it only the control loop, scene library and validation compile — for wasm.
 native = [
     "dep:sonder-sources", "sonder-sources/native",
     "dep:sonder-vision", "sonder-vision/native",
-    "dep:reqwest", "dep:hound", "dep:rand", "dep:flate2",
+    "dep:reqwest", "dep:hound", "dep:rand", "dep:flate2", "dep:tokio-tungstenite", "dep:futures",
     "tokio/rt", "tokio/rt-multi-thread", "tokio/time", "tokio/macros", "tokio/test-util",
 ]
 native-audio = ["native", "sonder-audio/native-audio"]
 midi = ["native", "midir"]
+## OSC out (`--osc host:port`): notes, drums, layer params, signals, harmony, form over UDP.
+osc = ["native", "dep:rosc"]
+## Ableton Link (`--link`). Off by default: builds the C++ Link library (needs cmake, a C++ compiler and libclang for bindgen).
+link = ["native", "dep:rusty_link"]
