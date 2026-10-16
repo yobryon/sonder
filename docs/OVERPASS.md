@@ -44,6 +44,29 @@ Tuning: `mode=bright` for headlights at night (threshold 0.5–0.7), `mode=motio
 pitch. Watch `blobs`/`motion` in the web UI's Sources panel and adjust until single cars
 become single events.
 
+**Day mode: `detect = true`.** Build with the detector (`cargo build --release -p sonder -p sonder-vision
+--features sonder-vision/detect`; pure Rust, nothing to apt-install) and the camera runs a
+small YOLO model (YOLO11n, 11 MB, downloaded once into `~/.cache/sonder/models/`) instead
+of the threshold: every blob becomes a `car`, `truck`, `bus`, `motorcycle`, `bicycle`,
+`person`, `bird`, … — events carry `class`, readings add `objects` and a count per class,
+so a scene can give trucks the bass and cyclists the bells:
+
+```
+/opt/sonder/sonder serve night-freeway --source camera.mjpeg --param url=- \
+  --param detect=true --param model_input=320 --param fps_cap=4 \
+  --param classes='["car","truck","bus","motorcycle","person","bicycle"]'
+```
+
+```toml
+on_event.crossing.pitch = "attr('lane') / 4"
+on_event.crossing.velocity = "if(attr('class') == 'truck', 1.0, 0.6)"
+```
+
+A Pi 5 manages ~4 fps at `model_input = 320` (a desktop core does ~20 fps); `camera.jpeg`
+stills are free at any size. At night the detector only sees headlit cars on bright
+roads — keep `mode = bright` for the founding image and switch `detect` on by day (two
+layers with two sources, or `sonder serve --watch` and a cron that edits the scene).
+
 ## 3. Scene
 
 Copy a scene and point it at your camera so the service needs no flags:

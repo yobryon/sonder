@@ -70,6 +70,14 @@ skipped by resyncing on the next JPEG start marker.
 | `merge_dist` | `6` | blobs whose boxes are within this many pixels merge (a headlight pair becomes one car) |
 | `max_blobs` | `64` | per-frame cap, largest first |
 | `background_alpha` | `0.02` | motion mode: background learning rate per frame |
+| `detect` | `false` | run an object detector instead of the threshold (see *Object detection*; needs the `detect` build feature) |
+| `model_url` | ultralytics `yolo11n.onnx` | ONNX model URL (downloaded once into `~/.cache/sonder/models/`) or a local path |
+| `model_input` | `320` | model input size in pixels (multiple of 32); 320 ≈ 4× faster than 640 |
+| `classes` | all | keep only these classes, e.g. `["car","truck","bus","motorcycle","person","bicycle"]`; also the per-class count readings |
+| `min_score` | `0.35` | minimum detection score |
+
+`camera.jpeg` (a still polled every `interval` seconds) takes the same parameters minus
+`line`, `fps_cap`, `reconnect`.
 
 ## What it emits
 
@@ -88,6 +96,61 @@ Readings at 4 Hz: `motion` (0..1 active-pixel fraction, smoothed), `blobs`
 
 `Viz` at 10 Hz: `{"blobs":[{"x","y","w","h","b","id"}], "line": y, "w": W, "h": H, "motion": m}`
 in processed-frame pixels for `w`/`h`.
+
+## Object detection (`detect = true`)
+
+Build with the `detect` feature (`cargo build --release -p sonder -p sonder-vision
+--features sonder-vision/detect` for the CLI, `--features detect` inside this crate) and the camera sources can run a small
+YOLO-class ONNX model with [`tract-onnx`](https://crates.io/crates/tract-onnx) — pure
+Rust, no system dependencies, the same code in the browser build. Frames are then
+decoded to RGB, letterboxed to `model_input × model_input`, and the detections (COCO's
+80 classes: `car`, `truck`, `bus`, `motorcycle`, `bicycle`, `person`, `bird`, `boat`, …)
+feed the tracker instead of threshold blobs. Everything downstream is unchanged, plus:
+
+- `blob` / `crossing` events carry `class` (text) and `class_id`; `brightness` is the
+  detection score, `size`/`area` come from the box.
+- readings add `objects` (tracked objects in frame), one count per class of the
+  `classes` list (or `car, truck, bus, motorcycle, person, bicycle` when there is no
+  list) and `detect_ms` (inference time of the last frame).
+- viz blobs carry `c` (class name).
+
+The default model is Ultralytics' YOLO11n COCO export (11 MB, fetched on first use from
+`model_url` into `$XDG_CACHE_HOME/sonder/models` or `~/.cache/sonder/models`; pass a
+local path to skip the download). Any YOLOv8/YOLO11 `yolo export format=onnx` model
+works, static or dynamic shape; the output must be `[1, 4 + classes, anchors]`.
+Postprocessing: best class per anchor ≥ `min_score`, class-aware NMS at IoU 0.5, then a
+class-agnostic pass at 0.8 so a vehicle scored both `car` and `truck` is one object.
+The tracker keeps a majority vote on each track's class, so one-frame flickers do not
+relabel a vehicle.
+
+Cost (release, one core of this dev box, YOLO11n): ~38 ms/frame at `model_input = 320`,
+~175 ms at 640 — 20+ fps or 5–6 fps. A Raspberry Pi 5 is roughly 3–4× slower, so use
+320 and `fps_cap = 4` there; `camera.jpeg` stills (one frame every 10–60 s) are free.
+Night scenes: the detector finds headlit cars on well-lit freeways but misses dark ones;
+`mode = "bright"` without `detect` remains the better night instrument, detection the
+better day one.
+
+```toml
+source = { kind = "camera.jpeg", url = "https://cwwp2.dot.ca.gov/data/d4/cctv/image/tvd33i80baybridgesastowerwest/tvd33i80baybridgesastowerwest.jpg",
+           interval = 30, detect = true, classes = ["car", "truck", "bus", "motorcycle", "person"] }
+```
+
+```rust
+use sonder_vision::{decode_rgb, Detector, DetectorConfig, Tracker, TrackerConfig};
+
+let mut det = Detector::from_bytes(&std::fs::read("yolo11n.onnx")?, DetectorConfig::default())?;
+let (rgb, w, h) = decode_rgb(&jpeg_bytes)?;
+let dets = det.detect_rgb(&rgb, w, h)?;            // Vec<Detection { class_name, score, x, y, w, h }>
+let mut tracker = Tracker::new(TrackerConfig::default());
+let a = tracker.process_detections(&dets, w, h, t_seconds);
+for b in &a.crossings {
+    println!("{} crossed at x={:.2}", b.class.map(|c| c.name).unwrap_or("?"), b.x);
+}
+```
+
+In the browser (`sonder-wasm` built with `--features detect`): JS fetches `model_url`,
+calls `engine.load_model(bytes, 0)`, and pushes RGB frames with
+`engine.push_frame_rgb(source, rgb, w, h)` instead of gray ones with `push_frame`.
 
 ## Bright vs motion mode
 
