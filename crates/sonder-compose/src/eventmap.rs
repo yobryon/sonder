@@ -18,7 +18,7 @@ pub enum Snap {
 }
 
 impl Snap {
-    fn parse(s: &str) -> Option<Snap> {
+    pub fn parse(s: &str) -> Option<Snap> {
         Some(match s.trim().to_ascii_lowercase().as_str() {
             "chord" => Snap::Chord,
             "scale" => Snap::Scale,

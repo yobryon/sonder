@@ -114,6 +114,10 @@ pub struct UiState {
     pub ticks: u64,
     /// Transient status line (e.g. "opened web UI"), shown in the footer.
     pub status: Option<(String, f64)>,
+    /// Play-along mode: letter keys are a two-octave piano sending `HumanNote`s.
+    pub play_mode: bool,
+    /// Octave of the piano's low C in play mode (4 → C4 = MIDI 60).
+    pub octave: i32,
 }
 
 impl Default for UiState {
@@ -133,6 +137,8 @@ impl Default for UiState {
             now: 0.0,
             ticks: 0,
             status: None,
+            play_mode: false,
+            octave: 4,
         }
     }
 }

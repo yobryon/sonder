@@ -32,10 +32,11 @@ use sonder_core::{
     LayerSnapshot, NoteSnapshot, Role, Scene, Seconds, SynthCommand, TransportPos, UserCommand,
 };
 
-pub use answer::{Answers, Pending, ANSWER_REASON, NOVELTY_S, SALIENT_INTENSITY};
+pub use answer::{Answers, Echo, Pending, ANSWER_REASON, NOVELTY_S, SALIENT_INTENSITY};
 pub use conductor::{Harmony, HarmonyChange};
 pub use eventmap::{Snap, Trigger};
 pub use form::{blend, Form, FormTargets, Section};
+pub use generators::human::{Call, Human, HumanTracker, HUMAN_REASON, MAX_HELD, SAFETY_BEATS};
 pub use generators::{
     register_window, Cue, GenCtx, Generator, Params, MOTIF_REASON, TRIGGER_REASON,
 };
@@ -124,6 +125,10 @@ struct Layer {
     params: ParamCache,
     /// Last effective params, for the snapshot.
     last_params: BTreeMap<String, f64>,
+    /// `Role::Human` only: activity and phrase bookkeeping.
+    human: Option<HumanTracker>,
+    /// `Role::Human` only: params with `energy` defaulted to the activity, for the mood.
+    mood_params: BTreeMap<String, f64>,
 }
 
 /// The musical brain. See the crate docs.
@@ -140,6 +145,8 @@ pub struct Composer {
     paused: bool,
     /// Commands produced by `handle` that go out on the next tick.
     queued: Vec<SynthCommand>,
+    /// `HumanNote` commands waiting for the next tick: (key, velocity, on).
+    human_queue: Vec<(u8, f32, bool)>,
     last_now: Seconds,
 }
 
@@ -172,6 +179,8 @@ impl Composer {
                 muted_sent: false,
                 params: ParamCache::default(),
                 last_params: BTreeMap::new(),
+                human: (cfg.role == Role::Human).then(HumanTracker::new),
+                mood_params: BTreeMap::new(),
             });
         }
         Ok(Self {
@@ -186,6 +195,7 @@ impl Composer {
             density_offset: 0.0,
             paused: false,
             queued: Vec::new(),
+            human_queue: Vec::new(),
             last_now: 0.0,
         })
     }
@@ -254,6 +264,39 @@ impl Composer {
         };
         let empty = LayerInput::default();
 
+        // 0. A person at the keys: `HumanNote` commands become `note` / `note_off`
+        //    events on every human layer, as if a `human.midi` source had sent them.
+        let human_events = self.take_human_events(now);
+        let merged: Vec<LayerEvent>;
+        let events: &[LayerEvent] = if human_events.is_empty() {
+            input.events
+        } else {
+            merged = input.events.iter().cloned().chain(human_events).collect();
+            &merged
+        };
+        for l in &mut self.layers {
+            let Some(tracker) = l.human.as_mut() else { continue };
+            for ev in events.iter().filter(|e| e.layer == l.id && e.name == generators::human::NOTE_EVENT) {
+                if let Some(key) = generators::human::event_key(ev) {
+                    let v = ev
+                        .attrs
+                        .get("velocity")
+                        .and_then(sonder_core::Value::as_f64)
+                        .unwrap_or(ev.intensity);
+                    if v.is_finite() && v > 0.0 {
+                        tracker.note_on(key, v, ev.at);
+                    }
+                }
+            }
+            // `map.energy` defaults to the recent activity (notes/s, 8/s = 1).
+            let inp = input.layers.get(l.id.0 as usize).unwrap_or(&empty);
+            l.mood_params.clone_from(&inp.params);
+            if !inp.params.contains_key(map_keys::ENERGY) {
+                l.mood_params
+                    .insert(map_keys::ENERGY.to_string(), tracker.activity(now));
+            }
+        }
+
         // 1. Mood: who is saying what.
         let sources: Vec<MoodSource<'_>> = self
             .layers
@@ -264,7 +307,7 @@ impl Composer {
                 MoodSource {
                     name: &l.cfg.name,
                     weight: l.cfg.mood_weight,
-                    params: &inp.params,
+                    params: if l.human.is_some() { &l.mood_params } else { &inp.params },
                     signals: &inp.signals,
                 }
             })
@@ -302,14 +345,41 @@ impl Composer {
         // 4. Harmony.
         self.conductor.tick(self.transport.beats());
 
-        // 5. Calls: salient events schedule an answer on a melodic layer.
+        // 5. Calls: salient events schedule an answer on a melodic layer. A human
+        //    layer's call is a finished phrase (≥ 3 notes, then a beat of silence),
+        //    answered with a figure that echoes the phrase's last interval.
         if self.form.call_and_response() {
             let answerer = self.answer_layer();
-            for ev in input.events {
+            let spb = self.transport.seconds_per_beat();
+            for i in 0..self.layers.len() {
+                let id = LayerId(i as u16);
+                let muted = self.layer_muted(id);
+                let Some(tracker) = self.layers[i].human.as_mut() else { continue };
+                let Some(call) = tracker.take_call(now, spb) else { continue };
+                if muted {
+                    continue;
+                }
+                if let Some(target) = answerer.filter(|a| *a != id) {
+                    let ev = call.as_event(id);
+                    let midi = generators::human::snapped_pitch(
+                        generators::human::snap_of(&self.layers[i].cfg),
+                        &self.conductor.harmony,
+                        call.key,
+                        0.5,
+                    );
+                    self.answers.schedule_echo(
+                        &ev,
+                        Echo { midi, interval: call.interval },
+                        target,
+                        &self.transport,
+                    );
+                }
+            }
+            for ev in events {
                 let Some(layer) = self.layers.get(ev.layer.0 as usize) else {
                     continue;
                 };
-                if self.layer_muted(layer.id) || !self.answers.is_salient(ev) {
+                if layer.human.is_some() || self.layer_muted(layer.id) || !self.answers.is_salient(ev) {
                     continue;
                 }
                 if let Some(target) = answerer.filter(|a| *a != layer.id) {
@@ -356,12 +426,17 @@ impl Composer {
                 layer.muted_sent = false;
             }
 
-            let events: Vec<&LayerEvent> = input
-                .events
+            let events: Vec<&LayerEvent> = events
                 .iter()
                 .filter(|e| e.layer == layer.id)
                 .collect();
             let params = Params::new(&inp.params, self.density_offset).with_form(targets, strength);
+            // A person's notes are never jittered: latency matters more than feel.
+            let humanize = if layer.human.is_some() {
+                0.0
+            } else {
+                self.transport.humanize()
+            };
             {
                 let mut sink = NoteSink::new(
                     &mut self.book,
@@ -371,7 +446,7 @@ impl Composer {
                     &mut layer.jitter,
                     layer.id,
                     now,
-                    self.transport.humanize(),
+                    humanize,
                 )
                 .with_reason(reason_for(layer.cfg.role));
                 for p in self.answers.take_due(layer.id, self.transport.beats()) {
@@ -408,6 +483,11 @@ impl Composer {
             Self::send_common_params(layer, &params, mood.brightness, dynamics, &mut out.commands);
             // The snapshot shows effective values: user offset and form blended in.
             layer.last_params = inp.params.clone();
+            if layer.human.is_some() {
+                if let Some(e) = layer.mood_params.get(map_keys::ENERGY) {
+                    layer.last_params.insert(map_keys::ENERGY.to_string(), *e);
+                }
+            }
             let has_density = inp.params.contains_key(map_keys::DENSITY);
             if has_density || self.density_offset != 0.0 || targets.is_some() {
                 let default = if has_density { 0.0 } else { 0.5 };
@@ -425,6 +505,36 @@ impl Composer {
         // 7. Deferred triggers and planned releases that are due.
         self.book.flush(now, &mut out.commands, &mut out.notes);
         out
+    }
+
+    /// Turn queued `HumanNote` commands into `note` / `note_off` events on every
+    /// human layer, appended to this tick's events. Empty when nothing was queued.
+    fn take_human_events(&mut self, now: Seconds) -> Vec<LayerEvent> {
+        if self.human_queue.is_empty() {
+            return Vec::new();
+        }
+        let queue = std::mem::take(&mut self.human_queue);
+        let mut events = Vec::new();
+        for l in self.layers.iter().filter(|l| l.human.is_some()) {
+            for &(key, velocity, on) in &queue {
+                let mut attrs = BTreeMap::new();
+                attrs.insert("key".to_string(), sonder_core::Value::Num(key as f64));
+                let name = if on {
+                    attrs.insert("velocity".to_string(), sonder_core::Value::Num(velocity as f64));
+                    generators::human::NOTE_EVENT
+                } else {
+                    generators::human::NOTE_OFF_EVENT
+                };
+                events.push(LayerEvent {
+                    layer: l.id,
+                    name: name.to_string(),
+                    at: now,
+                    intensity: if on { velocity as f64 } else { 0.0 },
+                    attrs,
+                });
+            }
+        }
+        events
     }
 
     /// Mixer-ish params every role shares. Only changed values are sent.
@@ -539,6 +649,12 @@ impl Composer {
             UserCommand::NextSection => self.form.request_next(),
             // Replay transport lives in the engine.
             UserCommand::Seek { .. } | UserCommand::SetSpeed { .. } => {}
+            UserCommand::HumanNote { key, velocity, on } => {
+                if *key <= 127 && velocity.is_finite() && self.human_queue.len() < 256 {
+                    self.human_queue
+                        .push((*key, velocity.clamp(0.0, 1.0), *on));
+                }
+            }
         }
     }
 

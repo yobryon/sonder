@@ -4,6 +4,7 @@ mod arp;
 mod bass;
 mod drone;
 mod hits;
+pub mod human;
 mod lead;
 mod pad;
 mod perc;
@@ -139,8 +140,7 @@ pub fn for_role(cfg: &LayerConfig) -> Box<dyn Generator> {
         Role::Pluck | Role::Bells => Box::new(hits::Hits::new(cfg.role)),
         Role::Perc => Box::new(perc::Perc::new(cfg.on_event.is_empty())),
         Role::Texture => Box::new(texture::Texture::default()),
-        // Placeholder until the v3 human generator lands: play events like a pluck.
-        Role::Human => Box::new(hits::Hits::new(Role::Pluck)),
+        Role::Human => Box::new(human::Human::new(cfg)),
     }
 }
 

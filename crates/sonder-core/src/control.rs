@@ -32,5 +32,9 @@ pub enum UserCommand {
     Seek { to: f64 },
     /// Replay only: playback speed multiplier (1 = real time, 0 = pause).
     SetSpeed { speed: f64 },
+    /// A person plays a key (on-screen piano, computer keyboard, Web MIDI). The
+    /// composer feeds it to every `Role::Human` layer as a `note` / `note_off`
+    /// event; hardware MIDI goes through the `human.midi` source instead.
+    HumanNote { key: u8, velocity: f32, on: bool },
     Quit,
 }

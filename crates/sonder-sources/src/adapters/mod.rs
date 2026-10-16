@@ -50,3 +50,5 @@ pub mod audio;
 pub mod seedlink;
 #[cfg(feature = "native")]
 pub mod gtfs_rt;
+#[cfg(feature = "native")]
+pub mod human_midi;

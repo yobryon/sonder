@@ -40,7 +40,11 @@ const ROLL_MIDI: (f64, f64) = (36.0, 96.0);
 
 /// Static part of the footer legend.
 pub const KEY_LEGEND: &str =
-    "q quit · space pause · [ ] tempo · - = density · k/K transpose · o/O mode · c chord · n section · m/s mute/solo · ^s save · w web · ? help";
+    "q quit · space pause · [ ] tempo · - = density · k/K transpose · o/O mode · c chord · n section · m/s mute/solo · p play · , . seek · < > speed · ^s save · w web · ? help";
+
+/// Footer legend while play-along mode is on.
+pub const PLAY_LEGEND: &str =
+    "PLAY  zsxdcvgbhnjm, / q2w3er5t6y7ui = two octaves · ↑/↓ octave · Esc or p leave";
 
 fn block(title: &str) -> Block<'_> {
     Block::default()
@@ -146,6 +150,20 @@ fn draw_top(frame: &mut Frame<'_>, area: Rect, snap: &EngineSnapshot) {
                 .fg(Color::Black)
                 .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
+    }
+    if let Some(r) = &snap.replay {
+        spans.push(Span::styled(
+            format!(" ⟲ {} / {} ", fmt_time(r.position), fmt_time(r.length)),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Indexed(177))
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" ×{} ", fmt_num(r.speed)),
+            Style::default().fg(if r.speed == 0.0 { Color::Yellow } else { Color::Indexed(177) }),
         ));
         spans.push(Span::raw(" "));
     }
@@ -837,10 +855,17 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &UiState, web_url: Opti
         ));
         spans.push(Span::raw(" "));
     }
-    spans.push(Span::styled(
-        format!(" {KEY_LEGEND}"),
-        Style::default().fg(Color::DarkGray),
-    ));
+    if state.play_mode {
+        spans.push(Span::styled(
+            format!(" {PLAY_LEGEND} (octave {})", state.octave),
+            Style::default().fg(Color::Black).bg(Color::Indexed(220)),
+        ));
+    } else {
+        spans.push(Span::styled(
+            format!(" {KEY_LEGEND}"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
     let url_w = web_url.map(|u| u.chars().count() as u16 + 2).unwrap_or(0);
     let (legend_area, url_area) = if url_w > 0 && area.width > url_w + 20 {
         let [l, r] =
@@ -876,7 +901,10 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, web_url: Option<&str>) {
         ("o / O", "next / previous mode"),
         ("c", "force chord change"),
         ("n", "jump to the next form section"),
+        (", / .", "replay: seek -10 / +10 s"),
+        ("< / >", "replay: speed ÷2 / ×2"),
         ("w", "open the web UI in a browser"),
+        ("p", "play along: letters become a two-octave piano (scene needs a human layer)"),
         ("Ctrl-S", "save the current scene to <scene>.toml"),
         ("?", "toggle this help"),
     ];

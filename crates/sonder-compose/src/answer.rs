@@ -37,6 +37,18 @@ pub struct Pending {
     /// Approach the final chord tone from below (else above).
     pub from_below: bool,
     pub cause: NoteCause,
+    /// Echo a human phrase: land near this midi note, reproducing this interval
+    /// (semitones) into it. Overrides `pitch01` / `notes` / `from_below`.
+    pub echo: Option<Echo>,
+}
+
+/// What an answer to a human phrase echoes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Echo {
+    /// Where the phrase ended.
+    pub midi: f64,
+    /// The phrase's last interval, in semitones (second-to-last → last note).
+    pub interval: i32,
 }
 
 #[derive(Debug)]
@@ -120,6 +132,45 @@ impl Answers {
             notes,
             from_below,
             cause: cause_of(ev),
+            echo: None,
+        });
+        true
+    }
+
+    /// Schedule an answer that echoes a human phrase: a beat later, a two-note
+    /// figure whose last interval is the phrase's, landing on a chord tone near
+    /// where the phrase ended. Same one-per-layer-per-bar rule as [`Answers::schedule`].
+    pub fn schedule_echo(
+        &mut self,
+        ev: &LayerEvent,
+        echo: Echo,
+        layer: LayerId,
+        transport: &Transport,
+    ) -> bool {
+        let at_beat = Transport::next_grid(transport.beats() + 1.0, 0.5);
+        let bar = (at_beat / transport.beats_per_bar().max(1) as f64).floor() as u64;
+        if self.last_bar.get(&layer) == Some(&bar) {
+            return false;
+        }
+        self.last_bar.insert(layer, bar);
+        let intensity = if ev.intensity.is_finite() {
+            ev.intensity.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        let end = at_beat + 2.0 * FIGURE_STEP + FINAL_BEATS;
+        let r = self.rest_until.entry(layer).or_insert(0.0);
+        *r = r.max(end);
+        self.last_call = ev.name.clone();
+        self.pending.push(Pending {
+            layer,
+            at_beat,
+            pitch01: 0.5,
+            intensity,
+            notes: 2,
+            from_below: echo.interval >= 0,
+            cause: cause_of(ev),
+            echo: Some(if echo.midi.is_finite() { echo } else { Echo { midi: 60.0, ..echo } }),
         });
         true
     }
@@ -169,7 +220,10 @@ impl Answers {
         sink: &mut NoteSink<'_>,
     ) {
         let (lo, hi) = register_window(role, register);
-        let target = lo as f64 + (hi - lo) as f64 * p.pitch01;
+        let target = match p.echo {
+            Some(e) => e.midi.clamp(lo as f64, hi as f64),
+            None => lo as f64 + (hi - lo) as f64 * p.pitch01,
+        };
         let pcs = if harmony.chord_pcs.is_empty() {
             &harmony.scale_pcs
         } else {
@@ -181,6 +235,34 @@ impl Answers {
             .unwrap_or_else(|| Quantizer::nearest_in(pcs, target));
         let spb = transport.seconds_per_beat();
         let vel = 0.35 + 0.5 * p.intensity;
+        if let Some(e) = p.echo {
+            // Two notes: the phrase's last interval, in the scale, into the chord tone.
+            let first = Quantizer::nearest_in(&harmony.scale_pcs, (final_midi - e.interval) as f64);
+            let first = if first == final_midi && e.interval != 0 {
+                Quantizer::nearest_in(&harmony.scale_pcs, (final_midi - e.interval.signum() * 2) as f64)
+            } else {
+                first
+            };
+            sink.play_as(
+                first as f64,
+                vel * 0.8,
+                0.5,
+                Some(2.0 * FIGURE_STEP * 0.9 * spb),
+                transport.delay_to(p.at_beat),
+                ANSWER_REASON,
+                Some(p.cause.clone()),
+            );
+            sink.play_as(
+                final_midi as f64,
+                vel,
+                0.5,
+                Some(FINAL_BEATS * spb),
+                transport.delay_to(p.at_beat + 2.0 * FIGURE_STEP),
+                ANSWER_REASON,
+                Some(p.cause.clone()),
+            );
+            return;
+        }
         let n = p.notes.clamp(1, 3);
         let final_idx = harmony.scale.index_of_midi(final_midi);
         for k in 0..n {

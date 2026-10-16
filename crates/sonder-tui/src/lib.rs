@@ -74,8 +74,58 @@ pub enum Action {
     ToggleHelp,
     /// Open the web UI.
     OpenWeb,
+    /// Enter / leave play-along mode (needs a `human` layer in the scene).
+    TogglePlay,
+    /// Play mode: a piano key, as semitones above the piano's low C.
+    HumanNote { offset: u8 },
+    /// Play mode: move the piano by octaves.
+    OctaveShift(i32),
+    /// Replay: move the log position by this many seconds.
+    SeekBy(f64),
+    /// Replay: multiply the playback speed by this factor.
+    SpeedBy(f64),
     /// Nothing bound.
     None,
+}
+
+/// The two-octave computer-keyboard piano used in play mode (DAW layout): the
+/// bottom row `zsxdcvgbhnjm,` is the low octave (C C# D … C), `q2w3er5t6y7ui`
+/// the one above. Returns semitones above the piano's low C.
+pub fn play_key_offset(ch: char) -> Option<u8> {
+    const LOW: &str = "zsxdcvgbhnjm,";
+    const HIGH: &str = "q2w3er5t6y7ui";
+    let ch = ch.to_ascii_lowercase();
+    if let Some(i) = LOW.find(ch) {
+        return Some(i as u8);
+    }
+    HIGH.find(ch).map(|i| 12 + i as u8)
+}
+
+/// Velocity of a terminal key press (terminals have no key pressure).
+pub const PLAY_VELOCITY: f32 = 0.75;
+/// Terminals report no key release, so a played note lifts after this long.
+pub const PLAY_HOLD: Duration = Duration::from_millis(350);
+
+/// Key mapping in play mode: letters are piano keys, `Esc` / `p` leave the mode,
+/// `↑` / `↓` shift the octave, `Ctrl-C` still quits. Everything else is swallowed
+/// so a stray `q` does not quit mid-solo.
+pub fn map_play_key(key: &KeyEvent) -> Action {
+    if key.kind != KeyEventKind::Press {
+        return Action::None;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char('c') if ctrl => Action::Quit,
+        KeyCode::Esc | KeyCode::Char('p') | KeyCode::Char('P') => Action::TogglePlay,
+        KeyCode::Up => Action::OctaveShift(1),
+        KeyCode::Down => Action::OctaveShift(-1),
+        KeyCode::Char('?') => Action::ToggleHelp,
+        KeyCode::Char(ch) => match play_key_offset(ch) {
+            Some(offset) => Action::HumanNote { offset },
+            None => Action::None,
+        },
+        _ => Action::None,
+    }
 }
 
 /// Map a key event to an [`Action`]. Only `Press` events count.
@@ -113,6 +163,11 @@ pub fn map_key(key: &KeyEvent) -> Action {
         KeyCode::Char('m') => Action::MuteSelected,
         KeyCode::Char('s') => Action::SoloSelected,
         KeyCode::Char('w') => Action::OpenWeb,
+        KeyCode::Char('p') => Action::TogglePlay,
+        KeyCode::Char(',') => Action::SeekBy(-10.0),
+        KeyCode::Char('.') => Action::SeekBy(10.0),
+        KeyCode::Char('<') => Action::SpeedBy(0.5),
+        KeyCode::Char('>') => Action::SpeedBy(2.0),
         KeyCode::Char('?') => Action::ToggleHelp,
         KeyCode::Up => Action::MoveSelection(-1),
         KeyCode::Down => Action::MoveSelection(1),
@@ -211,7 +266,7 @@ async fn event_loop(
         tokio::select! {
             ev = events.next() => {
                 match ev {
-                    Some(Ok(Event::Key(key))) => match map_key(&key) {
+                    Some(Ok(Event::Key(key))) => match if state.play_mode { map_play_key(&key) } else { map_key(&key) } {
                         Action::Quit => {
                             send_command(&commands, &mut state, UserCommand::Quit);
                             break;
@@ -234,6 +289,32 @@ async fn event_loop(
                             }
                         }
                         Action::ToggleHelp => state.show_help = !state.show_help,
+                        Action::TogglePlay => {
+                            if state.play_mode {
+                                state.play_mode = false;
+                                state.flash("play mode off");
+                            } else if current.layers.iter().any(|l| l.role == sonder_core::Role::Human) {
+                                state.play_mode = true;
+                                state.flash("play mode: letters are a piano · ↑/↓ octave · Esc to leave");
+                            } else {
+                                state.flash("no human layer in this scene (try the `jam` scene)");
+                            }
+                        }
+                        Action::HumanNote { offset } => {
+                            let key = (12 * (state.octave + 1) + offset as i32).clamp(0, 127) as u8;
+                            if send_command(&commands, &mut state, UserCommand::HumanNote { key, velocity: PLAY_VELOCITY, on: true }) {
+                                // No key-up in a terminal: lift the note after a moment.
+                                let tx = commands.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(PLAY_HOLD).await;
+                                    let _ = tx.send(UserCommand::HumanNote { key, velocity: 0.0, on: false }).await;
+                                });
+                            }
+                        }
+                        Action::OctaveShift(d) => {
+                            state.octave = (state.octave + d).clamp(0, 8);
+                            state.flash(format!("octave {} (low C = {})", state.octave, sonder_core::midi_name(12 * (state.octave + 1))));
+                        }
                         Action::OpenWeb => match web_url {
                             Some(url) => {
                                 if open_url(url) {
@@ -243,6 +324,23 @@ async fn event_loop(
                                 }
                             }
                             None => state.flash("web UI not running (start with --web)"),
+                        },
+                        Action::SeekBy(d) => match &current.replay {
+                            Some(r) => {
+                                let to = (r.position + d).clamp(0.0, r.length);
+                                send_command(&commands, &mut state, UserCommand::Seek { to });
+                            }
+                            None => state.flash("not replaying a log (sonder replay <log>)"),
+                        },
+                        Action::SpeedBy(f) => match &current.replay {
+                            Some(r) => {
+                                let base = if r.speed > 0.0 { r.speed } else { 1.0 };
+                                let speed = (base * f).clamp(0.25, 8.0);
+                                if send_command(&commands, &mut state, UserCommand::SetSpeed { speed }) {
+                                    state.flash(format!("replay speed ×{speed}"));
+                                }
+                            }
+                            None => state.flash("not replaying a log (sonder replay <log>)"),
                         },
                         Action::None => {}
                     },
@@ -289,6 +387,35 @@ fn send_command(commands: &mpsc::Sender<UserCommand>, state: &mut UiState, cmd: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn play_mode_keys_are_a_two_octave_piano() {
+        assert_eq!(play_key_offset('z'), Some(0));
+        assert_eq!(play_key_offset('s'), Some(1));
+        assert_eq!(play_key_offset('m'), Some(11));
+        assert_eq!(play_key_offset(','), Some(12));
+        assert_eq!(play_key_offset('q'), Some(12));
+        assert_eq!(play_key_offset('2'), Some(13));
+        assert_eq!(play_key_offset('u'), Some(23));
+        assert_eq!(play_key_offset('i'), Some(24));
+        assert_eq!(play_key_offset('Z'), Some(0), "shift does not matter");
+        assert_eq!(play_key_offset('a'), None, "a is between keys");
+        assert_eq!(play_key_offset('1'), None);
+        assert_eq!(
+            map_play_key(&press(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Action::HumanNote { offset: 12 },
+            "q plays, it does not quit"
+        );
+        assert_eq!(map_play_key(&press(KeyCode::Char('c'), KeyModifiers::CONTROL)), Action::Quit);
+        assert_eq!(map_play_key(&press(KeyCode::Esc, KeyModifiers::NONE)), Action::TogglePlay);
+        assert_eq!(map_play_key(&press(KeyCode::Char('p'), KeyModifiers::NONE)), Action::TogglePlay);
+        assert_eq!(map_play_key(&press(KeyCode::Up, KeyModifiers::NONE)), Action::OctaveShift(1));
+        assert_eq!(map_play_key(&press(KeyCode::Down, KeyModifiers::NONE)), Action::OctaveShift(-1));
+        assert_eq!(map_play_key(&press(KeyCode::Char(' '), KeyModifiers::NONE)), Action::None, "swallowed");
+        let mut release = press(KeyCode::Char('z'), KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        assert_eq!(map_play_key(&release), Action::None);
+    }
 
     fn press(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent {
@@ -365,6 +492,11 @@ mod tests {
             map_key(&press(KeyCode::Char('z'), KeyModifiers::NONE)),
             Action::None
         );
+        assert_eq!(map_key(&press(KeyCode::Char(','), KeyModifiers::NONE)), Action::SeekBy(-10.0));
+        assert_eq!(map_key(&press(KeyCode::Char('.'), KeyModifiers::NONE)), Action::SeekBy(10.0));
+        assert_eq!(map_key(&press(KeyCode::Char('<'), KeyModifiers::SHIFT)), Action::SpeedBy(0.5));
+        assert_eq!(map_key(&press(KeyCode::Char('>'), KeyModifiers::SHIFT)), Action::SpeedBy(2.0));
+        assert!(ui::KEY_LEGEND.contains(", . seek"));
         let mut release = press(KeyCode::Char('q'), KeyModifiers::NONE);
         release.kind = KeyEventKind::Release;
         assert_eq!(map_key(&release), Action::None);
@@ -378,6 +510,7 @@ mod tests {
         );
         // Plain `s` is still solo.
         assert_eq!(map_key(&press(KeyCode::Char('s'), KeyModifiers::NONE)), Action::SoloSelected);
+        assert_eq!(map_key(&press(KeyCode::Char('p'), KeyModifiers::NONE)), Action::TogglePlay);
         assert!(ui::KEY_LEGEND.contains("^s save"));
     }
 
