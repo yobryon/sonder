@@ -1,0 +1,84 @@
+{
+  "date": "2026-10-16",
+  "scene": "night-freeway",
+  "scene_name": "Night Freeway",
+  "description": "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera.",
+  "seed": 20261016,
+  "minutes": 10.0,
+  "files": [
+    {
+      "file": "2026-10-16.mp3",
+      "label": "Night Freeway (offline render)"
+    },
+    {
+      "file": "2026-10-16.sonder.gz",
+      "label": "data log (replay it: drop onto the web UI, or `sonder replay`)"
+    },
+    {
+      "file": "2026-10-16-live.mp3",
+      "label": "live"
+    },
+    {
+      "file": "2026-10-16-live.sonder.gz",
+      "label": "live data log (replay it: drop onto the web UI, or `sonder replay`)"
+    }
+  ],
+  "stats": {
+    "peak": 0.7372788,
+    "rms": 0.121928506,
+    "notes": 2615,
+    "events": 371
+  },
+  "captions": [
+    {
+      "at": 0.0,
+      "text": "traffic is live",
+      "importance": 0.4
+    },
+    {
+      "at": 5.27,
+      "text": "car in lane 0",
+      "importance": 0.5145699566798874
+    },
+    {
+      "at": 72.98,
+      "text": "section: build — build 1/28 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 182.26,
+      "text": "section: peak — peak 1/19 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 252.94,
+      "text": "section: release — release 1/28 · arc 0.70 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 355.38,
+      "text": "section: intro — intro 1/14 · arc 0.00 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 411.1,
+      "text": "section: build — build 1/20 · arc 0.21 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 492.98,
+      "text": "section: peak — peak 1/14 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 544.94,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 548.34,
+      "text": "section: release — release 1/20 · arc 0.71 · answering car",
+      "importance": 0.6
+    }
+  ]
+}
