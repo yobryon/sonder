@@ -1,0 +1,94 @@
+{
+  "date": "2026-11-02",
+  "scene": "night-freeway",
+  "scene_name": "Night Freeway",
+  "description": "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera.",
+  "seed": 20261102,
+  "minutes": 10.0,
+  "files": [
+    {
+      "file": "2026-11-02.mp3",
+      "label": "Night Freeway (offline render)"
+    },
+    {
+      "file": "2026-11-02.sonder.gz",
+      "label": "data log (replay it: drop onto the web UI, or `sonder replay`)"
+    },
+    {
+      "file": "2026-11-02-live.mp3",
+      "label": "live"
+    },
+    {
+      "file": "2026-11-02-live.sonder.gz",
+      "label": "live data log (replay it: drop onto the web UI, or `sonder replay`)"
+    }
+  ],
+  "stats": {
+    "peak": 0.8912509,
+    "rms": 0.12122722,
+    "notes": 2395,
+    "events": 388
+  },
+  "captions": [
+    {
+      "at": 0.0,
+      "text": "traffic is live",
+      "importance": 0.4
+    },
+    {
+      "at": 8.63,
+      "text": "car in lane 2",
+      "importance": 0.5358314821541235
+    },
+    {
+      "at": 76.34,
+      "text": "section: build — build 1/35 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 200.58,
+      "text": "section: peak — peak 1/23 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 294.18,
+      "text": "section: release — release 1/35 · arc 0.70 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 407.58,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 427.38,
+      "text": "section: intro — intro 1/15 · arc 0.00 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 451.14,
+      "text": "now in D lydian",
+      "importance": 0.5
+    },
+    {
+      "at": 485.14,
+      "text": "section: build — build 1/22 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 526.54,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 564.14,
+      "text": "now in D lydian",
+      "importance": 0.5
+    },
+    {
+      "at": 574.62,
+      "text": "section: peak — peak 1/15 · arc 0.50 · answering car",
+      "importance": 0.6
+    }
+  ]
+}
