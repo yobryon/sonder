@@ -1,0 +1,79 @@
+{
+  "date": "2026-10-18",
+  "scene": "night-freeway",
+  "scene_name": "Night Freeway",
+  "description": "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera.",
+  "seed": 20261018,
+  "minutes": 10.0,
+  "files": [
+    {
+      "file": "2026-10-18.mp3",
+      "label": "Night Freeway (offline render)"
+    },
+    {
+      "file": "2026-10-18.sonder.gz",
+      "label": "data log (replay it: drop onto the web UI, or `sonder replay`)"
+    },
+    {
+      "file": "2026-10-18-live.mp3",
+      "label": "live"
+    },
+    {
+      "file": "2026-10-18-live.sonder.gz",
+      "label": "live data log (replay it: drop onto the web UI, or `sonder replay`)"
+    }
+  ],
+  "stats": {
+    "peak": 0.75307953,
+    "rms": 0.121755265,
+    "notes": 2170,
+    "events": 369
+  },
+  "captions": [
+    {
+      "at": 0.0,
+      "text": "traffic is live",
+      "importance": 0.4
+    },
+    {
+      "at": 6.89,
+      "text": "car in lane 2",
+      "importance": 0.4622423231324964
+    },
+    {
+      "at": 89.42,
+      "text": "section: build — build 1/34 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 202.14000000000001,
+      "text": "section: peak — peak 1/23 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 290.26,
+      "text": "section: release — release 1/34 · arc 0.70 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 466.38,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 487.82,
+      "text": "section: intro — intro 1/20 · arc 0.00 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 511.58,
+      "text": "now in D lydian",
+      "importance": 0.5
+    },
+    {
+      "at": 566.42,
+      "text": "section: build — build 1/30 · arc 0.20 · answering car",
+      "importance": 0.6
+    }
+  ]
+}

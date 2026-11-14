@@ -1,0 +1,84 @@
+{
+  "date": "2026-11-08",
+  "scene": "night-freeway",
+  "scene_name": "Night Freeway",
+  "description": "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera.",
+  "seed": 20261108,
+  "minutes": 10.0,
+  "files": [
+    {
+      "file": "2026-11-08.mp3",
+      "label": "Night Freeway (offline render)"
+    },
+    {
+      "file": "2026-11-08.sonder.gz",
+      "label": "data log (replay it: drop onto the web UI, or `sonder replay`)"
+    },
+    {
+      "file": "2026-11-08-live.mp3",
+      "label": "live"
+    },
+    {
+      "file": "2026-11-08-live.sonder.gz",
+      "label": "live data log (replay it: drop onto the web UI, or `sonder replay`)"
+    }
+  ],
+  "stats": {
+    "peak": 0.7611029,
+    "rms": 0.11980715,
+    "notes": 2470,
+    "events": 364
+  },
+  "captions": [
+    {
+      "at": 0.0,
+      "text": "traffic is live",
+      "importance": 0.4
+    },
+    {
+      "at": 6.77,
+      "text": "car in lane 2",
+      "importance": 0.5271348350534135
+    },
+    {
+      "at": 72.94,
+      "text": "section: build — build 1/31 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 147.82,
+      "text": "section: peak — peak 1/21 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 221.58,
+      "text": "section: release — release 1/31 · arc 0.70 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 379.18,
+      "text": "section: intro — intro 1/21 · arc 0.00 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 456.66,
+      "text": "section: build — build 1/32 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 502.34000000000003,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 567.9,
+      "text": "now in D lydian",
+      "importance": 0.5
+    },
+    {
+      "at": 582.3000000000001,
+      "text": "section: peak — peak 1/21 · arc 0.50 · answering car",
+      "importance": 0.6
+    }
+  ]
+}
