@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-23",
+  "scene": "night-freeway",
+  "scene_name": "Night Freeway",
+  "description": "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera.",
+  "seed": 20261023,
+  "minutes": 10.0,
+  "files": [
+    {
+      "file": "2026-10-23.mp3",
+      "label": "Night Freeway (offline render)"
+    },
+    {
+      "file": "2026-10-23.sonder.gz",
+      "label": "data log (replay it: drop onto the web UI, or `sonder replay`)"
+    },
+    {
+      "file": "2026-10-23-live.mp3",
+      "label": "live"
+    },
+    {
+      "file": "2026-10-23-live.sonder.gz",
+      "label": "live data log (replay it: drop onto the web UI, or `sonder replay`)"
+    }
+  ],
+  "stats": {
+    "peak": 0.75051934,
+    "rms": 0.12153401,
+    "notes": 2583,
+    "events": 303
+  },
+  "captions": [
+    {
+      "at": 0.0,
+      "text": "traffic is live",
+      "importance": 0.4
+    },
+    {
+      "at": 5.99,
+      "text": "car in lane 0",
+      "importance": 0.4854145922235923
+    },
+    {
+      "at": 50.38,
+      "text": "section: build — build 1/20 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 128.1,
+      "text": "section: peak — peak 1/13 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 177.02,
+      "text": "section: release — release 1/20 · arc 0.70 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 247.74,
+      "text": "section: intro — intro 1/26 · arc 0.00 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 334.14,
+      "text": "section: build — build 1/39 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 435.22,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 478.7,
+      "text": "now in D lydian",
+      "importance": 0.5
+    },
+    {
+      "at": 486.14,
+      "text": "section: peak — peak 1/26 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 583.42,
+      "text": "section: release — release 1/39 · arc 0.70 · answering car",
+      "importance": 0.6
+    }
+  ]
+}

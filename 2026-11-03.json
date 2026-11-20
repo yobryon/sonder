@@ -1,0 +1,84 @@
+{
+  "date": "2026-11-03",
+  "scene": "night-freeway",
+  "scene_name": "Night Freeway",
+  "description": "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera.",
+  "seed": 20261103,
+  "minutes": 10.0,
+  "files": [
+    {
+      "file": "2026-11-03.mp3",
+      "label": "Night Freeway (offline render)"
+    },
+    {
+      "file": "2026-11-03.sonder.gz",
+      "label": "data log (replay it: drop onto the web UI, or `sonder replay`)"
+    },
+    {
+      "file": "2026-11-03-live.mp3",
+      "label": "live"
+    },
+    {
+      "file": "2026-11-03-live.sonder.gz",
+      "label": "live data log (replay it: drop onto the web UI, or `sonder replay`)"
+    }
+  ],
+  "stats": {
+    "peak": 0.7210645,
+    "rms": 0.12173561,
+    "notes": 2204,
+    "events": 318
+  },
+  "captions": [
+    {
+      "at": 0.0,
+      "text": "traffic is live",
+      "importance": 0.4
+    },
+    {
+      "at": 12.23,
+      "text": "car in lane 3",
+      "importance": 0.5635514424852249
+    },
+    {
+      "at": 68.94,
+      "text": "section: build — build 1/31 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 171.70000000000002,
+      "text": "section: peak — peak 1/21 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 252.78,
+      "text": "section: release — release 1/31 · arc 0.70 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 414.94,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 417.94,
+      "text": "section: intro — intro 1/17 · arc 0.00 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 450.78000000000003,
+      "text": "now in D lydian",
+      "importance": 0.5
+    },
+    {
+      "at": 483.26,
+      "text": "section: build — build 1/26 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 586.62,
+      "text": "section: peak — peak 1/17 · arc 0.50 · answering car",
+      "importance": 0.6
+    }
+  ]
+}

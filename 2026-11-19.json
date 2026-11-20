@@ -1,0 +1,84 @@
+{
+  "date": "2026-11-19",
+  "scene": "night-freeway",
+  "scene_name": "Night Freeway",
+  "description": "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera.",
+  "seed": 20261119,
+  "minutes": 10.0,
+  "files": [
+    {
+      "file": "2026-11-19.mp3",
+      "label": "Night Freeway (offline render)"
+    },
+    {
+      "file": "2026-11-19.sonder.gz",
+      "label": "data log (replay it: drop onto the web UI, or `sonder replay`)"
+    },
+    {
+      "file": "2026-11-19-live.mp3",
+      "label": "live"
+    },
+    {
+      "file": "2026-11-19-live.sonder.gz",
+      "label": "live data log (replay it: drop onto the web UI, or `sonder replay`)"
+    }
+  ],
+  "stats": {
+    "peak": 0.8353894,
+    "rms": 0.12021525,
+    "notes": 2333,
+    "events": 357
+  },
+  "captions": [
+    {
+      "at": 0.0,
+      "text": "traffic is live",
+      "importance": 0.4
+    },
+    {
+      "at": 5.09,
+      "text": "car in lane 0",
+      "importance": 0.6197483466015943
+    },
+    {
+      "at": 68.82000000000001,
+      "text": "section: build — build 1/31 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 189.18,
+      "text": "section: peak — peak 1/21 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 274.18,
+      "text": "section: release — release 1/31 · arc 0.70 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 391.90000000000003,
+      "text": "section: intro — intro 1/16 · arc 0.00 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 455.18,
+      "text": "section: build — build 1/24 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 539.74,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 553.82,
+      "text": "section: peak — peak 1/16 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 580.46,
+      "text": "now in D lydian",
+      "importance": 0.5
+    }
+  ]
+}

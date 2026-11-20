@@ -1,0 +1,99 @@
+{
+  "date": "2026-11-01",
+  "scene": "night-freeway",
+  "scene_name": "Night Freeway",
+  "description": "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera.",
+  "seed": 20261101,
+  "minutes": 10.0,
+  "files": [
+    {
+      "file": "2026-11-01.mp3",
+      "label": "Night Freeway (offline render)"
+    },
+    {
+      "file": "2026-11-01.sonder.gz",
+      "label": "data log (replay it: drop onto the web UI, or `sonder replay`)"
+    },
+    {
+      "file": "2026-11-01-live.mp3",
+      "label": "live"
+    },
+    {
+      "file": "2026-11-01-live.sonder.gz",
+      "label": "live data log (replay it: drop onto the web UI, or `sonder replay`)"
+    }
+  ],
+  "stats": {
+    "peak": 0.82931566,
+    "rms": 0.12129495,
+    "notes": 2408,
+    "events": 368
+  },
+  "captions": [
+    {
+      "at": 0.0,
+      "text": "traffic is live",
+      "importance": 0.4
+    },
+    {
+      "at": 5.33,
+      "text": "car in lane 2",
+      "importance": 0.5262588914350131
+    },
+    {
+      "at": 57.7,
+      "text": "section: build — build 1/24 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 149.26,
+      "text": "section: peak — peak 1/16 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 213.78,
+      "text": "section: release — release 1/24 · arc 0.70 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 310.02,
+      "text": "section: intro — intro 1/18 · arc 0.00 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 377.82,
+      "text": "section: build — build 1/28 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 386.3,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 446.18,
+      "text": "now in D lydian",
+      "importance": 0.5
+    },
+    {
+      "at": 488.54,
+      "text": "section: peak — peak 1/18 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 516.66,
+      "text": "now in D ionian",
+      "importance": 0.5
+    },
+    {
+      "at": 561.74,
+      "text": "section: release — release 1/28 · arc 0.70 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 562.62,
+      "text": "now in D lydian",
+      "importance": 0.5
+    }
+  ]
+}
