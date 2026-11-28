@@ -1,0 +1,74 @@
+{
+  "date": "2026-11-18",
+  "scene": "night-freeway",
+  "scene_name": "Night Freeway",
+  "description": "Headlights over an overpass at 3am. Simulated traffic, or point it at a camera.",
+  "seed": 20261118,
+  "minutes": 10.0,
+  "files": [
+    {
+      "file": "2026-11-18.mp3",
+      "label": "Night Freeway (offline render)"
+    },
+    {
+      "file": "2026-11-18.sonder.gz",
+      "label": "data log (replay it: drop onto the web UI, or `sonder replay`)"
+    },
+    {
+      "file": "2026-11-18-live.mp3",
+      "label": "live"
+    },
+    {
+      "file": "2026-11-18-live.sonder.gz",
+      "label": "live data log (replay it: drop onto the web UI, or `sonder replay`)"
+    }
+  ],
+  "stats": {
+    "peak": 0.7541077,
+    "rms": 0.12100155,
+    "notes": 2483,
+    "events": 330
+  },
+  "captions": [
+    {
+      "at": 0.0,
+      "text": "traffic is live",
+      "importance": 0.4
+    },
+    {
+      "at": 7.61,
+      "text": "car in lane 3",
+      "importance": 0.47315833681087954
+    },
+    {
+      "at": 61.86,
+      "text": "section: build — build 1/23 · arc 0.21 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 151.54,
+      "text": "section: peak — peak 1/16 · arc 0.50 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 215.54,
+      "text": "section: release — release 1/23 · arc 0.71 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 302.94,
+      "text": "section: intro — intro 1/22 · arc 0.00 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 387.46000000000004,
+      "text": "section: build — build 1/33 · arc 0.20 · answering car",
+      "importance": 0.6
+    },
+    {
+      "at": 523.22,
+      "text": "section: peak — peak 1/22 · arc 0.50 · answering car",
+      "importance": 0.6
+    }
+  ]
+}
